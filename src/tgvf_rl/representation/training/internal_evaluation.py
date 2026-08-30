@@ -13,15 +13,10 @@ backend.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, fields, is_dataclass
-from enum import Enum
+from collections.abc import Sequence
+from dataclasses import dataclass
 from hashlib import sha256
-import json
 import math
-import os
-from pathlib import Path
-import tempfile
 from typing import Literal, Protocol
 
 import torch
@@ -38,6 +33,11 @@ from tgvf_rl.representation.adapter import TGVFAdapter
 from tgvf_rl.representation.deepstack import build_original_image_key_block_mask
 
 from .losses import causal_evidence_losses
+from .internal_evaluation_artifact import (
+    REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION,
+    RepresentationInternalEvaluationArtifact,
+    save_representation_internal_evaluation_report_atomic,
+)
 from .metrics import (
     AttentionDiagnostics,
     AttentionDiagnosticsSummary,
@@ -73,9 +73,6 @@ from .trainer import RepresentationGroupBuilder
 
 REPRESENTATION_INTERNAL_EVALUATION_SCHEMA_VERSION = (
     "representation_internal_evaluation_v1"
-)
-REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION = (
-    "representation_internal_evaluation_artifact_v1"
 )
 DETERMINISTIC_RANDOM_D_ALGORITHM = "shared_feature_permutation_v1"
 ATTENTION_TOPK = 5
@@ -1321,14 +1318,6 @@ class RepresentationInternalEvaluationReport:
             raise ValueError("internal-evaluation attention top-k drifted")
 
 
-@dataclass(frozen=True, slots=True)
-class RepresentationInternalEvaluationArtifact:
-    path: str
-    payload_sha256: str
-    byte_count: int
-    schema_version: str = REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION
-
-
 def run_representation_internal_evaluation(
     *,
     identity: RepresentationInternalEvaluationIdentity,
@@ -1662,52 +1651,6 @@ def _mean_nll_matrix(scores: StreamingGroupScores) -> torch.Tensor:
         for row_index, token_count in enumerate(scores.evidence_token_counts)
     )
     return torch.stack(rows)
-
-
-def save_representation_internal_evaluation_report_atomic(
-    report: RepresentationInternalEvaluationReport,
-    path: str | Path,
-) -> RepresentationInternalEvaluationArtifact:
-    """Create one immutable canonical JSON artifact without overwriting a file."""
-
-    if not isinstance(report, RepresentationInternalEvaluationReport):
-        raise TypeError("report must be RepresentationInternalEvaluationReport")
-    destination = Path(path)
-    if not destination.is_absolute():
-        raise ValueError("internal-evaluation artifact path must be absolute")
-    if not destination.parent.is_dir():
-        raise ValueError("internal-evaluation artifact parent must already exist")
-    payload = (
-        json.dumps(
-            _json_value(report),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
-        + b"\n"
-    )
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
-        dir=destination.parent,
-    )
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.link(temporary_name, destination)
-    finally:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-    return RepresentationInternalEvaluationArtifact(
-        path=str(destination),
-        payload_sha256=sha256(payload).hexdigest(),
-        byte_count=len(payload),
-    )
 
 
 def _validated_sample_groups(
@@ -2447,26 +2390,6 @@ def _assert_adapter_state_unchanged(
 
 def _metadata_label(value: str | None) -> str:
     return _UNSPECIFIED_GROUP_LABEL if value is None else value
-
-
-def _json_value(value: object) -> object:
-    if is_dataclass(value) and not isinstance(value, type):
-        return {
-            field.name: _json_value(getattr(value, field.name))
-            for field in fields(value)
-        }
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, Mapping):
-        return {
-            str(key): _json_value(item)
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-        }
-    if isinstance(value, (tuple, list)):
-        return [_json_value(item) for item in value]
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    raise TypeError(f"internal-evaluation report contains {type(value).__name__}")
 
 
 def _non_empty_text(value: object, *, name: str) -> None:

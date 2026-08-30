@@ -3,6 +3,7 @@ from __future__ import annotations
 from hashlib import sha256
 import json
 import math
+import pickle
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +14,13 @@ from tgvf_rl.conditioning.base import TargetConditioningProviderKind
 from tgvf_rl.qwen.base import InjectedForwardRequest, InjectedVisualBlock
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter, TGVFAdapterVariant
+from tgvf_rl.representation.training import (
+    REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION as PACKAGE_ARTIFACT_SCHEMA_VERSION,
+    RepresentationInternalEvaluationArtifact as PackageEvaluationArtifact,
+    save_representation_internal_evaluation_report_atomic as package_save_report,
+)
 from tgvf_rl.representation.training.internal_evaluation import (
+    REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION,
     DETERMINISTIC_RANDOM_D_ALGORITHM,
     NativeBinaryLogOddsOutput,
     NativeBinaryLogOddsRequest,
@@ -26,6 +33,7 @@ from tgvf_rl.representation.training.internal_evaluation import (
     NativeFreeContinuationOutput,
     NativeTeacherForcedForward,
     NativeTargetPresenceCase,
+    RepresentationInternalEvaluationArtifact,
     RepresentationInternalEvaluationIdentity,
     _deterministic_random_visual_bundle,
     _mean_nll_matrix,
@@ -34,6 +42,11 @@ from tgvf_rl.representation.training.internal_evaluation import (
     create_injected_native_counterfactual_evaluator,
     run_representation_internal_evaluation,
     save_representation_internal_evaluation_report_atomic,
+)
+from tgvf_rl.representation.training.internal_evaluation_artifact import (
+    REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
+    RepresentationInternalEvaluationArtifact as ExtractedEvaluationArtifact,
+    save_representation_internal_evaluation_report_atomic as extracted_save_report,
 )
 from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
 from tgvf_rl.representation.training.readout import (
@@ -46,6 +59,31 @@ from tgvf_rl.representation.training.readout import (
 from tgvf_rl.representation.training.schema import RepresentationTrainingSample
 from tgvf_rl.representation.training.streaming import StreamingGroupScores
 from tgvf_rl.representation.training.transcript import ModelEvidenceSupervision
+
+
+def test_artifact_boundary_preserves_public_reexport_identity() -> None:
+    assert (
+        REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION
+        is ARTIFACT_SCHEMA_VERSION
+        is PACKAGE_ARTIFACT_SCHEMA_VERSION
+    )
+    assert (
+        RepresentationInternalEvaluationArtifact
+        is ExtractedEvaluationArtifact
+        is PackageEvaluationArtifact
+    )
+    assert (
+        save_representation_internal_evaluation_report_atomic
+        is extracted_save_report
+        is package_save_report
+    )
+    assert RepresentationInternalEvaluationArtifact.__module__ == (
+        "tgvf_rl.representation.training.internal_evaluation"
+    )
+    assert (
+        pickle.loads(pickle.dumps(RepresentationInternalEvaluationArtifact))
+        is RepresentationInternalEvaluationArtifact
+    )
 
 
 def test_bf16_cell_score_uses_the_same_reduction_order_as_l_gen() -> None:
