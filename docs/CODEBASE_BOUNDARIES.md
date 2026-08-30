@@ -532,12 +532,13 @@ hermetic CPU suite of 2,770 passed, five skipped, and four warnings in 149.25
 seconds. Independent final review passed 303 tests. Full Ruff, the
 revision-10/80-surface control audit, the
 revision-7 repository-boundary audit at 61 debts/zero violations, content-hash
-checks, and `git diff --check` are green. No remote CI result is claimed for
-`9ca6822`. The preceding docs-only checkpoint
-`b0e240c` is green in complete remote run `33329825931`; the v1 combined
-code/docs checkpoint `79edd70` remains historically green in run
-`33329512817`. Experiment policy revision 4 remains launch-disabled with the
-same seven blocker IDs.
+checks, and `git diff --check` are green. The code-only commit was not built as
+a separate remote head; combined A-minus code/docs checkpoint `91d77f5`, which
+contains committed code checkpoint `9ca6822`, is green in complete remote run
+`33330786187`. The preceding docs-only checkpoint `b0e240c` is green in complete
+remote run `33329825931`; the v1 combined code/docs checkpoint `79edd70` remains
+historically green in run `33329512817`. Experiment policy revision 4 remains
+launch-disabled with the same seven blocker IDs.
 
 ## 2026-08-30 canonical line versus physical `main`
 
