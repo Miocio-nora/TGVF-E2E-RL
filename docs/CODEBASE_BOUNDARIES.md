@@ -226,6 +226,24 @@ runtime code package, protection from caller Python/`.pth` or imports before
 authorization, a complete worker startup envelope, per-member claims,
 role-scoped judge-secret transport, or exact Ray-descendant environments.
 
+## 2026-08-30 authorization-proof consumption follow-up
+
+A CPU-only Ray 2.56.1 audit demonstrated that the six validated `TGVF_CLI_*`
+fields and two Policy compile-receipt fields would otherwise be inherited by
+Ray infrastructure and actor roles. Representation now removes its six fields
+immediately before training dispatch; Policy removes all eight after compile
+receipt verification and before Hydra composition or Ray startup. The helper
+requires the complete exact field set before deleting any entry and preserves
+torchrun rank state and persistent runtime settings.
+
+This prevents environment inheritance only. It does not delete guarded receipt
+files, revoke already verified process-local objects, define role-specific Ray
+envelopes, or solve startup/member/secret authority. Experiment policy revision
+4 and its seven blockers are unchanged. Execution-surface revision 6 binds the
+changed files; 289 focused tests pass in 64.83 seconds and the full hermetic CPU
+suite has 2,386 passed, five skipped, and four warnings in 141.13 seconds. Both
+audits remain green with zero violations.
+
 ## Absolute-path debt
 
 Machine-specific absolute paths under source and tools are prohibited for new
@@ -307,7 +325,7 @@ commands (`ready`, `authorize`, `override-freeze`, `consume`, `wait`, `status`,
 `quarantine-legacy`, and `audit-control-plane`) and to its exact conservative
 capability map. Parser-mode or policy drift blocks the audit.
 
-The revision-5 stabilization inventory contains 79 unique paths, and each has
+The revision-6 stabilization inventory contains 79 unique paths, and each has
 exactly one machine-checked disposition. The current control-plane audit covers
 all 79 and reports zero violations. The inventory contains two canonical
 entries, two control-audit utilities, 36 permanently quarantined Python
@@ -400,7 +418,7 @@ CUDA_VISIBLE_DEVICES='' .venv312/bin/python tools/check_launch_gate.py \
   audit-control-plane --repository-root .
 ```
 
-At this checkpoint execution-surface policy revision 5 binds all 79 surfaces,
+At this checkpoint execution-surface policy revision 6 binds all 79 surfaces,
 and both the control-plane and repository-boundary audits pass locally. The
 predecessor commit `a5dd0d1` is green in remote CI across dependency
 installation, lint, boundary, control-plane, and the full CPU suite after five
@@ -417,3 +435,6 @@ selection has 285 passing tests in 64.77 seconds, with an earlier 126-pass core
 aggregate. Its final hermetic CPU suite has 2,383 passed, five skipped, and four
 warnings in 143.29 seconds. Commit `5c058a1` passes install, lint, both audits,
 and the complete CPU suite in remote run `33302879219`.
+The later authorization-proof consumption follow-up has 289 focused passes in
+64.83 seconds and a full hermetic CPU result of 2,386 passed, five skipped, and
+four warnings in 141.13 seconds. It is local until its own remote run completes.
