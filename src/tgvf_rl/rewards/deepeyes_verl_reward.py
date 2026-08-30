@@ -44,6 +44,7 @@ from tgvf_rl.rewards.deepeyes_official import (
     extract_visual_answer,
     parse_binary_judge_output,
 )
+from tgvf_rl.protocol.action_boundary import NativeActionBoundaryProtocolId
 
 
 DEEPEYES_VERL_REWARD_SCHEMA = "tgvf.deepeyes-verl-reward-manager.v1"
@@ -51,12 +52,14 @@ DEEPEYES_VERL_REWARD_MANAGER_CLASS = (
     "tgvf_rl.rewards.deepeyes_verl_reward.DeepEyesOfficialRewardManager"
 )
 DEEPEYES_VERL_AUDIT_SEQUENCE_ENCODING = "canonical-json-v1"
+_NO_VALID_FINAL_ANSWER = "[NO VALID FINAL ANSWER]"
 _RAGGED_AUDIT_FIELDS = frozenset(
     {
         "crop_boxes",
         "crop_area_fractions",
         "crop_area",
         "crop_observation_token_spans",
+        "action_boundary_violation_codes",
     }
 )
 _OPTIONAL_NUMERIC_AUDIT_FIELDS = frozenset(
@@ -522,6 +525,9 @@ _VISUAL_AUDIT_FIELDS = (
     "legacy_adapter_loaded",
     "observation_role",
     "observation_envelope",
+    "action_boundary_protocol_id",
+    "action_boundary_violation_count",
+    "action_boundary_violation_codes",
 )
 
 
@@ -594,6 +600,10 @@ def _trajectory_audit_fields(
             "observation_role": "none",
             "observation_envelope": "none",
             "action_count": 0,
+            "action_boundary_protocol_id": "not_applicable",
+            "action_boundary_violation_count": 0,
+            "action_boundary_violation_codes": [],
+            "action_boundary_valid": 1,
         }
     missing = [name for name in _VISUAL_AUDIT_FIELDS if name not in combined]
     if missing:
@@ -626,6 +636,32 @@ def _trajectory_audit_fields(
         raise ValueError("native pixel provenance was not proven")
     if _plain(combined["legacy_adapter_loaded"]) is not False:
         raise ValueError("legacy adapter unexpectedly appeared in PRL13")
+    try:
+        action_boundary_protocol_id = NativeActionBoundaryProtocolId(
+            _plain(combined["action_boundary_protocol_id"])
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("native action-boundary protocol identity is invalid") from error
+    action_boundary_violation_count = _plain(
+        combined["action_boundary_violation_count"]
+    )
+    if (
+        type(action_boundary_violation_count) is not int
+        or action_boundary_violation_count < 0
+    ):
+        raise ValueError("native action-boundary violation count is invalid")
+    action_boundary_violation_codes = _json_list(
+        combined["action_boundary_violation_codes"],
+        "action_boundary_violation_codes",
+    )
+    if (
+        len(action_boundary_violation_codes) != action_boundary_violation_count
+        or any(
+            not isinstance(code, str) or not code
+            for code in action_boundary_violation_codes
+        )
+    ):
+        raise ValueError("native action-boundary violation codes differ from count")
     boxes = _json_list(combined["crop_boxes"], "crop_boxes")
     areas = _json_list(combined["crop_area_fractions"], "crop_area_fractions")
     spans = _json_list(
@@ -683,6 +719,10 @@ def _trajectory_audit_fields(
             combined["observation_envelope"], "observation envelope"
         ),
         "action_count": integers["crop_action_count"],
+        "action_boundary_protocol_id": action_boundary_protocol_id.value,
+        "action_boundary_violation_count": action_boundary_violation_count,
+        "action_boundary_violation_codes": action_boundary_violation_codes,
+        "action_boundary_valid": int(action_boundary_violation_count == 0),
     }
 
 
@@ -816,6 +856,50 @@ class DeepEyesOfficialRewardManager(RewardManagerBase):
         }
 
     async def _score_visual(self, **value: object) -> dict[str, object]:
+        audit = value["audit"]
+        if not isinstance(audit, Mapping):
+            raise TypeError("DeepEyes visual trajectory audit must be a mapping")
+        strict_boundary_invalid = (
+            audit.get("action_boundary_protocol_id")
+            == NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2.value
+            and audit.get("action_boundary_violation_count") != 0
+        )
+        if strict_boundary_invalid:
+            # Preserve the every-visual-trajectory judge coverage contract,
+            # but never leak sampled text from a malformed action into the
+            # candidate.  Even a positive verdict for the fixed sentinel is
+            # hard-gated below and cannot recover answer or tool reward.
+            request = DeepEyesBinaryJudgeRequest.build(
+                trajectory_id=str(value["trajectory_id"]),
+                sample_id=str(value["sample_id"]),
+                question=str(value["question"]),
+                reference_answer=str(value["reference"]),
+                candidate_answer=_NO_VALID_FINAL_ANSWER,
+                task_kind=str(value["task_kind"]),
+                prompt_kind=DEEPEYES_VISUAL_JUDGE_PROMPT_KIND,
+            )
+            judged = await self.judge_transport.judge(request)
+            return self._result(
+                score=(
+                    0.0
+                    if judged.failure_kind is not None
+                    else -DEEPEYES_VISUAL_FORMAT_WEIGHT
+                ),
+                accuracy=0,
+                format_penalty=-1,
+                conditional_tool=0,
+                answer="",
+                crop_count=int(value["crop_count"]),
+                trajectory_id=str(value["trajectory_id"]),
+                judge=judged,
+                visual_requested=1,
+                thinklite_requested=0,
+                route=(
+                    "qwen2.5_72b_every_visual_trajectory_"
+                    "strict_action_boundary_invalid_hard_gate"
+                ),
+                audit=audit,
+            )
         response = str(value["response"])
         extraction = extract_visual_answer(response)
         request = DeepEyesBinaryJudgeRequest.build(
@@ -823,7 +907,7 @@ class DeepEyesOfficialRewardManager(RewardManagerBase):
             sample_id=str(value["sample_id"]),
             question=str(value["question"]),
             reference_answer=str(value["reference"]),
-            candidate_answer=extraction.answer or "[NO VALID FINAL ANSWER]",
+            candidate_answer=extraction.answer or _NO_VALID_FINAL_ANSWER,
             task_kind=str(value["task_kind"]),
             prompt_kind=DEEPEYES_VISUAL_JUDGE_PROMPT_KIND,
         )
@@ -852,7 +936,7 @@ class DeepEyesOfficialRewardManager(RewardManagerBase):
             visual_requested=1,
             thinklite_requested=0,
             route="qwen2.5_72b_every_visual_trajectory",
-            audit=value["audit"],
+            audit=audit,
         )
 
     async def _score_thinklite(self, **value: object) -> dict[str, object]:

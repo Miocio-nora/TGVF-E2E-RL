@@ -28,9 +28,11 @@ from tgvf_rl.contracts.errors import (
 from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.contracts.tokens import TokenSpan
 from tgvf_rl.observations.store import ObservationHandle
+from tgvf_rl.protocol.native import native_assistant_dialect_for_model
 from tgvf_rl.protocol.schema import (
     TGVF_CROP_TOOL_NAME,
     TGVF_FOCUS_TOOL_NAME,
+    NativeToolCapabilityProfile,
     ParsedCropTGVFCall,
     ParsedToolCall,
 )
@@ -54,6 +56,7 @@ from .focus_runtime import (
     FocusRuntimeCallRequest,
     _source_binding_sha256,
 )
+from .native_appender import NativeSuccessObservationContract
 from .qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 
 
@@ -74,6 +77,7 @@ class AtomicCropTGVFToolRuntime:
         conditioning_input_device: torch.device,
         contextual_forward_identity: ArtifactIdentity | None,
         execution_ledger: FocusExecutionLedger,
+        observation_contract: NativeSuccessObservationContract,
     ) -> None:
         if not isinstance(conditioning_provider, TargetConditionProvider):
             raise TypeError("conditioning_provider must implement its typed protocol")
@@ -105,6 +109,22 @@ class AtomicCropTGVFToolRuntime:
             raise TypeError("conditioning_input_device must be explicit")
         if not isinstance(execution_ledger, FocusExecutionLedger):
             raise TypeError("execution_ledger must be FocusExecutionLedger")
+        if not isinstance(observation_contract, NativeSuccessObservationContract):
+            raise TypeError(
+                "atomic runtime requires NativeSuccessObservationContract"
+            )
+        if (
+            observation_contract.tool_profile
+            is not NativeToolCapabilityProfile.CROP_TGVF
+        ):
+            raise ValueError("atomic runtime requires a crop_tgvf contract")
+        expected_dialect = native_assistant_dialect_for_model(
+            loaded_adapter.binding.model.model_name
+        )
+        if observation_contract.assistant_dialect is not expected_dialect:
+            raise IdentityMismatchError(
+                "atomic success-observation dialect differs from model edition"
+            )
         conditioning = loaded_adapter.binding.conditioning
         _assert_provider_matches_artifact(conditioning_provider, conditioning)
         contextual_hidden_layer = conditioning.hidden_layer
@@ -137,6 +157,7 @@ class AtomicCropTGVFToolRuntime:
         self.contextual_hidden_layer = contextual_hidden_layer
         self.contextual_forward_identity = contextual_forward_identity
         self.execution_ledger = execution_ledger
+        self.observation_contract = observation_contract
         self._assert_representation_binding()
 
     def execute(
@@ -171,6 +192,11 @@ class AtomicCropTGVFToolRuntime:
                 self.atomic_tool.coordinate_mapper.crop_coordinate_conversion_version
             ),
             processor_resized_size=self.atomic_tool.processor_resized_size,
+            observation_protocol_id=self.observation_contract.protocol_id.value,
+            observation_tool_profile=self.observation_contract.tool_profile.value,
+            observation_assistant_dialect=(
+                self.observation_contract.assistant_dialect.value
+            ),
         )
         return self.execution_ledger.execute_once(
             key=(context.trajectory_identity.canonical_id, context.call_index),
@@ -183,6 +209,7 @@ class AtomicCropTGVFToolRuntime:
         parsed_call: ParsedCropTGVFCall,
         context: ToolExecutionContext,
     ) -> ObservationHandle:
+        environment_success_text = self.observation_contract.render(parsed_call)
         canonical_ids = context.conditioning_input_ids
         prefix_length = len(context.prompt_token_ids_before_turn)
         target_span = TokenSpan(
@@ -241,7 +268,11 @@ class AtomicCropTGVFToolRuntime:
                     parsed_call=parsed_call,
                     condition=condition,
                     trajectory_source_visual=context.trajectory_source_visual,
-                    layout_builder=self.layout_builder.bind_crop_tgvf(context),
+                    layout_builder=self.layout_builder.bind_crop_tgvf(
+                        context,
+                        parsed_call,
+                        environment_success_text=environment_success_text,
+                    ),
                     model=identity.model,
                     policy_version=identity.behavior_policy,
                     contextual_forward_identity=(
@@ -425,9 +456,12 @@ def _call_fingerprint(
     coordinate_space: str,
     coordinate_conversion_version: str,
     processor_resized_size: tuple[int, int] | None,
+    observation_protocol_id: str,
+    observation_tool_profile: str,
+    observation_assistant_dialect: str,
 ) -> str:
     payload = {
-        "schema": "atomic-crop-tgvf-runtime-call-v2",
+        "schema": "atomic-crop-tgvf-runtime-call-v3",
         "trajectory_id": context.trajectory_identity.canonical_id,
         "assistant_turn_index": context.assistant_turn_index,
         "attempt_index": context.attempt_index,
@@ -465,6 +499,9 @@ def _call_fingerprint(
         "coordinate_space": coordinate_space,
         "coordinate_conversion_version": coordinate_conversion_version,
         "processor_resized_size": processor_resized_size,
+        "success_observation_protocol_id": observation_protocol_id,
+        "success_observation_tool_profile": observation_tool_profile,
+        "success_observation_assistant_dialect": observation_assistant_dialect,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()

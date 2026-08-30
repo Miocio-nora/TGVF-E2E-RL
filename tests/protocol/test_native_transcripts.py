@@ -11,11 +11,15 @@ from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.contracts.tokens import LogProbMeasurement, SamplingIdentity, TokenSpan
 from tgvf_rl.environment.agent_loop import SampledPolicyTurn
 from tgvf_rl.environment.native_appender import (
+    NativeSuccessObservationContract,
     QwenNativeToolObservationAppender,
     render_qwen_native_success_environment_text,
 )
 from tgvf_rl.observations.store import ObservationHandle
-from tgvf_rl.protocol.native import NativeProtocolRenderer
+from tgvf_rl.protocol.native import NativeAssistantDialect, NativeProtocolRenderer
+from tgvf_rl.protocol.observation_contract import (
+    NativeSuccessObservationProtocolId,
+)
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import (
     NativeToolCapabilityProfile,
@@ -352,6 +356,11 @@ def test_manual_success_appender_matches_full_qwen_rerender_exactly(
     appender = QwenNativeToolObservationAppender(
         tokenizer=processor.tokenizer,
         registrar=registrar,
+        observation_contract=NativeSuccessObservationContract(
+            protocol_id=NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1,
+            tool_profile=NativeToolCapabilityProfile.TGVF_ONLY,
+            assistant_dialect=NativeAssistantDialect.QWEN3_VL_THINKING,
+        ),
     )
 
     rerendered = renderer.render(

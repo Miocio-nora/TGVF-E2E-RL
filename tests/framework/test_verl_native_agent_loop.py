@@ -10,7 +10,10 @@ import pytest
 from tgvf_rl.contracts.errors import ContractUnsetError, ReplayMismatchError
 from tgvf_rl.contracts.identity import ModelIdentity, PolicyVersion
 from tgvf_rl.environment.agent_loop import FrameworkNeutralAgentLoop, RolloutRequest
-from tgvf_rl.environment.native_appender import QwenNativeToolObservationAppender
+from tgvf_rl.environment.native_appender import (
+    NativeSuccessObservationContract,
+    QwenNativeToolObservationAppender,
+)
 from tgvf_rl.framework.verl.native_agent_loop import (
     BoundVerlNativeAgentLoopInvocationFactory,
     VerlFrameworkNeutralAgentLoop,
@@ -34,6 +37,11 @@ from tgvf_rl.framework.vllm import (
 from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.policy.config import PilotSamplingConfig
 from tgvf_rl.protocol.parser import StrictToolCallParser
+from tgvf_rl.protocol.native import NativeAssistantDialect
+from tgvf_rl.protocol.observation_contract import (
+    NativeSuccessObservationProtocolId,
+)
+from tgvf_rl.protocol.schema import NativeToolCapabilityProfile
 from tgvf_rl.trajectories.behavior import BehaviorTraceStore, VLLMBehaviorRecorder
 from tgvf_rl.trajectories.schema import (
     TrajectoryIdentity,
@@ -253,6 +261,13 @@ class _InvocationFactory:
                 appender=QwenNativeToolObservationAppender(
                     tokenizer=self.tokenizer,
                     registrar=self.registry,
+                    observation_contract=NativeSuccessObservationContract(
+                        protocol_id=(
+                            NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1
+                        ),
+                        tool_profile=NativeToolCapabilityProfile.TGVF_ONLY,
+                        assistant_dialect=(NativeAssistantDialect.QWEN3_VL_THINKING),
+                    ),
                     visual_token_count_resolver=self.resolver,
                 ),
                 parser=StrictToolCallParser(),

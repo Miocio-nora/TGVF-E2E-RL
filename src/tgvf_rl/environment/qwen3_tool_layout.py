@@ -29,10 +29,7 @@ from tgvf_rl.protocol.schema import (
 from .agent_loop import ToolExecutionContext
 from .crop_tool import CropReplayLayout, CropVisualTensorBundle
 from .focus_tool import ReplayLayoutTensors, SourceVisualTensorBundle
-from .native_appender import (
-    QWEN_NATIVE_IMAGE_PLACEHOLDER,
-    render_qwen_native_success_environment_text,
-)
+from .native_appender import QWEN_NATIVE_IMAGE_PLACEHOLDER
 
 
 QWEN3_DEEPSTACK_BRANCH_LAYERS = (8, 16, 24)
@@ -54,9 +51,16 @@ class BoundQwen3CropTGVFLayoutBuilder:
         self,
         owner: "Qwen3NativeToolLayoutBuilder",
         context: ToolExecutionContext,
+        parsed_call: ParsedCropTGVFCall,
+        *,
+        environment_success_text: str,
     ) -> None:
         self.owner = owner
         self.context = context
+        self.parsed_call = parsed_call
+        self.environment_success_text = _required_environment_success_text(
+            environment_success_text
+        )
 
     def build(
         self,
@@ -74,10 +78,17 @@ class BoundQwen3CropTGVFLayoutBuilder:
             raise IdentityMismatchError("bound atomic layout call index changed")
         if not isinstance(parsed_call, ParsedCropTGVFCall):
             raise TypeError("bound atomic layout requires ParsedCropTGVFCall")
+        if parsed_call != self.parsed_call:
+            raise ReplayMismatchError("bound atomic layout parsed call changed")
         _validate_parsed_call_context(parsed_call, context)
         if trajectory_source_visual != context.trajectory_source_visual:
             raise IdentityMismatchError("bound atomic layout source visual changed")
-        return self.owner.build_crop_tgvf(context, crop_visual, parsed_call)
+        return self.owner.build_crop_tgvf(
+            context,
+            crop_visual,
+            parsed_call,
+            environment_success_text=self.environment_success_text,
+        )
 
 
 class Qwen3NativeToolLayoutBuilder:
@@ -166,7 +177,9 @@ class Qwen3NativeToolLayoutBuilder:
             from transformers import AutoConfig
             from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLModel
         except ImportError as error:  # pragma: no cover - live env owns transformers
-            raise RuntimeError("Qwen3 layout construction requires transformers") from error
+            raise RuntimeError(
+                "Qwen3 layout construction requires transformers"
+            ) from error
         config = AutoConfig.from_pretrained(
             model_identity.revision_or_path,
             local_files_only=True,
@@ -185,18 +198,32 @@ class Qwen3NativeToolLayoutBuilder:
         )
 
     def bind_crop_tgvf(
-        self, context: ToolExecutionContext
+        self,
+        context: ToolExecutionContext,
+        parsed_call: ParsedCropTGVFCall,
+        *,
+        environment_success_text: str,
     ) -> BoundQwen3CropTGVFLayoutBuilder:
         if not isinstance(context, ToolExecutionContext):
             raise TypeError("atomic layout binding requires ToolExecutionContext")
+        if not isinstance(parsed_call, ParsedCropTGVFCall):
+            raise TypeError("atomic layout binding requires ParsedCropTGVFCall")
         self._validate_context(context)
-        return BoundQwen3CropTGVFLayoutBuilder(self, context)
+        _validate_parsed_call_context(parsed_call, context)
+        return BoundQwen3CropTGVFLayoutBuilder(
+            self,
+            context,
+            parsed_call,
+            environment_success_text=environment_success_text,
+        )
 
     def build_crop_tgvf(
         self,
         context: ToolExecutionContext,
         crop_visual: SourceVisualTensorBundle,
         parsed_call: ParsedCropTGVFCall,
+        *,
+        environment_success_text: str,
     ) -> ReplayLayoutTensors:
         if not isinstance(crop_visual, SourceVisualTensorBundle):
             raise TypeError("atomic layout requires crop SourceVisualTensorBundle")
@@ -208,6 +235,7 @@ class Qwen3NativeToolLayoutBuilder:
             new_grid=crop_visual.image_grid_thw,
             new_merge_size=crop_visual.spatial_merge_size,
             parsed_call=parsed_call,
+            environment_success_text=environment_success_text,
         )
         branch_count = len(crop_visual.merged_deepstack)
         if branch_count != len(QWEN3_DEEPSTACK_BRANCH_LAYERS):
@@ -243,6 +271,8 @@ class Qwen3NativeToolLayoutBuilder:
         context: ToolExecutionContext,
         source_visual: SourceVisualTensorBundle,
         parsed_call: ParsedToolCall,
+        *,
+        environment_success_text: str,
     ) -> ReplayLayoutTensors:
         """Build the exact layout for one source-image TGVF observation.
 
@@ -262,6 +292,7 @@ class Qwen3NativeToolLayoutBuilder:
             new_grid=source_visual.image_grid_thw,
             new_merge_size=source_visual.spatial_merge_size,
             parsed_call=parsed_call,
+            environment_success_text=environment_success_text,
         )
         return self._focus_replay_layout(
             expanded,
@@ -277,6 +308,7 @@ class Qwen3NativeToolLayoutBuilder:
         trajectory_source_visual: TrajectorySourceVisual,
         prior_observation_handles: Sequence[object],
         source_visual: SourceVisualTensorBundle,
+        environment_success_text: str,
     ) -> ReplayLayoutTensors:
         """Build focus layout from the neutral runtime request fields."""
 
@@ -305,11 +337,11 @@ class Qwen3NativeToolLayoutBuilder:
                 None,
             )
         )
+        environment_text = _required_environment_success_text(
+            environment_success_text
+        )
         environment_ids = tuple(
-            self.tokenizer.encode(
-                render_qwen_native_success_environment_text(parsed_call),
-                add_special_tokens=False,
-            )
+            self.tokenizer.encode(environment_text, add_special_tokens=False)
         )
         if not environment_ids:
             raise ValueError("Qwen3 native success response encoded to no tokens")
@@ -330,9 +362,7 @@ class Qwen3NativeToolLayoutBuilder:
         source_visual: SourceVisualTensorBundle,
         original_positions: tuple[int, ...],
     ) -> ReplayLayoutTensors:
-        if len(source_visual.merged_deepstack) != len(
-            QWEN3_DEEPSTACK_BRANCH_LAYERS
-        ):
+        if len(source_visual.merged_deepstack) != len(QWEN3_DEEPSTACK_BRANCH_LAYERS):
             raise ValueError("focus source is missing Qwen3 DeepStack branches")
         positions = expanded.new_positions
         sequence = int(expanded.input_ids.shape[-1])
@@ -399,6 +429,8 @@ class Qwen3NativeToolLayoutBuilder:
         context: ToolExecutionContext,
         crop_visual: CropVisualTensorBundle,
         parsed_call: ParsedImageZoomInCall,
+        *,
+        environment_success_text: str,
     ) -> CropReplayLayout:
         if not isinstance(crop_visual, CropVisualTensorBundle):
             raise TypeError("plain crop layout requires CropVisualTensorBundle")
@@ -412,6 +444,7 @@ class Qwen3NativeToolLayoutBuilder:
             new_grid=crop_visual.image_grid_thw,
             new_merge_size=crop_visual.spatial_merge_size,
             parsed_call=parsed_call,
+            environment_success_text=environment_success_text,
         )
         positions = expanded.new_positions
         return CropReplayLayout(
@@ -430,6 +463,7 @@ class Qwen3NativeToolLayoutBuilder:
         new_grid: tuple[int, int, int],
         new_merge_size: int,
         parsed_call: NativeToolCall,
+        environment_success_text: str,
     ) -> _ExpandedNativeVisualLayout:
         self._validate_context(context)
         _validate_parsed_call_context(parsed_call, context)
@@ -448,9 +482,12 @@ class Qwen3NativeToolLayoutBuilder:
             expected.append((grid, merge_size, positions))
         expected.append((new_grid, new_merge_size, None))
 
+        environment_success_text = _required_environment_success_text(
+            environment_success_text
+        )
         environment_success_token_ids = tuple(
             self.tokenizer.encode(
-                render_qwen_native_success_environment_text(parsed_call),
+                environment_success_text,
                 add_special_tokens=False,
             )
         )
@@ -466,9 +503,7 @@ class Qwen3NativeToolLayoutBuilder:
     def _expand_sequence(
         self,
         token_ids: tuple[int, ...],
-        expected: tuple[
-            tuple[tuple[int, int, int], int, tuple[int, ...] | None], ...
-        ],
+        expected: tuple[tuple[tuple[int, int, int], int, tuple[int, ...] | None], ...],
     ) -> _ExpandedNativeVisualLayout:
         blocks = _vision_blocks(
             token_ids,
@@ -562,8 +597,16 @@ def _validate_parsed_call_context(
         )
 
 
+def _required_environment_success_text(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError("Qwen3 native success response must be non-empty text")
+    return value
+
+
 def _record_visual_geometry(
-    record: FocusedObservationRecord | CropObservationRecord | CropTGVFObservationRecord,
+    record: FocusedObservationRecord
+    | CropObservationRecord
+    | CropTGVFObservationRecord,
 ) -> tuple[tuple[int, int, int], int, tuple[int, ...]]:
     if isinstance(record, FocusedObservationRecord):
         return (

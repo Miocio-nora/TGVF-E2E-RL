@@ -181,9 +181,10 @@ def _write_artifact(
     path: Path,
     *,
     provider: str,
+    model: ModelIdentity | None = None,
 ) -> tuple[RepresentationArtifactRuntimeBinding, TGVFAdapter]:
     source = _adapter(7)
-    model = _model()
+    model = _model() if model is None else model
     conditioning = _conditioning(provider)
     run_identity = _run_identity(source, model=model, conditioning=conditioning)
     state = {

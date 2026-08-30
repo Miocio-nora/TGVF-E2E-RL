@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 import os
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
 
-from tgvf_rl.policy.deepeyes_official_protocol import (
-    direct_answer_after_last_tool_call,
+from tgvf_rl.protocol.action_boundary import (
+    AssistantTurnDisposition,
+    NativeActionBoundaryProtocolId,
+    classify_assistant_action_boundary,
 )
 
 from .native_crop_tool import ensure_native_crop_audit_fields
@@ -119,7 +122,129 @@ def _original_images_from_messages(
     return [_load_original_image(image_values[0])]
 
 
-def _build_native_deepeyes_agent_loop_class() -> type[Any]:
+def _record_action_boundary_violation(
+    extra_fields: dict[str, Any],
+    code: object,
+) -> None:
+    """Record the one terminal invalid-action outcome for reward gating."""
+
+    if not isinstance(code, str) or not code:
+        raise ValueError("action-boundary violation code must be non-empty text")
+    fields = ensure_native_crop_audit_fields(extra_fields)
+    count = fields.get("action_boundary_violation_count", 0)
+    if type(count) is not int or count < 0:
+        raise ValueError("action-boundary violation count is malformed")
+    codes = fields.setdefault("action_boundary_violation_codes", [])
+    if not isinstance(codes, list) or any(
+        not isinstance(item, str) or not item for item in codes
+    ):
+        raise ValueError("action-boundary violation codes are malformed")
+    fields["action_boundary_violation_count"] = count + 1
+    codes.append(code)
+
+
+def _current_policy_turn_token_ids(
+    *,
+    prompt_ids: Sequence[int],
+    response_mask: Sequence[int],
+    response_mask_length_before: int,
+) -> tuple[int, ...]:
+    """Return only policy-owned tokens added by the current generation call."""
+
+    if (
+        type(response_mask_length_before) is not int
+        or response_mask_length_before < 0
+        or response_mask_length_before > len(response_mask)
+    ):
+        raise ValueError("previous native response-mask length is invalid")
+    added_policy_tokens = len(response_mask) - response_mask_length_before
+    if added_policy_tokens < 0 or added_policy_tokens > len(prompt_ids):
+        raise ValueError(
+            "native DeepEyes generation did not append one policy-token span"
+        )
+    # Empty/EOS-only generation is a legal upstream terminal outcome.  Avoid
+    # ``prompt_ids[-0:]`` (which would incorrectly return the full transcript)
+    # and let the boundary classifier see the exact empty current turn.
+    if added_policy_tokens == 0:
+        return ()
+    if any(value != 1 for value in response_mask[response_mask_length_before:]):
+        raise ValueError("native DeepEyes current assistant span is not policy-owned")
+    current = tuple(prompt_ids[-added_policy_tokens:])
+    if any(type(token_id) is not int or token_id < 0 for token_id in current):
+        raise ValueError("native DeepEyes current assistant token IDs are invalid")
+    return current
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeDeepEyesActionDecision:
+    terminate: bool
+    violation_code: str | None = None
+    select_last_tool_call: bool = False
+
+
+def _decide_native_deepeyes_action(
+    text: str,
+    *,
+    protocol_id: NativeActionBoundaryProtocolId,
+    upstream_processing_tools: bool,
+    parsed_tool_call_count: int,
+    upstream_limit: bool,
+) -> _NativeDeepEyesActionDecision:
+    """Resolve outer-boundary and upstream-parser outcomes without veRL imports."""
+
+    if not isinstance(protocol_id, NativeActionBoundaryProtocolId):
+        raise TypeError("native DeepEyes action-boundary protocol must be explicit")
+    if type(upstream_processing_tools) is not bool or type(upstream_limit) is not bool:
+        raise TypeError("native DeepEyes upstream state flags must be bool")
+    if type(parsed_tool_call_count) is not int or parsed_tool_call_count < 0:
+        raise ValueError("native DeepEyes parsed tool-call count is invalid")
+    boundary = classify_assistant_action_boundary(text, protocol_id=protocol_id)
+    if (
+        protocol_id is NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1
+        and not upstream_processing_tools
+    ):
+        return _NativeDeepEyesActionDecision(terminate=True)
+    if boundary.disposition is AssistantTurnDisposition.INVALID_ACTION:
+        if boundary.violation_code is None:  # pragma: no cover - classifier invariant
+            raise RuntimeError("invalid action boundary lacks a violation code")
+        return _NativeDeepEyesActionDecision(
+            terminate=True,
+            violation_code=boundary.violation_code,
+        )
+    if boundary.disposition is AssistantTurnDisposition.DIRECT_FINAL:
+        return _NativeDeepEyesActionDecision(terminate=True)
+    if not upstream_processing_tools:
+        return _NativeDeepEyesActionDecision(
+            terminate=True,
+            violation_code=(
+                None if upstream_limit else "parsed_tool_call_count_mismatch"
+            ),
+        )
+    if (
+        protocol_id is NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1
+        and parsed_tool_call_count > 1
+    ):
+        return _NativeDeepEyesActionDecision(
+            terminate=False,
+            select_last_tool_call=True,
+        )
+    if parsed_tool_call_count != 1:
+        return _NativeDeepEyesActionDecision(
+            terminate=True,
+            violation_code="parsed_tool_call_count_mismatch",
+        )
+    return _NativeDeepEyesActionDecision(terminate=False)
+
+
+def _build_native_deepeyes_agent_loop_class(
+    *,
+    action_boundary_protocol_id: NativeActionBoundaryProtocolId,
+    class_name: str,
+) -> type[Any]:
+    if not isinstance(action_boundary_protocol_id, NativeActionBoundaryProtocolId):
+        raise TypeError("native DeepEyes action boundary must be explicit")
+    if not isinstance(class_name, str) or not class_name:
+        raise ValueError("native DeepEyes class name must be non-empty")
     try:
         from verl.experimental.agent_loop.tool_agent_loop import (
             AgentData,
@@ -135,7 +260,14 @@ def _build_native_deepeyes_agent_loop_class() -> type[Any]:
                     "NativeDeepEyesAgentLoop requires the pinned veRL runtime"
                 ) from missing
 
+        _UnavailableNativeDeepEyesAgentLoop.action_boundary_protocol_id = (
+            action_boundary_protocol_id
+        )
+        _UnavailableNativeDeepEyesAgentLoop.__name__ = class_name
+        _UnavailableNativeDeepEyesAgentLoop.__qualname__ = class_name
         return _UnavailableNativeDeepEyesAgentLoop
+
+    bound_action_boundary_protocol_id = action_boundary_protocol_id
 
     class _NativeDeepEyesAgentLoop(ToolAgentLoop):
         """Use upstream multimodal assembly with the pinned clean-final prompt.
@@ -146,6 +278,8 @@ def _build_native_deepeyes_agent_loop_class() -> type[Any]:
         from upstream.  Tool parsing and execution still use the globally
         loaded native tool registry.
         """
+
+        action_boundary_protocol_id = bound_action_boundary_protocol_id
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
@@ -252,22 +386,50 @@ def _build_native_deepeyes_agent_loop_class() -> type[Any]:
                     remaining_response_tokens,
                 ),
             }
+            response_mask_length_before = len(agent_data.response_mask)
             state = await super()._handle_generating_state(
                 agent_data,
                 turn_sampling_params,
                 ignore_termination=ignore_termination,
             )
-            if state is not AgentState.PROCESSING_TOOLS:
-                return state
-
-            # Preserve answer-over-action precedence without an answer wrapper:
-            # a tool call followed by direct plain text is a completed turn;
-            # a turn ending at the tool call executes only its last action.
-            text = self.tokenizer.decode(agent_data.response_ids)
-            if direct_answer_after_last_tool_call(text) is not None:
+            current_turn_ids = _current_policy_turn_token_ids(
+                prompt_ids=agent_data.prompt_ids,
+                response_mask=agent_data.response_mask,
+                response_mask_length_before=response_mask_length_before,
+            )
+            text = self.tokenizer.decode(current_turn_ids)
+            if not isinstance(text, str):
+                raise TypeError("native DeepEyes tokenizer decode must return text")
+            upstream_limit = (
+                (
+                    not ignore_termination
+                    and len(agent_data.response_mask) >= self.response_length
+                )
+                or (
+                    self.max_assistant_turns
+                    and agent_data.assistant_turns >= self.max_assistant_turns
+                )
+                or (
+                    self.max_user_turns
+                    and agent_data.user_turns >= self.max_user_turns
+                )
+            )
+            decision = _decide_native_deepeyes_action(
+                text,
+                protocol_id=self.action_boundary_protocol_id,
+                upstream_processing_tools=(state is AgentState.PROCESSING_TOOLS),
+                parsed_tool_call_count=len(agent_data.tool_calls),
+                upstream_limit=bool(upstream_limit),
+            )
+            if decision.violation_code is not None:
+                _record_action_boundary_violation(
+                    agent_data.extra_fields,
+                    decision.violation_code,
+                )
+            if decision.terminate:
                 agent_data.tool_calls = []
                 return AgentState.TERMINATED
-            if len(agent_data.tool_calls) > 1:
+            if decision.select_last_tool_call:
                 agent_data.tool_calls = [agent_data.tool_calls[-1]]
             return state
 
@@ -305,6 +467,17 @@ def _build_native_deepeyes_agent_loop_class() -> type[Any]:
                 raise ValueError("native Crop successful-action/image counts disagree")
             spans = audit["crop_observation_token_spans"]
             assert_observation_mask(output.response_mask, spans)
+            violation_count = int(audit.get("action_boundary_violation_count", 0))
+            violation_codes = audit.get("action_boundary_violation_codes", [])
+            if (
+                not isinstance(violation_codes, list)
+                or len(violation_codes) != violation_count
+                or any(
+                    not isinstance(code, str) or not code
+                    for code in violation_codes
+                )
+            ):
+                raise ValueError("native DeepEyes action-boundary audit is malformed")
             output.extra_fields.update(
                 {
                     "native_original_image_count": 1,
@@ -315,21 +488,38 @@ def _build_native_deepeyes_agent_loop_class() -> type[Any]:
                     "legacy_adapter_loaded": False,
                     "observation_role": "user",
                     "observation_envelope": "<tool_response><image>...</tool_response>",
+                    "action_boundary_protocol_id": (
+                        self.action_boundary_protocol_id.value
+                    ),
+                    "action_boundary_violation_count": violation_count,
+                    "action_boundary_violation_codes": list(violation_codes),
                 }
             )
             return output
 
-    _NativeDeepEyesAgentLoop.__name__ = "NativeDeepEyesAgentLoop"
-    _NativeDeepEyesAgentLoop.__qualname__ = "NativeDeepEyesAgentLoop"
+    _NativeDeepEyesAgentLoop.__name__ = class_name
+    _NativeDeepEyesAgentLoop.__qualname__ = class_name
     _NativeDeepEyesAgentLoop.__module__ = __name__
     return _NativeDeepEyesAgentLoop
 
 
-NativeDeepEyesAgentLoop = _build_native_deepeyes_agent_loop_class()
+NativeDeepEyesAgentLoop = _build_native_deepeyes_agent_loop_class(
+    action_boundary_protocol_id=(
+        NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1
+    ),
+    class_name="NativeDeepEyesAgentLoop",
+)
+StrictNativeDeepEyesAgentLoopV2 = _build_native_deepeyes_agent_loop_class(
+    action_boundary_protocol_id=(
+        NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+    ),
+    class_name="StrictNativeDeepEyesAgentLoopV2",
+)
 
 
 __all__ = [
     "NATIVE_DEEPEYES_VISUAL_AGENT",
     "NativeDeepEyesAgentLoop",
+    "StrictNativeDeepEyesAgentLoopV2",
     "deepeyes_user_observation_messages",
 ]

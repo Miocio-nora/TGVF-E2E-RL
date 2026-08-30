@@ -16,15 +16,26 @@ from tgvf_rl.environment.crop_runtime import (
 from tgvf_rl.environment.crop_tool import CropReplayLayout, CropVisualTensorBundle
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
 from tgvf_rl.environment.native_appender import (
+    NativeSuccessObservationContract,
     QWEN_NATIVE_IMAGE_PLACEHOLDER,
-    render_qwen_native_success_environment_text,
+    QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT,
+    QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT,
+    QwenNativeToolObservationAppender,
 )
 from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.observations.schema import TrajectorySourceVisual
 from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 from tgvf_rl.protocol.parser import StrictToolCallParser
-from tgvf_rl.protocol.schema import SampledAssistantTurn, TokenByteSpan
+from tgvf_rl.protocol.native import NativeAssistantDialect
+from tgvf_rl.protocol.observation_contract import (
+    NativeSuccessObservationProtocolId,
+)
+from tgvf_rl.protocol.schema import (
+    NativeToolCapabilityProfile,
+    SampledAssistantTurn,
+    TokenByteSpan,
+)
 from tgvf_rl.qwen.crop_coordinates import (
     CanonicalSourcePixelCropCoordinateMapper,
 )
@@ -63,11 +74,20 @@ class _LayoutBuilder:
         self.trace = trace
         self.calls = 0
         self.visual: CropVisualTensorBundle | None = None
+        self.environment_success_texts: list[str] = []
 
-    def build_crop(self, context, crop_visual, parsed_call):
+    def build_crop(
+        self,
+        context,
+        crop_visual,
+        parsed_call,
+        *,
+        environment_success_text,
+    ):
         self.trace.append("layout")
         self.calls += 1
         self.visual = crop_visual
+        self.environment_success_texts.append(environment_success_text)
         assert parsed_call.sampled_text == context.sampled_turn.text
         return CropReplayLayout(
             sequence_length=16,
@@ -94,9 +114,7 @@ class _AspectRatioRejectingMaterializer(_Materializer):
     def materialize(self, crop_rgb, *, parsed_call, call_index):
         self.trace.append("materialize")
         self.calls += 1
-        raise ValueError(
-            "absolute aspect ratio must be smaller than 200, got 330.0"
-        )
+        raise ValueError("absolute aspect ratio must be smaller than 200, got 330.0")
 
 
 class _NativeTokenizer:
@@ -132,6 +150,18 @@ def _model() -> ModelIdentity:
 
 def _policy() -> PolicyVersion:
     return PolicyVersion("run", 0, SHA0)
+
+
+def _crop_contract(
+    protocol_id: NativeSuccessObservationProtocolId = (
+        NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1
+    ),
+) -> NativeSuccessObservationContract:
+    return NativeSuccessObservationContract(
+        protocol_id=protocol_id,
+        tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
 
 
 def _parsed_call(bbox: str = "[0,1,4,8]"):
@@ -249,6 +279,7 @@ def _runtime():
         crop_layout_identity=ArtifactIdentity("qwen", "crop-layout", "fixture", SHA2),
         execution_ledger=ledger,
         coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
+        observation_contract=_crop_contract(),
     )
     return runtime, store, source, pixels, materializer, layout, ledger, trace
 
@@ -265,6 +296,7 @@ def test_plain_crop_runtime_materializes_once_then_late_binds_layout() -> None:
     assert materializer.calls == 1
     assert layout.calls == 1
     assert trace == ["materialize", "layout"]
+    assert layout.environment_success_texts == [QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT]
     assert ledger.entry_count() == 1
     record = store.resolve_record(first)
     assert record.source_visual is source.state
@@ -278,7 +310,165 @@ def test_plain_crop_runtime_materializes_once_then_late_binds_layout() -> None:
     )
 
 
-def test_qwen3_plain_crop_layout_uses_exact_parsed_call_response_bytes() -> None:
+def test_crop_runtime_and_appender_share_one_explicit_byte_contract() -> None:
+    runtime, _store, source, _pixels, _materializer, layout, _ledger, _trace = (
+        _runtime()
+    )
+    parsed = _parsed_call()
+    context = _context(parsed_call=parsed, source=source, model=_model())
+    handle = runtime.execute(parsed, context)
+    tokenizer = _NativeTokenizer()
+
+    class Registrar:
+        def register_tool_turn(self, **_kwargs) -> None:
+            return None
+
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=tokenizer,
+        registrar=Registrar(),
+        observation_contract=runtime.observation_contract,
+    )
+    _updated, environment_ids = appender.append(
+        context.prompt_token_ids_before_turn,
+        context.sampled_turn,
+        handle,
+        call_index=0,
+        parsed_call=parsed,
+    )
+
+    assert layout.environment_success_texts == [QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT]
+    assert environment_ids == tuple(
+        tokenizer.encode(
+            layout.environment_success_texts[0],
+            add_special_tokens=False,
+        )
+    )
+
+
+def test_matched_crop_bytes_survive_two_calls_and_final_recorded_replay() -> None:
+    model = _model()
+    store = ObservationStore()
+    source, _pixels = _source(store, "run/sample/0/group")
+    tokenizer = _NativeTokenizer()
+    canonical_prompt = tuple(
+        tokenizer.encode(
+            QWEN_NATIVE_IMAGE_PLACEHOLDER + "Q",
+            add_special_tokens=False,
+        )
+    )
+    initial_prompt = (
+        canonical_prompt[:1]
+        + (canonical_prompt[1],) * len(source.positions)
+        + canonical_prompt[2:]
+    )
+
+    def get_rope_index(*, input_ids, **_kwargs):
+        sequence = input_ids.shape[-1]
+        positions = torch.arange(sequence).view(1, 1, sequence).expand(3, -1, -1)
+        return positions, torch.zeros(1, 1, dtype=torch.long)
+
+    layout_builder = Qwen3NativeToolLayoutBuilder(
+        tokenizer=tokenizer,
+        model_identity=model,
+        observation_store=store,
+        get_rope_index=get_rope_index,
+    )
+    contract = _crop_contract()
+    runtime = ImageZoomInToolRuntime(
+        model=model,
+        materializer=_Materializer(model, []),
+        layout_builder=layout_builder,
+        observation_store=store,
+        crop_processor_identity=ArtifactIdentity(
+            "qwen", "crop-processor", "fixture", SHA1
+        ),
+        crop_layout_identity=ArtifactIdentity("qwen", "crop-layout", "fixture", SHA2),
+        execution_ledger=CropExecutionLedger(),
+        coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
+        observation_contract=contract,
+    )
+
+    class Registrar:
+        def register_tool_turn(self, **_kwargs) -> None:
+            return None
+
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=tokenizer,
+        registrar=Registrar(),
+        observation_contract=contract,
+    )
+
+    first_call = _parsed_call("[0,1,4,4]")
+    first_context = replace(
+        _context(parsed_call=first_call, source=source, model=model),
+        prompt_token_ids_before_turn=initial_prompt,
+    )
+    first_handle = runtime.execute(first_call, first_context)
+    first_prompt, first_environment = appender.append(
+        initial_prompt,
+        first_context.sampled_turn,
+        first_handle,
+        call_index=0,
+        parsed_call=first_call,
+    )
+
+    second_call = _parsed_call("[1,0,5,3]")
+    second_context = replace(
+        _context(parsed_call=second_call, source=source, model=model),
+        prior_observation_handles=(first_handle,),
+        prompt_token_ids_before_turn=first_prompt,
+        assistant_turn_index=1,
+        call_index=1,
+    )
+    second_handle = runtime.execute(second_call, second_context)
+    final_prompt, second_environment = appender.append(
+        first_prompt,
+        second_context.sampled_turn,
+        second_handle,
+        call_index=1,
+        parsed_call=second_call,
+    )
+
+    expanded = layout_builder.expand_recorded_visual_sequence(
+        final_prompt,
+        trajectory_source_visual=source,
+        observation_handles=(first_handle, second_handle),
+    )
+    first_record = store.resolve_record(first_handle)
+    second_record = store.resolve_record(second_handle)
+    assert expanded.existing_positions == (
+        source.positions,
+        first_record.crop_visual.positions,
+    )
+    assert expanded.new_positions == second_record.crop_visual.positions
+    assert tuple(expanded.input_ids[0].tolist()) == final_prompt
+    expected_environment = tuple(
+        tokenizer.encode(
+            QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT,
+            add_special_tokens=False,
+        )
+    )
+    assert first_environment == expected_environment
+    assert second_environment == expected_environment
+
+
+@pytest.mark.parametrize(
+    ("protocol_id", "environment_success_text"),
+    (
+        (
+            NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1,
+            QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT,
+        ),
+        (
+            NativeSuccessObservationProtocolId.LEGACY_CROP_GENERIC86_V1,
+            QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT,
+        ),
+    ),
+)
+def test_qwen3_plain_crop_layout_uses_exact_contract_response_bytes(
+    protocol_id: NativeSuccessObservationProtocolId,
+    environment_success_text: str,
+) -> None:
     model = _model()
     store = ObservationStore()
     source, _pixels = _source(store, "run/sample/0/group")
@@ -316,11 +506,18 @@ def test_qwen3_plain_crop_layout_uses_exact_parsed_call_response_bytes() -> None
         spatial_merge_size=2,
         deepstack_branch_layers=BRANCH_LAYERS,
     )
-    layout = builder.build_crop(context, visual, parsed)
+    contract = _crop_contract(protocol_id)
+    assert contract.render(parsed) == environment_success_text
+    layout = builder.build_crop(
+        context,
+        visual,
+        parsed,
+        environment_success_text=environment_success_text,
+    )
 
     expected_environment_ids = tuple(
         tokenizer.encode(
-            render_qwen_native_success_environment_text(parsed),
+            environment_success_text,
             add_special_tokens=False,
         )
     )
@@ -345,6 +542,31 @@ def test_plain_crop_runtime_call_key_rejects_changed_sampled_content() -> None:
             changed,
             _context(parsed_call=changed, source=source, model=_model()),
         )
+    assert materializer.calls == 1
+
+
+def test_plain_crop_runtime_call_key_includes_observation_protocol_id() -> None:
+    runtime, store, source, _, materializer, layout, ledger, _ = _runtime()
+    parsed = _parsed_call()
+    context = _context(parsed_call=parsed, source=source, model=_model())
+    runtime.execute(parsed, context)
+    legacy_runtime = ImageZoomInToolRuntime(
+        model=runtime.model,
+        materializer=materializer,
+        layout_builder=layout,
+        observation_store=store,
+        crop_processor_identity=runtime.crop_processor_identity,
+        crop_layout_identity=runtime.crop_layout_identity,
+        execution_ledger=ledger,
+        coordinate_mapper=runtime.coordinate_mapper,
+        observation_contract=_crop_contract(
+            NativeSuccessObservationProtocolId.LEGACY_CROP_GENERIC86_V1
+        ),
+    )
+
+    with pytest.raises(ValueError, match="different content"):
+        legacy_runtime.execute(parsed, context)
+
     assert materializer.calls == 1
 
 
@@ -392,6 +614,7 @@ def test_plain_crop_runtime_maps_invalid_qwen3_grid_to_recoverable_error() -> No
         crop_layout_identity=ArtifactIdentity("qwen", "crop-layout", "fixture", SHA2),
         execution_ledger=CropExecutionLedger(),
         coordinate_mapper=Qwen3VLAdapter(),
+        observation_contract=_crop_contract(),
     )
     parsed = _parsed_call("[0,0,1001,1000]")
 
@@ -422,6 +645,7 @@ def test_plain_crop_runtime_maps_processor_aspect_ratio_to_recoverable_error() -
         crop_layout_identity=ArtifactIdentity("qwen", "crop-layout", "fixture", SHA2),
         execution_ledger=ledger,
         coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
+        observation_contract=_crop_contract(),
     )
     parsed = _parsed_call()
 
@@ -453,6 +677,7 @@ def test_plain_crop_runtime_rejects_gradient_carrying_recorded_features() -> Non
         crop_layout_identity=ArtifactIdentity("qwen", "crop-layout", "fixture", SHA2),
         execution_ledger=ledger,
         coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
+        observation_contract=_crop_contract(),
     )
     parsed = _parsed_call()
 
@@ -484,4 +709,5 @@ def test_plain_crop_runtime_rejects_materializer_bound_to_another_model() -> Non
             ),
             execution_ledger=CropExecutionLedger(),
             coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
+            observation_contract=_crop_contract(),
         )

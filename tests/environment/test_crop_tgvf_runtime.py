@@ -15,7 +15,7 @@ from tgvf_rl.contracts.errors import (
     IdentityMismatchError,
     RecoverableToolExecutionError,
 )
-from tgvf_rl.contracts.identity import ArtifactIdentity, PolicyVersion
+from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity, PolicyVersion
 from tgvf_rl.contracts.tokens import LogProbMeasurement, SamplingIdentity, TokenSpan
 from tgvf_rl.environment.agent_loop import SampledPolicyTurn, ToolExecutionContext
 from tgvf_rl.environment.adapter_runtime import load_frozen_tgvf_adapter
@@ -27,15 +27,22 @@ from tgvf_rl.environment.focus_runtime import (
 )
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
 from tgvf_rl.environment.native_appender import (
+    NativeSuccessObservationContract,
     QWEN_NATIVE_IMAGE_PLACEHOLDER,
-    render_qwen_native_success_environment_text,
+    QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX,
+    QWEN_NATIVE_RESPONSE_SUFFIX,
+    QwenNativeToolObservationAppender,
 )
 from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.observations.schema import CropTGVFObservationRecord
 from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 from tgvf_rl.protocol.parser import StrictToolCallParser
-from tgvf_rl.protocol.schema import TokenByteSpan
+from tgvf_rl.protocol.native import NativeAssistantDialect
+from tgvf_rl.protocol.observation_contract import (
+    NativeSuccessObservationProtocolId,
+)
+from tgvf_rl.protocol.schema import NativeToolCapabilityProfile, TokenByteSpan
 from tgvf_rl.qwen.crop_coordinates import (
     CanonicalSourcePixelCropCoordinateMapper,
 )
@@ -52,18 +59,22 @@ BRANCH_LAYERS = (8, 16, 24)
 
 
 class _Tokenizer:
-    name_or_path = "/qwen3_vl/fixture"
     _native = {
         "<|vision_start|>": 1,
         "<|image_pad|>": 2,
         "<|vision_end|>": 3,
     }
 
+    def __init__(self, name_or_path: str = "/qwen3_vl/fixture") -> None:
+        self.name_or_path = name_or_path
+        self.encoded_texts: list[str] = []
+
     def convert_tokens_to_ids(self, token: str) -> int:
         return self._native[token]
 
     def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
         assert add_special_tokens is False
+        self.encoded_texts.append(text)
         result: list[int] = []
         cursor = 0
         while cursor < len(text):
@@ -102,6 +113,14 @@ class _Materializer:
             spatial_merge_size=2,
             decoded_rgb_sha256=tensor_checksum(crop_rgb),
         )
+
+
+class _Registrar:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def register_tool_turn(self, **kwargs: object) -> None:
+        self.calls.append(dict(kwargs))
 
 
 class _HiddenCapture:
@@ -163,10 +182,19 @@ def _sampled(
     *,
     bbox: tuple[int, int, int, int] = (0, 1, 4, 4),
     target: str = "red label",
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
 ):
     bbox_json = ",".join(str(value) for value in bbox)
+    reasoning = (
+        "inspect</think>\n"
+        if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING
+        else "<think>inspect</think>\n"
+    )
     text = (
-        "inspect</think>\n<tool_call>"
+        reasoning
+        + "<tool_call>"
         '{"name":"tgvf_crop_tool","arguments":'
         f'{{"bbox_2d":[{bbox_json}],"target":"{target}"}}'
         "}</tool_call>"
@@ -200,6 +228,7 @@ def _sampled(
         stop_reason="stop",
         backend_request_sha256=SHA2,
         backend_response_sha256=SHA3,
+        assistant_dialect=assistant_dialect,
     )
     return sampled, StrictToolCallParser().parse(sampled.parser_turn())
 
@@ -210,11 +239,30 @@ def _fixture(
     bbox: tuple[int, int, int, int] = (0, 1, 4, 4),
     target: str = "red label",
     provider_kind: str = "target_token_embedding",
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
 ):
-    tokenizer = _Tokenizer()
+    model = ModelIdentity(
+        family="qwen3_vl",
+        model_name=(
+            "Qwen3-VL-8B-Thinking"
+            if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING
+            else "Qwen3-VL-8B-Instruct"
+        ),
+        revision_or_path=(
+            "/qwen3_vl/fixture"
+            if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING
+            else "/qwen3_vl/Qwen3-VL-8B-Instruct"
+        ),
+        tokenizer_length=256,
+        chat_template_sha256=SHA0,
+    )
+    tokenizer = _Tokenizer(model.revision_or_path)
     binding, adapter = _write_artifact(
         tmp_path / f"{provider_kind}.pt",
         provider=provider_kind,
+        model=model,
     )
     loaded_adapter = load_frozen_tgvf_adapter(
         binding=binding,
@@ -225,7 +273,13 @@ def _fixture(
     identity = TrajectoryIdentity("pilot", "sample", 0, "group")
     store = ObservationStore()
     pixels, source = _source(store, identity.canonical_id)
-    sampled, parsed = _sampled(tokenizer, policy, bbox=bbox, target=target)
+    sampled, parsed = _sampled(
+        tokenizer,
+        policy,
+        bbox=bbox,
+        target=target,
+        assistant_dialect=assistant_dialect,
+    )
     context = ToolExecutionContext(
         trajectory_identity=identity,
         model=model,
@@ -295,6 +349,11 @@ def _fixture(
         conditioning_input_device=torch.device("cpu"),
         contextual_forward_identity=contextual_forward_identity,
         execution_ledger=FocusExecutionLedger(),
+        observation_contract=NativeSuccessObservationContract(
+            protocol_id=NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1,
+            tool_profile=NativeToolCapabilityProfile.CROP_TGVF,
+            assistant_dialect=assistant_dialect,
+        ),
     )
     return runtime, materializer, store, pixels, provider_owner, context, parsed
 
@@ -305,6 +364,8 @@ def test_embedding_runtime_executes_atomic_crop_and_tgvf_once(
     runtime, materializer, store, pixels, embedding, context, parsed = _fixture(
         tmp_path
     )
+    tokenizer = runtime.layout_builder.tokenizer
+    encoded_before_execute = len(tokenizer.encoded_texts)
 
     handle = runtime.execute(parsed, context)
     repeated = runtime.execute(parsed, context)
@@ -330,12 +391,14 @@ def test_embedding_runtime_executes_atomic_crop_and_tgvf_once(
     assert record.layout.original_image_positions == (1,)
     assert len(record.layout.d_positions) == 1
     assert record.layout.deepstack_branch_layers == BRANCH_LAYERS
-    tokenizer = runtime.layout_builder.tokenizer
+    environment_text = runtime.observation_contract.render(parsed)
+    assert runtime.observation_contract.protocol_id is (
+        NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1
+    )
+    assert environment_text.endswith(QWEN_NATIVE_RESPONSE_SUFFIX)
+    assert tokenizer.encoded_texts[encoded_before_execute:] == [environment_text]
     expected_environment_ids = tuple(
-        tokenizer.encode(
-            render_qwen_native_success_environment_text(parsed),
-            add_special_tokens=False,
-        )
+        _Tokenizer().encode(environment_text, add_special_tokens=False)
     )
     assert record.layout.sequence_length == len(
         context.prompt_token_ids_before_turn
@@ -343,6 +406,85 @@ def test_embedding_runtime_executes_atomic_crop_and_tgvf_once(
         + expected_environment_ids
     )
     assert all(not parameter.requires_grad for parameter in embedding.parameters())
+
+
+def test_instruct_atomic_append_and_layout_use_identical_success_bytes(
+    tmp_path: Path,
+) -> None:
+    runtime, _materializer, store, _pixels, _embedding, context, parsed = _fixture(
+        tmp_path,
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+    tokenizer = runtime.layout_builder.tokenizer
+    encoded_before_execute = len(tokenizer.encoded_texts)
+
+    handle = runtime.execute(parsed, context)
+
+    expected_text = runtime.observation_contract.render(parsed)
+    assert expected_text.endswith(QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX)
+    assert not expected_text.endswith(QWEN_NATIVE_RESPONSE_SUFFIX)
+    layout_encoded_texts = tokenizer.encoded_texts[encoded_before_execute:]
+    assert layout_encoded_texts == [expected_text]
+
+    registrar = _Registrar()
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=tokenizer,
+        registrar=registrar,
+        observation_contract=runtime.observation_contract,
+    )
+    _updated, appended_environment_ids = appender.append(
+        context.prompt_token_ids_before_turn,
+        context.sampled_turn,
+        handle,
+        call_index=context.call_index,
+        parsed_call=parsed,
+    )
+
+    appender_text = tokenizer.encoded_texts[-1]
+    assert layout_encoded_texts[0].encode("utf-8") == appender_text.encode("utf-8")
+    assert appended_environment_ids == tuple(
+        _Tokenizer().encode(expected_text, add_special_tokens=False)
+    )
+    record = store.resolve_record(handle)
+    assert isinstance(record, CropTGVFObservationRecord)
+    assert record.layout.sequence_length == len(
+        context.prompt_token_ids_before_turn
+        + context.sampled_turn.token_ids
+        + appended_environment_ids
+    )
+    assert len(registrar.calls) == 1
+
+
+def test_atomic_runtime_fails_closed_without_observation_contract(
+    tmp_path: Path,
+) -> None:
+    runtime, materializer, store, _pixels, _embedding, _context, _parsed = _fixture(
+        tmp_path
+    )
+
+    with pytest.raises(
+        TypeError,
+        match="requires NativeSuccessObservationContract",
+    ):
+        AtomicCropTGVFToolRuntime(
+            conditioning_provider=runtime.conditioning_provider,
+            hidden_state_capture=None,
+            atomic_tool=AtomicCropTGVFTool(
+                materializer=materializer,
+                adapter=runtime.loaded_adapter.adapter,
+                store=store,
+                coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
+            ),
+            layout_builder=runtime.layout_builder,
+            loaded_adapter=runtime.loaded_adapter,
+            branch_mergers=runtime.branch_mergers,
+            crop_processor_identity=runtime.crop_processor_identity,
+            crop_layout_identity=runtime.crop_layout_identity,
+            conditioning_input_device=torch.device("cpu"),
+            contextual_forward_identity=None,
+            execution_ledger=FocusExecutionLedger(),
+            observation_contract=None,  # type: ignore[arg-type]
+        )
 
 
 def test_contextual_runtime_binds_exact_capture_and_fused_condition_provenance(
@@ -444,6 +586,7 @@ def test_runtime_rejects_provider_not_named_by_loaded_artifact(
             conditioning_input_device=torch.device("cpu"),
             contextual_forward_identity=None,
             execution_ledger=FocusExecutionLedger(),
+            observation_contract=runtime.observation_contract,
         )
 
 
@@ -483,6 +626,7 @@ def test_runtime_rejects_adapter_not_loaded_by_selected_binding(
             conditioning_input_device=torch.device("cpu"),
             contextual_forward_identity=None,
             execution_ledger=FocusExecutionLedger(),
+            observation_contract=runtime.observation_contract,
         )
 
 
@@ -518,6 +662,7 @@ def test_runtime_rejects_branch_bindings_outside_artifact_architecture(
             conditioning_input_device=torch.device("cpu"),
             contextual_forward_identity=None,
             execution_ledger=FocusExecutionLedger(),
+            observation_contract=runtime.observation_contract,
         )
 
 

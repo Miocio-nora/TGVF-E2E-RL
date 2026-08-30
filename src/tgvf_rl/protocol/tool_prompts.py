@@ -26,12 +26,9 @@ from .schema import (
 TGVF_VISUAL_TOOL_PROMPTS_VERSION = "tgvf-visual-tool-prompts-v3"
 TGVF_VISUAL_TOOL_PROMPTS_V2_VERSION = "tgvf-visual-tool-prompts-v2"
 TGVF_VISUAL_TOOL_RESPONSES_VERSION = "tgvf-visual-tool-responses-v1"
-TGVF_VISUAL_TOOL_INSTRUCT_PROMPTS_VERSION = (
-    "tgvf-visual-tool-prompts-v4-instruct"
-)
-TGVF_VISUAL_TOOL_INSTRUCT_RESPONSES_VERSION = (
-    "tgvf-visual-tool-responses-v2-instruct"
-)
+TGVF_VISUAL_TOOL_INSTRUCT_PROMPTS_VERSION = "tgvf-visual-tool-prompts-v4-instruct"
+TGVF_VISUAL_TOOL_INSTRUCT_RESPONSES_VERSION = "tgvf-visual-tool-responses-v2-instruct"
+DIRECT_ANSWER_PROMPTS_VERSION = "tgvf-direct-answer-prompts-v1"
 
 QWEN3_INSTRUCT_POLICY_TRIGGER_INSTRUCTION = """Think first, call an available visual tool if needed, then answer.
 
@@ -90,6 +87,32 @@ one native tool call if more visual evidence is needed or give only the
 final answer.
 
 After completing your reasoning, give only the final answer without explanation:
+- For multiple-choice questions, give only the option letter.
+- For mathematics questions, give only the final value or expression.
+- For other questions, give only a concise answer."""
+
+DIRECT_ANSWER_SYSTEM_PROMPT = """You are a visual reasoning assistant.
+
+Answer the question from the original image. No visual tool is available, so
+do not emit a tool call. Reason carefully, then provide a concise final answer."""
+
+DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE = """
+{question}
+
+After completing your reasoning, give only the final answer without explanation:
+- For multiple-choice questions, give only the option letter.
+- For mathematics questions, give only the final value or expression.
+- For other questions, give only a concise answer."""
+
+QWEN3_INSTRUCT_DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE = """
+{question}
+
+Think first, then answer. No visual tool is available and you must not emit a
+tool call.
+
+Begin the assistant turn by generating one <think>...</think> block yourself;
+the chat template does not add it. After </think>, give only the final answer
+without explanation:
 - For multiple-choice questions, give only the option letter.
 - For mathematics questions, give only the final value or expression.
 - For other questions, give only a concise answer."""
@@ -196,6 +219,13 @@ QWEN3_INSTRUCT_SHARED_USER_PROMPT_TEMPLATE_SHA256 = _sha256_text(
 QWEN3_INSTRUCT_NATIVE_SHARED_USER_TEXT_TEMPLATE_SHA256 = _sha256_text(
     QWEN3_INSTRUCT_NATIVE_SHARED_USER_TEXT_TEMPLATE
 )
+DIRECT_ANSWER_SYSTEM_PROMPT_SHA256 = _sha256_text(DIRECT_ANSWER_SYSTEM_PROMPT)
+DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE_SHA256 = _sha256_text(
+    DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE
+)
+QWEN3_INSTRUCT_DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE_SHA256 = _sha256_text(
+    QWEN3_INSTRUCT_DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE
+)
 TGVF_ONLY_SYSTEM_PROMPT_SHA256 = _sha256_text(TGVF_ONLY_SYSTEM_PROMPT)
 CROP_ONLY_SYSTEM_PROMPT_SHA256 = _sha256_text(CROP_ONLY_SYSTEM_PROMPT)
 TGVF_CROP_SYSTEM_PROMPT_SHA256 = _sha256_text(TGVF_CROP_SYSTEM_PROMPT)
@@ -264,9 +294,18 @@ class VisualToolPromptIdentity:
     bundle_sha256: str
     version: str = TGVF_VISUAL_TOOL_PROMPTS_VERSION
     response_version: str = TGVF_VISUAL_TOOL_RESPONSES_VERSION
-    assistant_dialect: NativeAssistantDialect = (
-        NativeAssistantDialect.QWEN3_VL_THINKING
-    )
+    assistant_dialect: NativeAssistantDialect = NativeAssistantDialect.QWEN3_VL_THINKING
+
+
+@dataclass(frozen=True, slots=True)
+class DirectAnswerPromptIdentity:
+    """Exact no-tool prompt identity used by strict ThinkLite routing."""
+
+    system_prompt_sha256: str
+    native_user_text_template_sha256: str
+    bundle_sha256: str
+    version: str = DIRECT_ANSWER_PROMPTS_VERSION
+    assistant_dialect: NativeAssistantDialect = NativeAssistantDialect.QWEN3_VL_THINKING
 
 
 def visual_tool_prompt_identity(
@@ -327,16 +366,48 @@ def visual_tool_prompt_identity(
     return VisualToolPromptIdentity(
         tool_profile=profile,
         system_prompt_sha256=_sha256_text(system_prompt),
-        shared_user_prompt_template_sha256=_sha256_text(
-            shared_user_prompt_template
-        ),
-        native_user_text_template_sha256=_sha256_text(
-            native_shared_user_text_template
-        ),
+        shared_user_prompt_template_sha256=_sha256_text(shared_user_prompt_template),
+        native_user_text_template_sha256=_sha256_text(native_shared_user_text_template),
         success_response_template_sha256=_sha256_text(success_response_template),
         bundle_sha256=_sha256_text(canonical),
         version=version,
         response_version=response_version,
+        assistant_dialect=assistant_dialect,
+    )
+
+
+def direct_answer_prompt_identity(
+    *,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
+) -> DirectAnswerPromptIdentity:
+    """Return the content identity for the no-tool original-image prompt."""
+
+    if not isinstance(assistant_dialect, NativeAssistantDialect):
+        raise TypeError("assistant_dialect must be NativeAssistantDialect")
+    native_user_template = (
+        QWEN3_INSTRUCT_DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE
+        if assistant_dialect is NativeAssistantDialect.QWEN3_VL_INSTRUCT
+        else DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE
+    )
+    payload = {
+        "version": DIRECT_ANSWER_PROMPTS_VERSION,
+        "assistant_dialect": assistant_dialect.value,
+        "tool_profile": "none",
+        "system_prompt": DIRECT_ANSWER_SYSTEM_PROMPT,
+        "native_user_text_template": native_user_template,
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return DirectAnswerPromptIdentity(
+        system_prompt_sha256=DIRECT_ANSWER_SYSTEM_PROMPT_SHA256,
+        native_user_text_template_sha256=_sha256_text(native_user_template),
+        bundle_sha256=_sha256_text(canonical),
         assistant_dialect=assistant_dialect,
     )
 
@@ -439,6 +510,12 @@ def render_successful_visual_tool_response(
 __all__ = [
     "CROP_ONLY_SYSTEM_PROMPT",
     "CROP_ONLY_SYSTEM_PROMPT_SHA256",
+    "DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE",
+    "DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE_SHA256",
+    "DIRECT_ANSWER_PROMPTS_VERSION",
+    "DIRECT_ANSWER_SYSTEM_PROMPT",
+    "DIRECT_ANSWER_SYSTEM_PROMPT_SHA256",
+    "DirectAnswerPromptIdentity",
     "IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT",
     "IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT_SHA256",
     "NATIVE_SHARED_USER_TEXT_TEMPLATE",
@@ -446,6 +523,8 @@ __all__ = [
     "NATIVE_SUCCESS_RESPONSE_IMAGE_MARKER",
     "QWEN3_INSTRUCT_NATIVE_SHARED_USER_TEXT_TEMPLATE",
     "QWEN3_INSTRUCT_NATIVE_SHARED_USER_TEXT_TEMPLATE_SHA256",
+    "QWEN3_INSTRUCT_DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE",
+    "QWEN3_INSTRUCT_DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE_SHA256",
     "QWEN3_INSTRUCT_POLICY_TRIGGER_INSTRUCTION",
     "QWEN3_INSTRUCT_POLICY_TRIGGER_INSTRUCTION_SHA256",
     "QWEN3_INSTRUCT_SHARED_USER_PROMPT_TEMPLATE",
@@ -468,6 +547,7 @@ __all__ = [
     "TGVF_VISUAL_TOOL_RESPONSES_VERSION",
     "VisualToolPromptIdentity",
     "build_visual_tool_prompt_messages",
+    "direct_answer_prompt_identity",
     "native_policy_messages_sha256",
     "render_successful_visual_tool_response",
     "visual_tool_prompt_identity",

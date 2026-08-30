@@ -12,7 +12,11 @@ from tgvf_rl.contracts.errors import RecoverableToolExecutionError
 from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity
 from tgvf_rl.observations.schema import TrajectorySourceVisual
 from tgvf_rl.observations.store import ObservationHandle, ObservationStore
-from tgvf_rl.protocol.schema import IMAGE_ZOOM_IN_TOOL_NAME, ParsedImageZoomInCall
+from tgvf_rl.protocol.schema import (
+    IMAGE_ZOOM_IN_TOOL_NAME,
+    NativeToolCapabilityProfile,
+    ParsedImageZoomInCall,
+)
 from tgvf_rl.qwen.crop_coordinates import CropCoordinateMapper
 
 from .agent_loop import ToolExecutionContext
@@ -23,6 +27,7 @@ from .crop_tool import (
     CropVisualTensorBundle,
     ImageZoomInTool,
 )
+from .native_appender import NativeSuccessObservationContract
 
 
 @dataclass(slots=True)
@@ -122,6 +127,8 @@ class CropRuntimeLayoutPort(Protocol):
         context: ToolExecutionContext,
         crop_visual: CropVisualTensorBundle,
         parsed_call: ParsedImageZoomInCall,
+        *,
+        environment_success_text: str,
     ) -> CropReplayLayout: ...
 
 
@@ -130,6 +137,7 @@ class _BoundCropReplayLayoutBuilder:
     owner: CropRuntimeLayoutPort
     context: ToolExecutionContext
     parsed_call: ParsedImageZoomInCall
+    environment_success_text: str
 
     def build(
         self,
@@ -149,7 +157,12 @@ class _BoundCropReplayLayoutBuilder:
             raise ValueError("bound crop layout parsed call changed")
         if trajectory_source_visual != context.trajectory_source_visual:
             raise ValueError("bound crop layout source visual changed")
-        return self.owner.build_crop(context, crop_visual, parsed_call)
+        return self.owner.build_crop(
+            context,
+            crop_visual,
+            parsed_call,
+            environment_success_text=self.environment_success_text,
+        )
 
 
 class ImageZoomInToolRuntime:
@@ -172,6 +185,7 @@ class ImageZoomInToolRuntime:
         crop_layout_identity: ArtifactIdentity,
         execution_ledger: CropExecutionLedger,
         coordinate_mapper: CropCoordinateMapper,
+        observation_contract: NativeSuccessObservationContract,
         processor_resized_size: tuple[int, int] | None = None,
     ) -> None:
         if not isinstance(model, ModelIdentity):
@@ -190,6 +204,15 @@ class ImageZoomInToolRuntime:
             raise TypeError("plain crop runtime requires a CropExecutionLedger")
         if not callable(getattr(coordinate_mapper, "map_crop_bbox_to_source", None)):
             raise TypeError("plain crop runtime requires an explicit coordinate mapper")
+        if not isinstance(observation_contract, NativeSuccessObservationContract):
+            raise TypeError(
+                "plain crop runtime requires NativeSuccessObservationContract"
+            )
+        if (
+            observation_contract.tool_profile
+            is not NativeToolCapabilityProfile.CROP_ONLY
+        ):
+            raise ValueError("plain crop runtime requires a crop_only contract")
         bound_model = getattr(materializer, "model_identity", None)
         if bound_model is not None and bound_model != model:
             raise ValueError("crop materializer model differs from runtime model")
@@ -205,6 +228,7 @@ class ImageZoomInToolRuntime:
         self.crop_layout_identity = crop_layout_identity
         self.execution_ledger = execution_ledger
         self.coordinate_mapper = coordinate_mapper
+        self.observation_contract = observation_contract
         self.processor_resized_size = processor_resized_size
         self.crop_tool = ImageZoomInTool(
             materializer,
@@ -236,6 +260,7 @@ class ImageZoomInToolRuntime:
                 self.coordinate_mapper.crop_coordinate_conversion_version
             ),
             processor_resized_size=self.processor_resized_size,
+            observation_protocol_id=self.observation_contract.protocol_id.value,
         )
         return self.execution_ledger.execute_once(
             key=(context.trajectory_identity.canonical_id, context.call_index),
@@ -248,6 +273,7 @@ class ImageZoomInToolRuntime:
         parsed_call: ParsedImageZoomInCall,
         context: ToolExecutionContext,
     ) -> ObservationHandle:
+        environment_success_text = self.observation_contract.render(parsed_call)
         try:
             result = self.crop_tool.execute(
                 CropToolExecutionRequest(
@@ -259,6 +285,7 @@ class ImageZoomInToolRuntime:
                         self.layout_builder,
                         context,
                         parsed_call,
+                        environment_success_text,
                     ),
                     model=context.model,
                     policy_version=context.behavior_policy,
@@ -321,6 +348,7 @@ def _call_fingerprint(
     coordinate_space: str,
     coordinate_conversion_version: str,
     processor_resized_size: tuple[int, int] | None,
+    observation_protocol_id: str,
 ) -> str:
     payload = {
         "trajectory_id": context.trajectory_identity.canonical_id,
@@ -351,6 +379,7 @@ def _call_fingerprint(
         "coordinate_space": coordinate_space,
         "coordinate_conversion_version": coordinate_conversion_version,
         "processor_resized_size": processor_resized_size,
+        "observation_protocol_id": observation_protocol_id,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

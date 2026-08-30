@@ -11,9 +11,8 @@ from omegaconf import OmegaConf
 import pytest
 import torch
 from tensordict import TensorDict
-from verl import DataProto
-from verl.trainer.ppo.reward import resolve_reward_manager_cls
 
+from tgvf_rl.protocol.action_boundary import NativeActionBoundaryProtocolId
 from tgvf_rl.rewards.deepeyes_batch import JudgeGlobalFailure
 from tgvf_rl.rewards.deepeyes_official import (
     DEEPEYES_VISUAL_JUDGE_PROMPT_KIND,
@@ -169,10 +168,20 @@ def _data(
     call_count: int | None = None,
     error_count: int = 0,
     observation_spans: list[list[int]] | None = None,
-) -> DataProto:
+    action_boundary_protocol_id: NativeActionBoundaryProtocolId = (
+        NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+    ),
+    action_boundary_violation_codes: list[str] | None = None,
+) -> object:
+    data_proto = pytest.importorskip(
+        "verl",
+        reason="DeepEyes reward DataProto integration requires optional pinned veRL",
+    ).DataProto
     call_count = crop_count if call_count is None else call_count
     if observation_spans is None:
         observation_spans = [[1, 2]] if crop_count else []
+    if action_boundary_violation_codes is None:
+        action_boundary_violation_codes = []
     batch = TensorDict(
         {
             "prompts": torch.tensor([[1, 2]], dtype=torch.long),
@@ -181,7 +190,7 @@ def _data(
         },
         batch_size=1,
     )
-    return DataProto(
+    return data_proto(
         batch=batch,
         non_tensor_batch={
             "data_source": np.array([source], dtype=object),
@@ -216,6 +225,15 @@ def _data(
                         "legacy_adapter_loaded": False,
                         "observation_role": "user",
                         "observation_envelope": "native_multimodal",
+                        "action_boundary_protocol_id": (
+                            action_boundary_protocol_id.value
+                        ),
+                        "action_boundary_violation_count": len(
+                            action_boundary_violation_codes
+                        ),
+                        "action_boundary_violation_codes": (
+                            action_boundary_violation_codes
+                        ),
                     }
                 ],
                 dtype=object,
@@ -253,34 +271,182 @@ def test_real_dataproto_manager_keeps_accuracy_independent_of_format() -> None:
     assert extra["action_count"] == 1
 
 
+def test_strict_invalid_action_hard_gate_is_dependency_free() -> None:
+    requests: list[DeepEyesBinaryJudgeRequest] = []
+
+    async def incorrectly_correct(request: object, _payload: object) -> object:
+        assert isinstance(request, DeepEyesBinaryJudgeRequest)
+        requests.append(request)
+        return _response()
+
+    manager = DeepEyesOfficialRewardManager(
+        OmegaConf.create({"reward": {}}),
+        _Tokenizer("unused"),
+        judge_transport=AsyncDeepEyesOpenRouterJudge(
+            _service(), request_json=incorrectly_correct
+        ),
+        trajectory_id_factory=lambda: "invalid-boundary",
+    )
+
+    result = asyncio.run(
+        manager._score_visual(
+            trajectory_id="invalid-boundary",
+            sample_id="sample",
+            question="What color?",
+            reference="blue",
+            response=(
+                '<tool_call>{"name":"image_zoom_in_tool",'
+                '"arguments":BROKEN}</tool_call>blue'
+            ),
+            task_kind="open",
+            crop_count=0,
+            audit={
+                "action_boundary_protocol_id": (
+                    NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2.value
+                ),
+                "action_boundary_violation_count": 1,
+                "action_boundary_violation_codes": [
+                    "parsed_tool_call_count_mismatch"
+                ],
+            },
+        )
+    )
+
+    assert len(requests) == 1
+    assert requests[0].candidate_answer == "[NO VALID FINAL ANSWER]"
+    assert "blue" not in requests[0].candidate_answer
+    assert result["score"] == pytest.approx(-0.2)
+    assert result["acc"] == 0
+    assert result["conditional_tool"] == 0
+    assert result["format_penalty"] == -1
+    assert result["answer_length"] == 0
+    assert result["judge_requested"] == 1
+    assert result["visual_judge_requested"] == 1
+    assert result["judge_calls"] == 1
+    assert result["judge_route"].endswith(
+        "strict_action_boundary_invalid_hard_gate"
+    )
+
+
+def test_strict_invalid_action_judge_failure_is_not_a_policy_penalty() -> None:
+    async def invalid_output(_request: object, _payload: object) -> object:
+        return _response("maybe")
+
+    manager = DeepEyesOfficialRewardManager(
+        OmegaConf.create({"reward": {}}),
+        _Tokenizer("unused"),
+        judge_transport=AsyncDeepEyesOpenRouterJudge(
+            _service(), request_json=invalid_output
+        ),
+    )
+
+    result = asyncio.run(
+        manager._score_visual(
+            trajectory_id="invalid-boundary-failed-judge",
+            sample_id="sample",
+            question="What color?",
+            reference="blue",
+            response="malformed action with a correct-looking blue suffix",
+            task_kind="open",
+            crop_count=0,
+            audit={
+                "action_boundary_protocol_id": (
+                    NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2.value
+                ),
+                "action_boundary_violation_count": 1,
+                "action_boundary_violation_codes": [
+                    "malformed_tool_call_tags"
+                ],
+            },
+        )
+    )
+
+    assert result["score"] == 0.0
+    assert result["acc"] == 0
+    assert result["conditional_tool"] == 0
+    assert result["judge_requested"] == 1
+    assert result["judge_calls"] == 1
+    assert result["judge_failures"] == 1
+
+
+def test_strict_invalid_action_dataproto_cannot_receive_semantic_reward() -> None:
+    calls = 0
+
+    async def incorrectly_correct(_request: object, _payload: object) -> object:
+        nonlocal calls
+        calls += 1
+        return _response()
+
+    manager = DeepEyesOfficialRewardManager(
+        OmegaConf.create({"reward": {}}),
+        _Tokenizer(
+            '<think>done</think><tool_call>{"name":"image_zoom_in_tool",'
+            '"arguments":BROKEN}</tool_call>blue'
+        ),
+        judge_transport=AsyncDeepEyesOpenRouterJudge(
+            _service(), request_json=incorrectly_correct
+        ),
+        trajectory_id_factory=lambda: "invalid-boundary",
+    )
+
+    result = asyncio.run(
+        manager.run_single(
+            _data(
+                source="vstar",
+                crop_count=0,
+                action_boundary_violation_codes=[
+                    "parsed_tool_call_count_mismatch"
+                ],
+            )
+        )
+    )
+
+    assert calls == 1
+    assert result["reward_score"] == pytest.approx(-0.2)
+    extra = result["reward_extra_info"]
+    assert extra["acc"] == 0
+    assert extra["conditional_tool"] == 0
+    assert extra["format_penalty"] == -1
+    assert extra["answer_length"] == 0
+    assert extra["judge_requested"] == 1
+    assert extra["visual_judge_requested"] == 1
+    assert extra["judge_route"].endswith(
+        "strict_action_boundary_invalid_hard_gate"
+    )
+    assert extra["action_boundary_valid"] == 0
+    assert json.loads(extra["action_boundary_violation_codes"]) == [
+        "parsed_tool_call_count_mismatch"
+    ]
+
+
 @pytest.mark.parametrize(
-    ("case", "data", "expected"),
+    ("case", "data_kwargs", "expected"),
     (
         (
             "direct-no-call",
-            _data(source="arxivqa", crop_count=0),
+            {"source": "arxivqa", "crop_count": 0},
             (0, 0, 0, []),
         ),
         (
             "invalid-call",
-            _data(
-                source="vstar",
-                crop_count=0,
-                call_count=1,
-                error_count=1,
-                observation_spans=[[1, 2]],
-            ),
+            {
+                "source": "vstar",
+                "crop_count": 0,
+                "call_count": 1,
+                "error_count": 1,
+                "observation_spans": [[1, 2]],
+            },
             (1, 0, 1, [[1, 2]]),
         ),
         (
             "valid-call",
-            _data(source="vstar", crop_count=1),
+            {"source": "vstar", "crop_count": 1},
             (1, 1, 0, [[1, 2]]),
         ),
     ),
 )
 def test_visual_reward_accepts_direct_invalid_and_valid_audit_semantics(
-    case: str, data: DataProto, expected: tuple[object, ...]
+    case: str, data_kwargs: dict[str, object], expected: tuple[object, ...]
 ) -> None:
     async def correct(_request: object, _payload: object) -> object:
         return _response()
@@ -291,7 +457,7 @@ def test_visual_reward_accepts_direct_invalid_and_valid_audit_semantics(
         judge_transport=AsyncDeepEyesOpenRouterJudge(_service(), request_json=correct),
         trajectory_id_factory=lambda: case,
     )
-    result = asyncio.run(manager.run_single(data))
+    result = asyncio.run(manager.run_single(_data(**data_kwargs)))
     extra = result["reward_extra_info"]
     assert (
         extra["crop_call_count"],
@@ -328,7 +494,10 @@ def test_reward_extra_info_batches_direct_and_crop_trajectories() -> None:
 
 
 def test_reward_extra_schema_is_source_stable_and_validation_numeric() -> None:
-    from verl.trainer.ppo.metric_utils import process_validation_metrics
+    process_validation_metrics = pytest.importorskip(
+        "verl.trainer.ppo.metric_utils",
+        reason="reward metric aggregation requires optional pinned veRL",
+    ).process_validation_metrics
 
     async def correct(_request: object, _payload: object) -> object:
         return _response()
@@ -378,6 +547,10 @@ def test_reward_extra_schema_is_source_stable_and_validation_numeric() -> None:
 
 
 def test_importlib_reward_manager_resolves_on_pinned_verl_path() -> None:
+    resolve_reward_manager_cls = pytest.importorskip(
+        "verl.trainer.ppo.reward",
+        reason="reward-manager resolution requires optional pinned veRL",
+    ).resolve_reward_manager_cls
     config = OmegaConf.create(
         {
             "reward": {

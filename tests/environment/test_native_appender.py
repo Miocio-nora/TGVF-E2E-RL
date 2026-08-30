@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 import json
+from pathlib import Path
 
 import pytest
 
@@ -9,8 +10,13 @@ from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.contracts.tokens import LogProbMeasurement, SamplingIdentity, TokenSpan
 from tgvf_rl.environment.agent_loop import SampledPolicyTurn
 from tgvf_rl.environment.native_appender import (
+    NativeSuccessObservationContract,
     QWEN_NATIVE_IMAGE_PLACEHOLDER,
     QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX,
+    QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT,
+    QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT_SHA256,
+    QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT,
+    QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256,
     QWEN_NATIVE_RESPONSE_SUFFIX,
     QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX,
     QwenNativeToolObservationAppender,
@@ -20,10 +26,20 @@ from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.protocol import (
     NativeAssistantDialect,
     NativeProtocolRenderer,
+    NativeSuccessObservationProtocolId,
     StrictToolCallParser,
     TokenByteSpan,
 )
 from tgvf_rl.protocol.schema import StandardToolError
+from tgvf_rl.protocol.schema import NativeToolCapabilityProfile
+
+
+_QWEN3_VL_INSTRUCT_PATH = Path(
+    "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
+)
+_QWEN3_VL_THINKING_PATH = Path(
+    "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
+)
 
 
 class _CharacterTokenizer:
@@ -86,6 +102,36 @@ class _Registrar:
         self.calls.append(kwargs)
 
 
+def _generic_contract(
+    tool_profile: NativeToolCapabilityProfile = (NativeToolCapabilityProfile.TGVF_ONLY),
+    *,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
+) -> NativeSuccessObservationContract:
+    return NativeSuccessObservationContract(
+        protocol_id=NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1,
+        tool_profile=tool_profile,
+        assistant_dialect=assistant_dialect,
+    )
+
+
+def _matched_crop_contract() -> NativeSuccessObservationContract:
+    return NativeSuccessObservationContract(
+        protocol_id=(NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1),
+        tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+
+
+def _legacy_crop_contract() -> NativeSuccessObservationContract:
+    return NativeSuccessObservationContract(
+        protocol_id=(NativeSuccessObservationProtocolId.LEGACY_CROP_GENERIC86_V1),
+        tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+
+
 def _sampled(
     text: str,
     token_ids: tuple[int, ...],
@@ -109,8 +155,7 @@ def _sampled(
         asynchronous_staleness_steps=0,
     )
     spans = token_byte_spans or tuple(
-        TokenByteSpan(index, token_id, 0, 0)
-        for index, token_id in enumerate(token_ids)
+        TokenByteSpan(index, token_id, 0, 0) for index, token_id in enumerate(token_ids)
     )
     return SampledPolicyTurn(
         text=text,
@@ -149,11 +194,6 @@ def _ascii_sampled_call(tool_name: str, arguments: dict[str, object]):
             'Focused visual observation for target:\n"the gauge needle position"',
         ),
         (
-            "image_zoom_in_tool",
-            {"bbox_2d": [1, 2, 30, 40], "label": "the small gauge"},
-            "Zoomed-in visual observation:",
-        ),
-        (
             "tgvf_crop_tool",
             {
                 "bbox_2d": [1, 2, 30, 40],
@@ -171,7 +211,13 @@ def test_success_appends_exact_profile_text_then_one_image_placeholder(
     tokenizer = _CharacterTokenizer()
     registrar = _Registrar()
     appender = QwenNativeToolObservationAppender(
-        tokenizer=tokenizer, registrar=registrar
+        tokenizer=tokenizer,
+        registrar=registrar,
+        observation_contract=_generic_contract(
+            NativeToolCapabilityProfile.TGVF_ONLY
+            if tool_name == "tgvf_focus_tool"
+            else NativeToolCapabilityProfile.CROP_TGVF
+        ),
     )
     sampled, parsed = _ascii_sampled_call(tool_name, arguments)
     prompt = (7, 8)
@@ -202,11 +248,11 @@ def test_instruct_tool_response_starts_next_assistant_without_think() -> None:
     appender = QwenNativeToolObservationAppender(
         tokenizer=tokenizer,
         registrar=_Registrar(),
-        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+        observation_contract=_generic_contract(
+            assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+        ),
     )
-    sampled, parsed = _ascii_sampled_call(
-        "tgvf_focus_tool", {"target": "the gauge"}
-    )
+    sampled, parsed = _ascii_sampled_call("tgvf_focus_tool", {"target": "the gauge"})
 
     _updated, suffix = appender.append(
         (7, 8),
@@ -225,11 +271,137 @@ def test_instruct_tool_response_starts_next_assistant_without_think() -> None:
     assert "<think>" not in next_assistant
 
 
+def test_crop_protocol_requires_explicit_canonical_or_legacy_identity() -> None:
+    with pytest.raises(ValueError, match="explicit matched or legacy Crop protocol"):
+        NativeSuccessObservationContract(
+            protocol_id=NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1,
+            tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+            assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+        )
+
+    with pytest.raises(ValueError, match="requires Qwen3-VL Instruct"):
+        NativeSuccessObservationContract(
+            protocol_id=(NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1),
+            tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+            assistant_dialect=NativeAssistantDialect.QWEN3_VL_THINKING,
+        )
+
+    legacy_thinking = NativeSuccessObservationContract(
+        protocol_id=(
+            NativeSuccessObservationProtocolId.LEGACY_CROP_GENERIC_THINKING_V1
+        ),
+        tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_THINKING,
+    )
+    _sampled_turn, parsed = _ascii_sampled_call(
+        "image_zoom_in_tool", {"bbox_2d": [1, 2, 30, 40]}
+    )
+    rendered = legacy_thinking.render(parsed)
+    assert "Zoomed-in visual observation" in rendered
+    assert rendered.endswith(QWEN_NATIVE_RESPONSE_SUFFIX)
+
+    with pytest.raises(ValueError, match="requires Qwen3-VL Thinking"):
+        NativeSuccessObservationContract(
+            protocol_id=(
+                NativeSuccessObservationProtocolId.LEGACY_CROP_GENERIC_THINKING_V1
+            ),
+            tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+            assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+        )
+
+
+def test_canonical_and_legacy_crop_contracts_are_distinct_and_byte_locked() -> None:
+    sampled, parsed = _ascii_sampled_call(
+        "image_zoom_in_tool",
+        {"bbox_2d": [1, 2, 30, 40], "label": "the small gauge"},
+    )
+    assert sampled.text == parsed.sampled_text
+
+    matched = _matched_crop_contract().render(parsed)
+    legacy = _legacy_crop_contract().render(parsed)
+
+    assert matched == QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT
+    assert legacy == QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT
+    assert matched != legacy
+    assert sha256(matched.encode("utf-8")).hexdigest() == (
+        QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256
+    )
+    assert sha256(legacy.encode("utf-8")).hexdigest() == (
+        QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT_SHA256
+    )
+    assert "Zoomed-in visual observation" not in matched
+    assert "Zoomed-in visual observation" in legacy
+    assert matched.count(QWEN_NATIVE_IMAGE_PLACEHOLDER) == 1
+    assert legacy.count(QWEN_NATIVE_IMAGE_PLACEHOLDER) == 1
+
+
+@pytest.mark.parametrize(
+    ("contract", "expected_text"),
+    (
+        (_matched_crop_contract(), QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT),
+        (
+            _legacy_crop_contract(),
+            QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT,
+        ),
+    ),
+)
+def test_crop_appender_uses_only_its_explicit_contract(
+    contract: NativeSuccessObservationContract,
+    expected_text: str,
+) -> None:
+    tokenizer = _CharacterTokenizer()
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=tokenizer,
+        registrar=_Registrar(),
+        observation_contract=contract,
+    )
+    sampled, parsed = _ascii_sampled_call(
+        "image_zoom_in_tool", {"bbox_2d": [1, 2, 30, 40]}
+    )
+
+    _updated, suffix = appender.append(
+        (7, 8),
+        sampled,
+        ObservationHandle("obs-explicit-crop", "5" * 64),
+        call_index=0,
+        parsed_call=parsed,
+    )
+
+    assert "".join(map(chr, suffix)) == expected_text
+
+
+@pytest.mark.skipif(
+    not _QWEN3_VL_INSTRUCT_PATH.is_dir(),
+    reason="pinned local Qwen3-VL Instruct tokenizer is absent",
+)
+def test_real_qwen_tokenizer_preserves_matched60_and_legacy_generic86() -> None:
+    transformers = pytest.importorskip("transformers")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        _QWEN3_VL_INSTRUCT_PATH,
+        local_files_only=True,
+        trust_remote_code=False,
+    )
+
+    matched_ids = tokenizer.encode(
+        QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT,
+        add_special_tokens=False,
+    )
+    legacy_ids = tokenizer.encode(
+        QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT,
+        add_special_tokens=False,
+    )
+
+    assert len(matched_ids) == 60
+    assert len(legacy_ids) == 86
+
+
 def test_error_append_uses_canonical_json_without_visual_placeholder() -> None:
     tokenizer = _CharacterTokenizer()
     registrar = _Registrar()
     appender = QwenNativeToolObservationAppender(
-        tokenizer=tokenizer, registrar=registrar
+        tokenizer=tokenizer,
+        registrar=registrar,
+        observation_contract=_generic_contract(),
     )
     sampled, _parsed = _ascii_sampled_call(
         "tgvf_focus_tool", {"target": "the red label text"}
@@ -271,7 +443,9 @@ def test_policy_sampled_tokens_are_appended_verbatim_without_reencoding() -> Non
     tokenizer = _CanonicalizingTokenizer(sampled.text)
     registrar = _Registrar()
     appender = QwenNativeToolObservationAppender(
-        tokenizer=tokenizer, registrar=registrar
+        tokenizer=tokenizer,
+        registrar=registrar,
+        observation_contract=_generic_contract(),
     )
 
     updated, environment_ids = appender.append(
@@ -294,6 +468,7 @@ def test_success_expands_placeholder_to_store_resolved_visual_token_count() -> N
     appender = QwenNativeToolObservationAppender(
         tokenizer=tokenizer,
         registrar=registrar,
+        observation_contract=_generic_contract(),
         visual_token_count_resolver=store,
     )
     sampled, parsed = _ascii_sampled_call(
@@ -315,11 +490,16 @@ def test_success_expands_placeholder_to_store_resolved_visual_token_count() -> N
     assert registrar.calls[-1]["updated_prompt_token_ids"] == updated
 
 
+@pytest.mark.skipif(
+    not _QWEN3_VL_THINKING_PATH.is_dir(),
+    reason="pinned local Qwen3-VL Thinking processor is absent",
+)
 def test_qwen3_appended_tokens_equal_native_chat_template() -> None:
     transformers = pytest.importorskip("transformers")
-    model_path = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
     processor = transformers.AutoProcessor.from_pretrained(
-        model_path, local_files_only=True, trust_remote_code=False
+        _QWEN3_VL_THINKING_PATH,
+        local_files_only=True,
+        trust_remote_code=False,
     )
     renderer = NativeProtocolRenderer(processor, expected_tokenizer_length=151_669)
     user = {
@@ -358,7 +538,9 @@ def test_qwen3_appended_tokens_equal_native_chat_template() -> None:
     parsed = StrictToolCallParser().parse(sampled.parser_turn())
     registrar = _Registrar()
     appender = QwenNativeToolObservationAppender(
-        tokenizer=processor.tokenizer, registrar=registrar
+        tokenizer=processor.tokenizer,
+        registrar=registrar,
+        observation_contract=_generic_contract(),
     )
 
     response_text = 'Focused visual observation for target:\n"label"'
@@ -398,9 +580,7 @@ def _fast_token_spans(tokenizer, text: str, token_ids: tuple[int, ...]):
     assert tuple(encoded["input_ids"]) == token_ids
     byte_boundaries = [0]
     for character in text:
-        byte_boundaries.append(
-            byte_boundaries[-1] + len(character.encode("utf-8"))
-        )
+        byte_boundaries.append(byte_boundaries[-1] + len(character.encode("utf-8")))
     spans = []
     for index, (token_id, offsets) in enumerate(
         zip(token_ids, encoded["offset_mapping"], strict=True)

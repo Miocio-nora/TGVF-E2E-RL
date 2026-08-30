@@ -23,11 +23,19 @@ from tgvf_rl.protocol import (
     TGVF_ONLY_SYSTEM_PROMPT_SHA256,
     TGVF_VISUAL_TOOL_PROMPTS_VERSION,
     TGVF_VISUAL_TOOL_RESPONSES_VERSION,
+    NativeAssistantDialect,
     NativeToolCapabilityProfile,
     build_visual_tool_prompt_messages,
     native_policy_messages_sha256,
     render_successful_visual_tool_response,
     visual_tool_prompt_identity,
+)
+from tgvf_rl.protocol.tool_prompts import (
+    DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE_SHA256,
+    DIRECT_ANSWER_PROMPTS_VERSION,
+    DIRECT_ANSWER_SYSTEM_PROMPT_SHA256,
+    QWEN3_INSTRUCT_DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE_SHA256,
+    direct_answer_prompt_identity,
 )
 
 
@@ -78,6 +86,38 @@ def test_visual_tool_prompt_v3_literal_hashes_are_fixed() -> None:
         ),
     ):
         assert hashlib.sha256(value.encode()).hexdigest() == digest
+
+
+def test_direct_answer_prompt_identity_is_fixed_per_assistant_dialect() -> None:
+    thinking = direct_answer_prompt_identity(
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_THINKING
+    )
+    instruct = direct_answer_prompt_identity(
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT
+    )
+
+    assert thinking.version == DIRECT_ANSWER_PROMPTS_VERSION
+    assert instruct.version == DIRECT_ANSWER_PROMPTS_VERSION
+    assert thinking.system_prompt_sha256 == DIRECT_ANSWER_SYSTEM_PROMPT_SHA256
+    assert instruct.system_prompt_sha256 == DIRECT_ANSWER_SYSTEM_PROMPT_SHA256
+    assert (
+        thinking.native_user_text_template_sha256
+        == DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE_SHA256
+    )
+    assert (
+        instruct.native_user_text_template_sha256
+        == QWEN3_INSTRUCT_DIRECT_ANSWER_NATIVE_USER_TEXT_TEMPLATE_SHA256
+    )
+    assert thinking.bundle_sha256 != instruct.bundle_sha256
+    assert thinking.bundle_sha256 == (
+        "e891071670244b9f28b93c2dd7f6871f643b54dfc45c3034725016a94a8060c5"
+    )
+    assert instruct.bundle_sha256 == (
+        "ea6e3394b355a60c06b07e3cc414b12d34ae2cba24e34b991802493751fe084b"
+    )
+
+    with pytest.raises(TypeError, match="assistant_dialect"):
+        direct_answer_prompt_identity(assistant_dialect="thinking")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("profile", tuple(NativeToolCapabilityProfile))
