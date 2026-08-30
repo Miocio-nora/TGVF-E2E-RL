@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 import math
+from pathlib import Path
 from typing import Literal, Protocol
 
 import torch
@@ -36,7 +37,7 @@ from .losses import causal_evidence_losses
 from .internal_evaluation_artifact import (
     REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION,
     RepresentationInternalEvaluationArtifact,
-    save_representation_internal_evaluation_report_atomic,
+    _publish_representation_internal_evaluation_report_atomic,
 )
 from .metrics import (
     AttentionDiagnostics,
@@ -1651,6 +1652,17 @@ def _mean_nll_matrix(scores: StreamingGroupScores) -> torch.Tensor:
         for row_index, token_count in enumerate(scores.evidence_token_counts)
     )
     return torch.stack(rows)
+
+
+def save_representation_internal_evaluation_report_atomic(
+    report: RepresentationInternalEvaluationReport,
+    path: str | Path,
+) -> RepresentationInternalEvaluationArtifact:
+    """Create one immutable canonical JSON artifact without overwriting a file."""
+
+    if not isinstance(report, RepresentationInternalEvaluationReport):
+        raise TypeError("report must be RepresentationInternalEvaluationReport")
+    return _publish_representation_internal_evaluation_report_atomic(report, path)
 
 
 def _validated_sample_groups(

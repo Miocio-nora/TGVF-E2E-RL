@@ -46,7 +46,6 @@ from tgvf_rl.representation.training.internal_evaluation import (
 from tgvf_rl.representation.training.internal_evaluation_artifact import (
     REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
     RepresentationInternalEvaluationArtifact as ExtractedEvaluationArtifact,
-    save_representation_internal_evaluation_report_atomic as extracted_save_report,
 )
 from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
 from tgvf_rl.representation.training.readout import (
@@ -74,7 +73,6 @@ def test_artifact_boundary_preserves_public_reexport_identity() -> None:
     )
     assert (
         save_representation_internal_evaluation_report_atomic
-        is extracted_save_report
         is package_save_report
     )
     assert RepresentationInternalEvaluationArtifact.__module__ == (

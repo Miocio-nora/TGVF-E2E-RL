@@ -15,10 +15,6 @@ import json
 import os
 from pathlib import Path
 import tempfile
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .internal_evaluation import RepresentationInternalEvaluationReport
 
 
 REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION = (
@@ -34,18 +30,11 @@ class RepresentationInternalEvaluationArtifact:
     schema_version: str = REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION
 
 
-def save_representation_internal_evaluation_report_atomic(
-    report: RepresentationInternalEvaluationReport,
+def _publish_representation_internal_evaluation_report_atomic(
+    report: object,
     path: str | Path,
 ) -> RepresentationInternalEvaluationArtifact:
-    """Create one immutable canonical JSON artifact without overwriting a file."""
-
-    # Keep the import local so this lightweight publication module does not
-    # import the model/evaluation runtime merely to expose its artifact type.
-    from .internal_evaluation import RepresentationInternalEvaluationReport
-
-    if not isinstance(report, RepresentationInternalEvaluationReport):
-        raise TypeError("report must be RepresentationInternalEvaluationReport")
+    """Publish already-validated report data as immutable canonical JSON."""
     destination = Path(path)
     if not destination.is_absolute():
         raise ValueError("internal-evaluation artifact path must be absolute")
@@ -109,13 +98,9 @@ def _json_value(value: object) -> object:
 RepresentationInternalEvaluationArtifact.__module__ = (
     "tgvf_rl.representation.training.internal_evaluation"
 )
-save_representation_internal_evaluation_report_atomic.__module__ = (
-    "tgvf_rl.representation.training.internal_evaluation"
-)
 
 
 __all__ = [
     "REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION",
     "RepresentationInternalEvaluationArtifact",
-    "save_representation_internal_evaluation_report_atomic",
 ]
