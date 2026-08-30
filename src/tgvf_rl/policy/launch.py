@@ -557,7 +557,7 @@ def execute_policy_e2e_smoke(
     """
 
     if type(prepared) is not PreparedPolicyLaunch:
-        raise TypeError("prepared must be exactly PreparedPolicyLaunch")
+        raise TypeError("prepared must be PreparedPolicyLaunch")
     python_binding = prepared.python_binding
     if python_binding is None:
         raise RuntimeError("prepared Policy launch has no bound Python fd")
