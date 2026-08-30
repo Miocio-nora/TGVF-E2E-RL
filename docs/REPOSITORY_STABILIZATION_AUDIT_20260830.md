@@ -9,10 +9,12 @@ authorization to launch training or evaluation.
 - Worktree: `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-stabilize-protocol-v1`
 - Branch: `stabilize/protocol-contract-v1-20260830`
 - Base: `origin/main` at `43f2295c15da2bbc14972af6b63f0038e7789c3f`
-- Current committed head: `c60828da828cc3741709bc8370b7d771d6c48200`,
-  synchronized with the remote stabilization branch and green in complete
-  remote CI run `33307853768`.
-- Commit graph: zero commits unique to local `main` and 117 unique to the
+- Current verified runtime checkpoint:
+  `c60828da828cc3741709bc8370b7d771d6c48200`, synchronized with the remote
+  stabilization branch at verification time and green in complete remote CI
+  run `33307853768`. Later documentation-only commits do not invalidate this
+  code checkpoint.
+- Commit graph at that checkpoint: zero commits unique to local `main` and 117 unique to the
   stabilization line; zero unique to `origin/main` and 75 unique to the
   stabilization line. Local `main` is 42 commits behind `origin/main`, and both
   are strict ancestors of the canonical head.
@@ -39,7 +41,7 @@ not closed merely because the affected experiment has stopped running.
 | Result comparisons | contained, not closed | Registry v2 verifies score-file bytes/content and independent preregistration bytes, but those artifacts do not bind a score to evaluation identity, the exact trajectory set, weights and the full comparison contract. V2 rejects every `golden` status and every numeric delta. Its implementation is now split into a 292-line facade, 839-line schema leaf, and 225-line support leaf without changing historical imports or serialization coordinates. |
 | Policy compile prerequisites | blocked | The hidden worktree-local default is removed and a strict content-bound v1 manifest now binds four minimum declared files. Launch remains blocked because recursive Python headers and the compiler system-toolchain are not yet closed by the manifest schema. |
 | Snapshot filesystem closure | partial | LoRA closure reads use descriptor-relative traversal and immutable publications use no-replace semantics. Full-model freeze stores immutable manifest/receipt records rather than copying the external weights; official loading now hashes the complete bound checkpoint/model closure and repeats that verification immediately before vLLM construction, including same-size mutation tests. vLLM 0.12 exposes neither a loaded-adapter nor loaded-full-model digest, so same-UID mutation after the final verification remains a documented runtime residual. |
-| Test discovery and behavior | current canonical head local and remote green; historical checkpoints preserved | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The fd-closure hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; before its added size-tamper parameter, the focused selection had 304 passing tests and the updated fd security file passed 10/10. Predecessor commit `a5dd0d1` and fd-closure head `ab508c4` are remotely green, the latter in run `33300849634`. Strict child-environment head `5c058a1` has 2,383 local passes and is remotely green in run `33302879219`. The authorization-proof consumption follow-up has 2,386 passes and is remotely green in run `33304029789`; worker-startup scaffold commit `6cb133d` is remotely green in run `33304509263`. Compile-verifier lineage fix `2488487`, atomic envelope `cd1eb5e`, and UTF-8 hardening `4bba7e9` are green in remote runs `33305858959`, `33306088543`, and `33306353388`. Runtime-locator head `c60828d` has 50 focused, two isolated import/firebreak, 201 repository/control, and 404 complete `tests/ops` passes; its full hermetic suite has 2,508 passed, five skips, and four warnings in 139.30 seconds, and complete remote run `33307853768` is green. Current policies report boundary revision 7 at 61 debts/zero violations plus execution-surface revision 7 at 79 surfaces/zero violations. |
+| Test discovery and behavior | verified runtime checkpoint local and remote green; historical checkpoints preserved | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The fd-closure hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; before its added size-tamper parameter, the focused selection had 304 passing tests and the updated fd security file passed 10/10. Predecessor commit `a5dd0d1` and fd-closure head `ab508c4` are remotely green, the latter in run `33300849634`. Strict child-environment head `5c058a1` has 2,383 local passes and is remotely green in run `33302879219`. The authorization-proof consumption follow-up has 2,386 passes and is remotely green in run `33304029789`; worker-startup scaffold commit `6cb133d` is remotely green in run `33304509263`. Compile-verifier lineage fix `2488487`, atomic envelope `cd1eb5e`, and UTF-8 hardening `4bba7e9` are green in remote runs `33305858959`, `33306088543`, and `33306353388`. Runtime-locator head `c60828d` has 50 focused, two isolated import/firebreak, 201 repository/control, and 404 complete `tests/ops` passes; its full hermetic suite has 2,508 passed, five skips, and four warnings in 139.30 seconds, and complete remote run `33307853768` is green. Current policies report boundary revision 7 at 61 debts/zero violations plus execution-surface revision 7 at 79 surfaces/zero violations. |
 
 ## 2026-08-30 fd-closure checkpoint
 
@@ -312,7 +314,7 @@ The physical `main` row's 93 collapsed entries are 38 unstaged tracked
 modifications and 55 untracked entries, with no staged, deleted, renamed, or
 copied entry. Expanding untracked directories yields 132 entries: the same 38
 tracked modifications plus 94 untracked paths, 14 of them below `.worktrees/`.
-At canonical head `c60828d`, the stabilization delta from local `main` spans 297
+At verified runtime checkpoint `c60828d`, the stabilization delta from local `main` spans 297
 paths: 138 additions, 156 modifications, and three deletions. Nineteen dirty
 paths overlap that delta. Eighteen are modify/modify and pass a read-only
 textual merge probe. The remaining modify/delete case is
@@ -577,7 +579,7 @@ but is not score provenance.
   the same stages in remote run `33302879219`. Authorization-proof head
   `311770f`, compile-line FIFO fix `2488487`, atomic envelope `cd1eb5e`, and
   UTF-8 hardening `4bba7e9` pass complete remote runs `33304029789`,
-  `33305858959`, `33306088543`, and `33306353388`, respectively. Current head
+  `33305858959`, `33306088543`, and `33306353388`, respectively. Runtime checkpoint
   `c60828d` has 50 runtime-locator, two isolated import/firebreak, 201
   repository/control, and 404 complete `tests/ops` passes. Its full hermetic
   suite has 2,508 passed, five skipped, four warnings, and zero failures in

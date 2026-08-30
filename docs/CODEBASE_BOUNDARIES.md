@@ -331,8 +331,9 @@ all seven blockers remain unchanged.
 
 ## 2026-08-30 canonical line versus physical `main`
 
-At committed head `c60828d`, the canonical stabilization branch and its remote
-tracking ref are synchronized. The graph is linear: it is 117 commits ahead of
+At verified runtime checkpoint `c60828d`, the canonical stabilization branch
+and its remote tracking ref were synchronized. The graph at that checkpoint is
+linear: it is 117 commits ahead of
 local `main` and 75 ahead of `origin/main`, with no commits on either comparison
 side that are absent from the stabilization line. Local `main` itself is 42
 commits behind `origin/main`. The stabilization delta from local `main` spans

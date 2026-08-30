@@ -475,7 +475,7 @@ unanchored detached commits that must receive exact durable tags before any
 later removal is considered. No action code in that document is deletion
 approval.
 
-At canonical head `c60828d`, both local `main` and `origin/main` are strict
+At verified runtime checkpoint `c60828d`, both local `main` and `origin/main` are strict
 ancestors of the stabilization line. The line is ahead by 117 and 75 commits,
 respectively; local `main` is itself 42 commits behind `origin/main`. Its delta
 from local `main` is 297 paths: 138 additions, 156 modifications, and three
