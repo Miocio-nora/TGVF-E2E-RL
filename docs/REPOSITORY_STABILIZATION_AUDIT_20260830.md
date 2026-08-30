@@ -32,7 +32,7 @@ not closed merely because the affected experiment has stopped running.
 | Result comparisons | contained, not closed | Registry v2 verifies score-file bytes/content and independent preregistration bytes, but those artifacts do not bind a score to evaluation identity, the exact trajectory set, weights and the full comparison contract. V2 now rejects every `golden` status and every numeric delta. |
 | Policy compile prerequisites | blocked | The hidden worktree-local default is removed and a strict content-bound v1 manifest now binds four minimum declared files. Launch remains blocked because recursive Python headers and the compiler system-toolchain are not yet closed by the manifest schema. |
 | Snapshot filesystem closure | partial | LoRA closure reads use descriptor-relative traversal and immutable publications use no-replace semantics. Full-model freeze stores immutable manifest/receipt records rather than copying the external weights; official loading now hashes the complete bound checkpoint/model closure and repeats that verification immediately before vLLM construction, including same-size mutation tests. vLLM 0.12 exposes neither a loaded-adapter nor loaded-full-model digest, so same-UID mutation after the final verification remains a documented runtime residual. |
-| Test discovery and behavior | C0 verified; consolidation rerun pending | The C0 annotated tag discovered 2,117 tests with zero collection errors and completed with 2,112 passed plus five explicitly justified skips. Focused subsystem, repository-audit, and SCC checks pass on the consolidation line, but this row must not project the C0 full-suite count onto the later head. |
+| Test discovery and behavior | consolidation head verified locally | The C0 tag remains a preserved 2,112-pass baseline. At `ccef450`, the post-consolidation hermetic CPU suite completed with 2,193 passed, five explicit skips, four non-failing warnings, and zero failures; repository audits and the SCC regression also pass. Remote CI still has to reproduce this result. |
 
 ## Preserved dirty worktrees
 
@@ -248,10 +248,12 @@ but is not score provenance.
   skips, zero failures, and zero warnings. This closed the 13 cases that the
   first clean-runner audit exposed despite the richer local environment being
   green.
-- On the current consolidation line, focused evaluation, policy,
-  representation, secure-read, import-graph, boundary, and control-plane checks
-  are rerun after each slice. A complete post-consolidation hermetic suite must
-  still be recorded before final push/CI closure.
+- At consolidation commit `ccef450`, the full hermetic CPU suite completed with
+  2,193 passed, five explicit environment/dependency/history skips, four
+  non-failing warnings, and zero failures in 118.46 seconds. The boundary audit
+  passed with 73 visible debts and zero violations; the control-plane audit
+  passed with 79 surfaces and zero violations. Remote CI reproduction remains
+  required.
 - Ruff passes across `src`, `tools`, `spikes`, and `tests`; `git diff --check`,
   shell syntax, the repository-boundary audit, and the control-plane audit also
   pass.
@@ -267,7 +269,9 @@ but is not score provenance.
 
 The control work makes the present repository auditable; it does not pretend
 that the source tree is already small or easy to extend. At C2 completion the
-tree contained 263 Python modules and 29 production modules above 1,000 lines.
+tree contained 263 Python modules and 29 production modules above 1,000 lines;
+the later compatibility and ratchet leaves bring the current count to 265
+without adding an oversized module.
 The three first decomposition targets are complete:
 `policy_coredev.py`, representation internal evaluation, and `run_config.py`
 are now 902, 921, and 983 lines. Policy v3 now gives every remaining large

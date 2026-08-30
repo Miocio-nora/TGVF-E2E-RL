@@ -5,8 +5,9 @@ Status: C0 is anchored by the remote annotated tag
 the three C2 target facades are below 1,000 lines, and the four known C3 import
 cycles are gone. C3 utility migration remains partial. C4 produced a read-only
 inventory; it did not authorize or execute a deletion. The complete
-post-consolidation hermetic suite, push, and remote CI verification remain
-required. A policy-v3 size ratchet now records all 29 remaining oversized
+post-consolidation hermetic CPU suite passes locally with 2,193 tests, five
+explicit skips, and four non-failing warnings. Push and remote CI verification
+remain required. A policy-v3 size ratchet now records all 29 remaining oversized
 modules and rejects growth, slack, stale entries, or a relaxed baseline. This
 plan does not authorize an experiment or rewrite historical evidence.
 
@@ -194,5 +195,4 @@ Consolidation is complete when:
 Current state: the entry-point disposition condition, the three C2 targets,
 the production-size exception ratchet, the known-cycle condition, and the
 read-only C4 inventory are complete. The portable runtime/CLI closure,
-remaining semantic-helper migrations, final full-suite verification, push,
-and remote CI are still open.
+remaining semantic-helper migrations, push, and remote CI are still open.
