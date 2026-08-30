@@ -16,10 +16,13 @@ from enum import Enum
 from hashlib import sha256
 import json
 import math
-import os
 from pathlib import Path, PurePosixPath
-import stat
 from typing import Any, Mapping, Sequence
+
+from tgvf_rl.secure_file_read import (
+    SecureFileReadError,
+    read_regular_file_beneath_absolute_directory_nofollow,
+)
 
 
 RESULT_REGISTRY_SCHEMA = "tgvf.policy-result-registry.v2"
@@ -167,67 +170,18 @@ def _read_repository_regular_file(
 ) -> bytes:
     """Read one bound file without following a symlink in its path chain."""
 
-    try:
-        root = repository_root.resolve(strict=True)
-    except OSError as error:
-        raise RegistryValidationError(
-            f"artifact repository root cannot be resolved: {repository_root}"
-        ) from error
-    if not root.is_dir():
-        raise RegistryValidationError(
-            f"artifact repository root is not a directory: {root}"
-        )
+    root = repository_root.absolute()
     candidate = root / relative_path
     try:
-        resolved = candidate.resolve(strict=True)
-        resolved.relative_to(root)
-    except (OSError, ValueError) as error:
+        return read_regular_file_beneath_absolute_directory_nofollow(
+            root,
+            relative_path,
+        ).payload
+    except (OSError, SecureFileReadError, TypeError) as error:
         raise RegistryValidationError(
-            f"{context} escapes or cannot be resolved under repository root: {candidate}"
+            f"{context} escapes or cannot be opened without following symlinks "
+            f"under repository root: {candidate}"
         ) from error
-
-    parts = PurePosixPath(relative_path).parts
-    if not parts:
-        raise RegistryValidationError(f"{context} path does not name a file")
-    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
-    file_flags = os.O_RDONLY | os.O_CLOEXEC
-    no_follow = getattr(os, "O_NOFOLLOW", 0)
-    directory_descriptor: int | None = None
-    try:
-        directory_descriptor = os.open(root, directory_flags)
-        for part in parts[:-1]:
-            next_descriptor = os.open(
-                part,
-                directory_flags | no_follow,
-                dir_fd=directory_descriptor,
-            )
-            os.close(directory_descriptor)
-            directory_descriptor = next_descriptor
-        file_descriptor = os.open(
-            parts[-1],
-            file_flags | no_follow,
-            dir_fd=directory_descriptor,
-        )
-        try:
-            if not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
-                raise RegistryValidationError(
-                    f"{context} is not a regular file: {candidate}"
-                )
-            with os.fdopen(file_descriptor, "rb", closefd=True) as stream:
-                file_descriptor = -1
-                return stream.read()
-        finally:
-            if file_descriptor >= 0:
-                os.close(file_descriptor)
-    except RegistryValidationError:
-        raise
-    except OSError as error:
-        raise RegistryValidationError(
-            f"{context} cannot be opened without following symlinks: {candidate}"
-        ) from error
-    finally:
-        if directory_descriptor is not None:
-            os.close(directory_descriptor)
 
 
 @dataclass(frozen=True)

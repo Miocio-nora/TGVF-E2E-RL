@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import tgvf_rl.secure_file_read as secure_file_read
 from tgvf_rl.evaluation.result_registry import (
     ComparisonDefinition,
     IncomparableResultsError,
@@ -517,6 +518,51 @@ def test_artifact_verification_rejects_parent_symlink_escape(tmp_path: Path) -> 
 
     with pytest.raises(RegistryValidationError, match="escapes"):
         registry.verify_artifacts(repository_root)
+
+
+def test_artifact_verification_rejects_repository_root_rebinding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _minimal_payload()
+    repository_root = tmp_path / "repository"
+    legitimate_evidence = repository_root / "evidence"
+    legitimate_evidence.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside_evidence = outside / "evidence"
+    outside_evidence.mkdir(parents=True)
+    result = payload["results"][0]
+    artifact_payload = json.dumps(_score_summary_payload(result["score"]))
+    for directory in (legitimate_evidence, outside_evidence):
+        (directory / "score.json").write_text(artifact_payload, encoding="utf-8")
+    result["score_artifact"] = {
+        "path": "evidence/score.json",
+        "sha256": sha256(artifact_payload.encode()).hexdigest(),
+        "kind": "score_summary",
+    }
+    registry = ResultRegistry.from_json(payload)
+    archived_root = tmp_path / "repository-before-race"
+    original_open = secure_file_read._open_path
+    swapped = False
+
+    def _swap_root_before_open(
+        path: str,
+        flags: int,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if path == repository_root.name and dir_fd is not None and not swapped:
+            swapped = True
+            repository_root.rename(archived_root)
+            repository_root.symlink_to(outside, target_is_directory=True)
+        return original_open(path, flags, dir_fd=dir_fd)
+
+    monkeypatch.setattr(secure_file_read, "_open_path", _swap_root_before_open)
+
+    with pytest.raises(RegistryValidationError, match="symlinks"):
+        registry.verify_artifacts(repository_root)
+    assert swapped
 
 
 def test_score_summary_hash_match_does_not_hide_score_content_mismatch(
