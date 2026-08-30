@@ -1,26 +1,27 @@
 from __future__ import annotations
 
+import ast
 from copy import deepcopy
 from hashlib import sha256
 import json
 from pathlib import Path
-import subprocess
-import sys
 
 import pytest
 
 from tgvf_rl.evaluation.result_registry import (
+    ComparisonDefinition,
     IncomparableResultsError,
     RegistryValidationError,
+    ResultRecord,
     ResultRegistry,
     ResultStatus,
+    _validate_comparison_contract,
     load_result_registry,
 )
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 REGISTRY_PATH = REPOSITORY_ROOT / "evidence/policy/result_registry_v2.json"
-MATERIALIZER = REPOSITORY_ROOT / "tools/materialize_policy_result_table.py"
 
 
 def _payload() -> dict[str, object]:
@@ -93,6 +94,30 @@ def _score_summary_payload(score: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _comparison_parts(
+    payload: dict[str, object],
+    *,
+    baseline: dict[str, object],
+    treatment: dict[str, object],
+    comparison_group: str,
+    intervention_axes: list[str],
+) -> tuple[ResultRecord, ResultRecord, ComparisonDefinition]:
+    for result in (baseline, treatment):
+        result["comparison_group"] = comparison_group
+        result["declared_intervention_axes"] = sorted(intervention_axes)
+    _add_comparison_definition(
+        payload,
+        comparison_group=comparison_group,
+        members=[baseline["result_id"], treatment["result_id"]],
+        intervention_axes=intervention_axes,
+    )
+    return (
+        ResultRecord.from_json(treatment, index=1),
+        ResultRecord.from_json(baseline, index=0),
+        ComparisonDefinition.from_json(payload["comparison_definitions"][0], index=0),
+    )
+
+
 def test_checked_in_registry_classifies_audited_results_fail_closed() -> None:
     registry = load_result_registry(REGISTRY_PATH)
 
@@ -115,6 +140,24 @@ def test_checked_in_registry_classifies_audited_results_fail_closed() -> None:
         crop.contract.action_boundary_identity
         == "historical/action-boundary-not-cryptographically-bound"
     )
+
+
+def test_result_registry_declares_comparison_definitions_once() -> None:
+    source = REPOSITORY_ROOT / "src/tgvf_rl/evaluation/result_registry.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    registry_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "ResultRegistry"
+    )
+    declarations = [
+        node
+        for node in registry_class.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "comparison_definitions"
+    ]
+    assert len(declarations) == 1
 
 
 def test_registry_rejects_unknown_and_missing_contract_fields() -> None:
@@ -159,214 +202,189 @@ def test_pending_result_cannot_smuggle_a_score() -> None:
         ResultRegistry.from_json(payload)
 
 
-def test_declared_weights_intervention_permits_delta() -> None:
+def test_v2_rejects_golden_promotion_even_with_preregistration() -> None:
     payload = _minimal_payload()
     baseline = payload["results"][0]
     treatment = deepcopy(baseline)
-    treatment["result_id"] = "same-contract-treatment"
-    treatment["label"] = "same contract treatment"
+    treatment["result_id"] = "candidate-treatment"
     treatment["weights"]["identity"] = "different checkpoint"
     treatment["weights"]["sha256"] = "1" * 64
-    treatment["score"]["macro_star_percent"] += 1.0
-    for name in treatment["score"]["components_percent"]:
-        treatment["score"]["components_percent"][name] += 1.0
     _promote_pair(
         payload,
         baseline,
         treatment,
-        comparison_group="test/weights-ablation-v1",
+        comparison_group="test/candidate-v1",
         intervention_axes=["weights"],
     )
     payload["results"].append(treatment)
-    payload["tables"][0]["result_ids"].append("same-contract-treatment")
-    registry = ResultRegistry.from_json(payload)
+    payload["tables"][0]["result_ids"].append(treatment["result_id"])
 
-    assert registry.delta(
-        result_id="same-contract-treatment",
-        baseline_result_id=baseline["result_id"],
-    ) == pytest.approx(1.0)
+    with pytest.raises(
+        RegistryValidationError,
+        match="v2 cannot promote golden results.*trajectory-set identity.*weights",
+    ):
+        ResultRecord.from_json(baseline, index=0)
+    with pytest.raises(
+        RegistryValidationError,
+        match="v2 cannot promote golden results.*trajectory-set identity.*weights",
+    ):
+        ResultRegistry.from_json(payload)
 
 
-def test_standalone_rows_never_emit_a_delta() -> None:
+def test_v2_delta_api_is_closed_for_standalone_rows() -> None:
     payload = _minimal_payload()
     baseline = payload["results"][0]
-    baseline["comparison_group"] = "test/standalone-not-comparison-v1"
-    baseline["declared_intervention_axes"] = ["weights"]
     treatment = deepcopy(baseline)
     treatment["result_id"] = "standalone-treatment"
-    treatment["label"] = "standalone treatment"
     treatment["weights"]["identity"] = "different checkpoint"
     treatment["weights"]["sha256"] = "1" * 64
     payload["results"].append(treatment)
-    payload["tables"][0]["result_ids"].append(treatment["result_id"])
     registry = ResultRegistry.from_json(payload)
 
-    with pytest.raises(IncomparableResultsError, match="golden status"):
+    with pytest.raises(
+        IncomparableResultsError,
+        match="v2 cannot promote golden results.*provenance-receipt schema",
+    ):
         registry.delta(
             result_id=treatment["result_id"],
             baseline_result_id=baseline["result_id"],
         )
 
 
-def test_undeclared_treatment_difference_blocks_delta() -> None:
+def test_shared_score_artifact_cannot_promote_different_weights(
+    tmp_path: Path,
+) -> None:
+    """A score-content hash is not an evaluation-provenance receipt."""
+
     payload = _minimal_payload()
     baseline = payload["results"][0]
     treatment = deepcopy(baseline)
-    treatment["result_id"] = "undeclared-prompt-treatment"
-    treatment["label"] = "undeclared prompt treatment"
-    treatment["contract"]["prompt_identity"] = "different-prompt"
+    treatment["result_id"] = "different-weights-same-score-file"
     treatment["weights"]["identity"] = "different checkpoint"
     treatment["weights"]["sha256"] = "1" * 64
+    payload["results"].append(treatment)
+
+    artifact_path = tmp_path / "evidence/score.json"
+    artifact_path.parent.mkdir()
+    artifact_path.write_text(
+        json.dumps(_score_summary_payload(baseline["score"])), encoding="utf-8"
+    )
+    artifact = {
+        "path": "evidence/score.json",
+        "sha256": sha256(artifact_path.read_bytes()).hexdigest(),
+        "kind": "score_summary",
+    }
+    baseline["score_artifact"] = deepcopy(artifact)
+    treatment["score_artifact"] = deepcopy(artifact)
+
+    # V2 can verify the shared file's bytes and score content for inventory
+    # rows.  That deliberately does not establish which weights produced it.
+    registry = ResultRegistry.from_json(payload)
+    registry.verify_artifacts(tmp_path)
+    with pytest.raises(IncomparableResultsError, match="trajectory-set identity"):
+        registry.delta(
+            result_id=treatment["result_id"],
+            baseline_result_id=baseline["result_id"],
+        )
+
     _promote_pair(
         payload,
         baseline,
         treatment,
-        comparison_group="test/weights-only-ablation-v1",
+        comparison_group="test/shared-score-v1",
         intervention_axes=["weights"],
     )
-    payload["results"].append(treatment)
-    payload["tables"][0]["result_ids"].append(treatment["result_id"])
-    registry = ResultRegistry.from_json(payload)
-
-    with pytest.raises(
-        IncomparableResultsError,
-        match="undeclared intervention differences: prompt_identity",
-    ):
-        registry.delta(
-            result_id=treatment["result_id"],
-            baseline_result_id=baseline["result_id"],
-        )
+    with pytest.raises(RegistryValidationError, match="v2 cannot promote golden"):
+        ResultRegistry.from_json(payload)
 
 
-def test_declared_single_intervention_and_only_that_difference_permits_delta() -> None:
+def test_comparison_definition_still_validates_members_and_axes() -> None:
     payload = _minimal_payload()
     baseline = payload["results"][0]
     treatment = deepcopy(baseline)
-    treatment["result_id"] = "declared-prompt-treatment"
-    treatment["label"] = "declared prompt treatment"
-    treatment["contract"]["prompt_identity"] = "different-prompt"
-    treatment["score"]["macro_star_percent"] += 1.0
-    for name in treatment["score"]["components_percent"]:
-        treatment["score"]["components_percent"][name] += 1.0
-    _promote_pair(
-        payload,
-        baseline,
-        treatment,
-        comparison_group="test/prompt-ablation-v1",
-        intervention_axes=["prompt_identity"],
-    )
+    treatment["result_id"] = "standalone-treatment"
     payload["results"].append(treatment)
-    payload["tables"][0]["result_ids"].append(treatment["result_id"])
-    registry = ResultRegistry.from_json(payload)
-
-    assert registry.delta(
-        result_id=treatment["result_id"],
-        baseline_result_id=baseline["result_id"],
-    ) == pytest.approx(1.0)
-
-
-def test_extra_difference_beyond_declared_intervention_blocks_delta() -> None:
-    payload = _minimal_payload()
-    baseline = payload["results"][0]
-    treatment = deepcopy(baseline)
-    treatment["result_id"] = "prompt-plus-runtime-treatment"
-    treatment["label"] = "prompt plus runtime treatment"
-    treatment["contract"]["prompt_identity"] = "different-prompt"
-    treatment["contract"]["runtime_identity"] = "different-runtime"
-    _promote_pair(
-        payload,
-        baseline,
-        treatment,
-        comparison_group="test/prompt-ablation-v1",
-        intervention_axes=["prompt_identity"],
-    )
-    payload["results"].append(treatment)
-    payload["tables"][0]["result_ids"].append(treatment["result_id"])
-    registry = ResultRegistry.from_json(payload)
-
-    with pytest.raises(
-        IncomparableResultsError,
-        match="undeclared intervention differences: runtime_identity",
-    ):
-        registry.delta(
-            result_id=treatment["result_id"],
-            baseline_result_id=baseline["result_id"],
-        )
-
-
-def test_declared_intervention_must_actually_differ() -> None:
-    payload = _minimal_payload()
-    baseline = payload["results"][0]
-    treatment = deepcopy(baseline)
-    treatment["result_id"] = "prompt-only-treatment"
-    treatment["label"] = "prompt only treatment"
-    treatment["contract"]["prompt_identity"] = "different-prompt"
-    _promote_pair(
-        payload,
-        baseline,
-        treatment,
-        comparison_group="test/prompt-runtime-ablation-v1",
-        intervention_axes=["prompt_identity", "runtime_identity"],
-    )
-    payload["results"].append(treatment)
-    payload["tables"][0]["result_ids"].append(treatment["result_id"])
-    registry = ResultRegistry.from_json(payload)
-
-    with pytest.raises(
-        IncomparableResultsError,
-        match="declared intervention axes did not differ: runtime_identity",
-    ):
-        registry.delta(
-            result_id=treatment["result_id"],
-            baseline_result_id=baseline["result_id"],
-        )
-
-
-def test_different_comparison_groups_block_delta() -> None:
-    payload = _minimal_payload()
-    baseline = payload["results"][0]
-    treatment = deepcopy(baseline)
-    treatment["result_id"] = "different-group-treatment"
-    treatment["label"] = "different group treatment"
-    baseline_companion = deepcopy(baseline)
-    baseline_companion["result_id"] = "baseline-companion"
-    treatment_companion = deepcopy(baseline)
-    treatment_companion["result_id"] = "treatment-companion"
-    for result, group in (
-        (baseline, "test/baseline-group-v1"),
-        (treatment, "test/treatment-group-v1"),
-    ):
-        result["status"] = "golden"
-        result["comparison_group"] = group
-        result["declared_intervention_axes"] = ["weights"]
     _add_comparison_definition(
         payload,
-        comparison_group="test/baseline-group-v1",
-        members=[baseline["result_id"], baseline_companion["result_id"]],
-        intervention_axes=["weights"],
+        comparison_group="test/standalone-diagnostic-v1",
+        members=[baseline["result_id"], treatment["result_id"]],
+        intervention_axes=["action_boundary_identity"],
     )
-    _add_comparison_definition(
-        payload,
-        comparison_group="test/treatment-group-v1",
-        members=[treatment["result_id"], treatment_companion["result_id"]],
-        intervention_axes=["weights"],
-    )
-    payload["results"].append(treatment)
-    payload["results"].extend((baseline_companion, treatment_companion))
-    payload["tables"][0]["result_ids"].append(treatment["result_id"])
     registry = ResultRegistry.from_json(payload)
+    definition = registry.comparison_definition("test/standalone-diagnostic-v1")
+    assert definition.intervention_axes == ("action_boundary_identity",)
 
-    with pytest.raises(IncomparableResultsError, match="comparison_group differs"):
-        registry.delta(
-            result_id=treatment["result_id"],
-            baseline_result_id=baseline["result_id"],
+    payload["comparison_definitions"][0]["member_result_ids"][1] = "unknown"
+    with pytest.raises(RegistryValidationError, match="unknown results"):
+        ResultRegistry.from_json(payload)
+
+
+def test_private_comparison_validator_accepts_exact_declared_axis() -> None:
+    payload = _minimal_payload()
+    baseline = payload["results"][0]
+    treatment = deepcopy(baseline)
+    treatment["result_id"] = "different-weights"
+    treatment["weights"]["identity"] = "different checkpoint"
+    treatment["weights"]["sha256"] = "1" * 64
+    result_record, baseline_record, definition = _comparison_parts(
+        payload,
+        baseline=baseline,
+        treatment=treatment,
+        comparison_group="test/weights-contract-diagnostic-v1",
+        intervention_axes=["weights"],
+    )
+
+    assert (
+        _validate_comparison_contract(
+            result=result_record,
+            baseline=baseline_record,
+            definition=definition,
         )
+        is None
+    )
 
 
 @pytest.mark.parametrize(
     "field,replacement",
     (
         ("task_manifest_sha256", "2" * 64),
+        ("rng_identity", "different-rng"),
+        ("scorer_identity", "different-scorer"),
+        ("inference_sample_count", 2_240),
+        ("scored_sample_count", 2_240),
+        ("slice_count", 8),
+    ),
+)
+def test_private_comparison_validator_rejects_every_invariant_drift(
+    field: str,
+    replacement: object,
+) -> None:
+    payload = _minimal_payload()
+    baseline = payload["results"][0]
+    treatment = deepcopy(baseline)
+    treatment["result_id"] = "invariant-drift"
+    treatment["weights"]["identity"] = "different checkpoint"
+    treatment["weights"]["sha256"] = "1" * 64
+    treatment["contract"][field] = replacement
+    result_record, baseline_record, definition = _comparison_parts(
+        payload,
+        baseline=baseline,
+        treatment=treatment,
+        comparison_group="test/invariant-diagnostic-v1",
+        intervention_axes=["weights"],
+    )
+
+    with pytest.raises(IncomparableResultsError, match=field):
+        _validate_comparison_contract(
+            result=result_record,
+            baseline=baseline_record,
+            definition=definition,
+        )
+
+
+@pytest.mark.parametrize(
+    "field,replacement",
+    (
         ("training_contract_identity", "different-training-contract"),
         ("training_image_max_pixels", 262_144),
         ("declared_evaluation_image_max_pixels", 262_144),
@@ -376,173 +394,56 @@ def test_different_comparison_groups_block_delta() -> None:
         ("action_boundary_identity", "different-action-boundary"),
         ("observation_identity", "different-observation"),
         ("prompt_identity", "different-prompt"),
-        ("rng_identity", "different-rng"),
         ("generation_identity", "different-generation"),
-        ("scorer_identity", "different-scorer"),
-        ("inference_sample_count", 2_240),
-        ("scored_sample_count", 2_240),
-        ("slice_count", 8),
     ),
 )
-def test_every_comparison_field_blocks_delta(field: str, replacement: object) -> None:
+def test_private_comparison_validator_rejects_undeclared_treatment_axis(
+    field: str,
+    replacement: object,
+) -> None:
     payload = _minimal_payload()
     baseline = payload["results"][0]
     treatment = deepcopy(baseline)
-    treatment["result_id"] = "mismatched-treatment"
-    treatment["label"] = "mismatched treatment"
+    treatment["result_id"] = "undeclared-treatment"
     treatment["weights"]["identity"] = "different checkpoint"
     treatment["weights"]["sha256"] = "1" * 64
     treatment["contract"][field] = replacement
-    _promote_pair(
+    result_record, baseline_record, definition = _comparison_parts(
         payload,
-        baseline,
-        treatment,
-        comparison_group="test/field-audit-v1",
+        baseline=baseline,
+        treatment=treatment,
+        comparison_group="test/undeclared-axis-diagnostic-v1",
         intervention_axes=["weights"],
     )
-    payload["results"].append(treatment)
-    payload["tables"][0]["result_ids"].append("mismatched-treatment")
-    registry = ResultRegistry.from_json(payload)
-
     with pytest.raises(IncomparableResultsError, match=field):
-        registry.delta(
-            result_id="mismatched-treatment",
-            baseline_result_id=baseline["result_id"],
+        _validate_comparison_contract(
+            result=result_record,
+            baseline=baseline_record,
+            definition=definition,
         )
 
 
-def test_confounded_and_invalid_statuses_block_delta_even_if_contract_matches() -> None:
-    for status in ("confounded", "invalid"):
-        payload = _minimal_payload()
-        baseline = payload["results"][0]
-        treatment = deepcopy(baseline)
-        treatment["result_id"] = f"{status}-treatment"
-        treatment["label"] = status
-        treatment["status"] = status
-        if status == "invalid":
-            treatment["weights"]["state"] = "invalid"
-        baseline["status"] = "golden"
-        baseline["comparison_group"] = "test/status-audit-v1"
-        baseline["declared_intervention_axes"] = ["weights"]
-        treatment["comparison_group"] = "test/status-audit-v1"
-        treatment["declared_intervention_axes"] = ["weights"]
-        _add_comparison_definition(
-            payload,
-            comparison_group="test/status-audit-v1",
-            members=[baseline["result_id"], treatment["result_id"]],
-            intervention_axes=["weights"],
+def test_private_comparison_validator_rejects_declared_axis_that_did_not_change() -> (
+    None
+):
+    payload = _minimal_payload()
+    baseline = payload["results"][0]
+    treatment = deepcopy(baseline)
+    treatment["result_id"] = "missing-runtime-axis"
+    treatment["contract"]["prompt_identity"] = "different-prompt"
+    result_record, baseline_record, definition = _comparison_parts(
+        payload,
+        baseline=baseline,
+        treatment=treatment,
+        comparison_group="test/missing-axis-diagnostic-v1",
+        intervention_axes=["prompt_identity", "runtime_identity"],
+    )
+    with pytest.raises(IncomparableResultsError, match="runtime_identity"):
+        _validate_comparison_contract(
+            result=result_record,
+            baseline=baseline_record,
+            definition=definition,
         )
-        payload["results"].append(treatment)
-        payload["tables"][0]["result_ids"].append(treatment["result_id"])
-        registry = ResultRegistry.from_json(payload)
-        with pytest.raises(IncomparableResultsError, match="status"):
-            registry.delta(
-                result_id=treatment["result_id"],
-                baseline_result_id=baseline["result_id"],
-            )
-
-
-def test_two_rows_cannot_self_promote_without_top_level_preregistration() -> None:
-    payload = _minimal_payload()
-    baseline = payload["results"][0]
-    treatment = deepcopy(baseline)
-    treatment["result_id"] = "forged-treatment"
-    treatment["weights"]["identity"] = "forged checkpoint"
-    treatment["weights"]["sha256"] = "1" * 64
-    for result in (baseline, treatment):
-        result["status"] = "golden"
-        result["comparison_group"] = "forged/by-result-rows"
-        result["declared_intervention_axes"] = ["weights"]
-    payload["results"].append(treatment)
-
-    with pytest.raises(RegistryValidationError, match="no preregistered"):
-        ResultRegistry.from_json(payload)
-
-
-def test_golden_result_must_be_named_member_with_group_level_axes() -> None:
-    payload = _minimal_payload()
-    baseline = payload["results"][0]
-    treatment = deepcopy(baseline)
-    treatment["result_id"] = "registered-treatment"
-    _promote_pair(
-        payload,
-        baseline,
-        treatment,
-        comparison_group="test/membership-v1",
-        intervention_axes=["weights"],
-    )
-    payload["results"].append(treatment)
-
-    payload["comparison_definitions"][0]["member_result_ids"] = [
-        baseline["result_id"],
-        "unregistered-result",
-    ]
-    with pytest.raises(RegistryValidationError, match="unknown results"):
-        ResultRegistry.from_json(payload)
-
-    payload = _minimal_payload()
-    baseline = payload["results"][0]
-    treatment = deepcopy(baseline)
-    treatment["result_id"] = "registered-treatment"
-    _promote_pair(
-        payload,
-        baseline,
-        treatment,
-        comparison_group="test/group-axes-v1",
-        intervention_axes=["weights"],
-    )
-    payload["results"].append(treatment)
-    treatment["declared_intervention_axes"] = ["prompt_identity"]
-    with pytest.raises(RegistryValidationError, match="axes differ"):
-        ResultRegistry.from_json(payload)
-
-
-def test_action_boundary_is_a_preregisterable_treatment_axis() -> None:
-    payload = _minimal_payload()
-    baseline = payload["results"][0]
-    treatment = deepcopy(baseline)
-    treatment["result_id"] = "strict-action-treatment"
-    treatment["contract"]["action_boundary_identity"] = (
-        "qwen-native-action-boundary-single-terminal-tool-call-v2"
-    )
-    treatment["score"]["macro_star_percent"] += 1.0
-    for name in treatment["score"]["components_percent"]:
-        treatment["score"]["components_percent"][name] += 1.0
-    _promote_pair(
-        payload,
-        baseline,
-        treatment,
-        comparison_group="test/action-boundary-ablation-v1",
-        intervention_axes=["action_boundary_identity"],
-    )
-    payload["results"].append(treatment)
-    registry = ResultRegistry.from_json(payload)
-
-    assert registry.delta(
-        result_id=treatment["result_id"],
-        baseline_result_id=baseline["result_id"],
-    ) == pytest.approx(1.0)
-
-
-def test_golden_result_requires_content_verifiable_score_summary() -> None:
-    payload = _minimal_payload()
-    baseline = payload["results"][0]
-    treatment = deepcopy(baseline)
-    treatment["result_id"] = "digest-only-treatment"
-    treatment["weights"]["identity"] = "different checkpoint"
-    treatment["weights"]["sha256"] = "1" * 64
-    _promote_pair(
-        payload,
-        baseline,
-        treatment,
-        comparison_group="test/digest-only-v1",
-        intervention_axes=["weights"],
-    )
-    treatment["score_artifact"]["kind"] = "evaluation_run_summary_digest_only"
-    payload["results"].append(treatment)
-
-    with pytest.raises(RegistryValidationError, match="content-verifiable"):
-        ResultRegistry.from_json(payload)
 
 
 def test_materialized_mixed_tables_show_no_cross_contract_numeric_delta() -> None:
@@ -689,11 +590,13 @@ def test_preregistration_evidence_hash_and_content_bind_group_definition(
     treatment["result_id"] = "preregistered-treatment"
     treatment["weights"]["identity"] = "different checkpoint"
     treatment["weights"]["sha256"] = "1" * 64
-    _promote_pair(
+    for result in (baseline, treatment):
+        result["comparison_group"] = "test/preregistered-v1"
+        result["declared_intervention_axes"] = ["weights"]
+    _add_comparison_definition(
         payload,
-        baseline,
-        treatment,
         comparison_group="test/preregistered-v1",
+        members=[baseline["result_id"], treatment["result_id"]],
         intervention_axes=["weights"],
     )
     payload["results"].append(treatment)
@@ -732,7 +635,7 @@ def test_preregistration_evidence_hash_and_content_bind_group_definition(
         registry.verify_artifacts(tmp_path)
 
 
-def test_materializer_verifies_by_default_and_unsafe_mode_cannot_write(
+def test_verified_registry_api_renders_only_after_artifact_check(
     tmp_path: Path,
 ) -> None:
     payload = _minimal_payload()
@@ -747,42 +650,10 @@ def test_materializer_verifies_by_default_and_unsafe_mode_cannot_write(
         "sha256": sha256(artifact_path.read_bytes()).hexdigest(),
         "kind": "score_summary",
     }
-    registry_path = tmp_path / "registry.json"
-    registry_path.write_text(json.dumps(payload), encoding="utf-8")
-    common = [
-        sys.executable,
-        str(MATERIALIZER),
-        "--registry",
-        str(registry_path),
-        "--artifact-root",
-        str(tmp_path),
-    ]
-    verified = subprocess.run(common, text=True, capture_output=True, check=False)
-    assert verified.returncode == 0
+    registry = ResultRegistry.from_json(payload)
+    registry.verify_artifacts(tmp_path)
+    assert "Original raw-direct true-1M" in registry.render_markdown()
 
     artifact_path.write_text("tampered", encoding="utf-8")
-    rejected = subprocess.run(common, text=True, capture_output=True, check=False)
-    assert rejected.returncode == 2
-    assert "SHA-256 differs" in rejected.stderr
-
-    unsafe = subprocess.run(
-        [*common, "--unsafe-skip-artifact-verification"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert unsafe.returncode == 0
-    output_path = tmp_path / "must-not-exist.md"
-    unsafe_write = subprocess.run(
-        [
-            *common,
-            "--unsafe-skip-artifact-verification",
-            "--output",
-            str(output_path),
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert unsafe_write.returncode == 2
-    assert not output_path.exists()
+    with pytest.raises(RegistryValidationError, match="SHA-256 differs"):
+        registry.verify_artifacts(tmp_path)

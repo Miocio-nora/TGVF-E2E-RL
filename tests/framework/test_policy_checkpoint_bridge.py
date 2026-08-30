@@ -78,7 +78,12 @@ class _UpstreamCheckpoint:
 
     def __init__(self, *, initial_value: float, fail_save: bool = False) -> None:
         self.lora = torch.nn.Parameter(torch.tensor([initial_value]))
-        self.optimizer = torch.optim.AdamW([self.lora], lr=0.1)
+        # This is deliberately a CPU-only checkpoint stand-in.  AdamW performs
+        # a CUDA-graph health check even for CPU parameters when an earlier test
+        # has initialized and cached CUDA availability.  A momentum-bearing SGD
+        # optimizer exercises non-empty optimizer state without touching CUDA,
+        # so the bridge test remains hermetic under full-suite collection order.
+        self.optimizer = torch.optim.SGD([self.lora], lr=0.1, momentum=0.9)
         self.scheduler = torch.optim.lr_scheduler.LambdaLR(
             self.optimizer, lr_lambda=lambda step: 1.0 / (step + 1)
         )
@@ -203,9 +208,7 @@ def _project_values(step: int):
         OpaqueProjectState(
             ROLLOUT_SAMPLER_OWNER, "sampler-v1", f"sampler-{step}".encode()
         ),
-        OpaqueProjectState(
-            ROLLOUT_RNG_OWNER, "vllm-rng-v1", f"rng-{step}".encode()
-        ),
+        OpaqueProjectState(ROLLOUT_RNG_OWNER, "vllm-rng-v1", f"rng-{step}".encode()),
     )
 
 
@@ -272,7 +275,9 @@ def test_clean_process_resume_pairs_upstream_and_project_owned_state(tmp_path) -
     assert source_optim["param_groups"] == target_optim["param_groups"]
     for name, expected in source_optim["state"][0].items():
         torch.testing.assert_close(target_optim["state"][0][name], expected)
-    assert target_upstream.scheduler.state_dict() == source_upstream.scheduler.state_dict()
+    assert (
+        target_upstream.scheduler.state_dict() == source_upstream.scheduler.state_dict()
+    )
     assert target_port.progress() == saved.progress
     assert target_port.rollout_sampler_state() == saved.rollout_sampler_state
     assert target_port.rollout_rng_state() == saved.rollout_rng_state
@@ -286,7 +291,9 @@ def test_clean_process_resume_pairs_upstream_and_project_owned_state(tmp_path) -
     after.abort()
 
 
-def test_incomplete_pair_is_rejected_before_upstream_or_project_restore(tmp_path) -> None:
+def test_incomplete_pair_is_rejected_before_upstream_or_project_restore(
+    tmp_path,
+) -> None:
     source_upstream = _UpstreamCheckpoint(initial_value=2.0)
     source_upstream.update_once()
     source_values = _project_values(1)
@@ -314,9 +321,7 @@ def test_incomplete_pair_is_rejected_before_upstream_or_project_restore(tmp_path
         rng=target_values[2],
     )
     target_metrics = _metrics(0)
-    target = _bridge(
-        target_upstream, _lifecycle_manager(), target_port, target_metrics
-    )
+    target = _bridge(target_upstream, _lifecycle_manager(), target_port, target_metrics)
     before = (target_port.progress(), target_metrics.state)
 
     with pytest.raises(ReplayMismatchError, match="incomplete"):
@@ -387,9 +392,7 @@ def test_loaded_policy_identity_mismatch_does_not_restore_project_state(
         rng=target_values[2],
     )
     target_metrics = _metrics(0)
-    target = _bridge(
-        target_upstream, _lifecycle_manager(), target_port, target_metrics
-    )
+    target = _bridge(target_upstream, _lifecycle_manager(), target_port, target_metrics)
     before = (target_port.progress(), target_metrics.state)
 
     with pytest.raises(IdentityMismatchError, match="policy_version"):

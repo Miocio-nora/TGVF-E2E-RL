@@ -13,7 +13,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 import hashlib
 import json
-import re
 
 import numpy as np
 from PIL import Image
@@ -28,10 +27,14 @@ from tgvf_rl.policy.deepeyes_official_protocol import (
     USER_PROMPT_V2,
     VISUAL_PROMPT_IDENTITY,
     build_visual_messages,
-    direct_answer_after_last_tool_call,
     parse_hermes_crop_call,
 )
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
+from tgvf_rl.protocol.action_boundary import (
+    AssistantTurnDisposition,
+    NativeActionBoundaryProtocolId,
+    classify_assistant_action_boundary,
+)
 from tgvf_rl.qwen.crop_coordinates import (
     QWEN3_CROP_CONVERSION_VERSION,
     QWEN3_CROP_COORDINATE_SPACE,
@@ -52,7 +55,6 @@ from .policy_coredev import (
 )
 
 
-_TOOL_CALL_CONTENT = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
 _VLLM_CONTEXT_SAFETY_TOKENS = 16
 
 
@@ -394,6 +396,29 @@ class OfficialVisiblePolicyEvaluator:
             != QWEN3_CROP_CONVERSION_VERSION
         ):
             raise ValueError("official-visible protocol identity is malformed")
+        eval_contract = expected_identity.get("eval_contract")
+        action_boundary = (
+            eval_contract.get("action_boundary")
+            if isinstance(eval_contract, Mapping)
+            else None
+        )
+        if not isinstance(action_boundary, Mapping):
+            raise ValueError("official-visible action-boundary identity is missing")
+        try:
+            action_boundary_protocol_id = NativeActionBoundaryProtocolId(
+                action_boundary.get("protocol_id")
+            )
+            configured_action_boundary = NativeActionBoundaryProtocolId(
+                config.action_boundary_protocol_id
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "official-visible action-boundary identity is invalid"
+            ) from error
+        if action_boundary_protocol_id is not configured_action_boundary:
+            raise ValueError(
+                "official-visible action-boundary identity differs from config"
+            )
         if full_model:
             if manager.lora_request is not None:
                 raise ValueError(
@@ -409,6 +434,7 @@ class OfficialVisiblePolicyEvaluator:
         self.processor = processor
         self.snapshot = snapshot
         self.evaluation_identity = expected_identity
+        self.action_boundary_protocol_id = action_boundary_protocol_id
         self.policy_version = snapshot.policy_version
         self.full_model = full_model
         self.tokenizer = getattr(processor, "tokenizer", None)
@@ -430,9 +456,7 @@ class OfficialVisiblePolicyEvaluator:
         # Keep a tiny runtime-only guard band; ordinary response budgets are
         # unchanged, while near-limit trajectories stop as context_limit.
         available = (
-            self.config.max_model_len
-            - len(prompt_ids)
-            - _VLLM_CONTEXT_SAFETY_TOKENS
+            self.config.max_model_len - len(prompt_ids) - _VLLM_CONTEXT_SAFETY_TOKENS
         )
         maximum = min(remaining, available)
         if maximum <= 0:
@@ -548,8 +572,10 @@ class OfficialVisiblePolicyEvaluator:
                     stop = "context_limit"
                     break
                 consumed_tokens += len(token_ids)
-                tool_call_contents = _TOOL_CALL_CONTENT.findall(text)
-                is_tool_call = bool(tool_call_contents)
+                boundary = classify_assistant_action_boundary(
+                    text,
+                    protocol_id=self.action_boundary_protocol_id,
+                )
                 assistant_turns.append(
                     {
                         "turn_index": turn_index,
@@ -558,23 +584,47 @@ class OfficialVisiblePolicyEvaluator:
                         "sampled_token_ids_sha256": _canonical_sha256(token_ids),
                         "expanded_prompt_token_count": len(prompt_ids),
                         "native_visual_token_counts": list(visual_token_counts),
-                        "is_tool_call": is_tool_call,
+                        "is_tool_call": bool(boundary.tool_call_blocks),
+                        "action_boundary_protocol_id": boundary.protocol_id.value,
+                        "action_boundary_disposition": boundary.disposition.value,
+                        "action_boundary_violation_code": boundary.violation_code,
                         "stop_reason": stop_reason,
                     }
                 )
                 messages.append({"role": "assistant", "content": text})
-                trailing_final = direct_answer_after_last_tool_call(text)
-                if trailing_final is not None:
-                    extraction = extract_visual_answer(trailing_final)
-                    final_answer = extraction.answer or None
-                    stop = (
-                        "final_answer"
-                        if final_answer is not None
-                        else "malformed_action"
+                if boundary.disposition is AssistantTurnDisposition.INVALID_ACTION:
+                    if boundary.violation_code is None:  # pragma: no cover - invariant
+                        raise RuntimeError(
+                            "invalid action boundary lacks a violation code"
+                        )
+                    tool_errors.append(
+                        {
+                            "attempt_index": attempts,
+                            "assistant_turn_index": turn_index,
+                            "function_name": DEEPEYES_TOOL_NAME,
+                            "code": boundary.violation_code,
+                            "payload_json": json.dumps(
+                                {
+                                    "action_boundary_protocol_id": (
+                                        boundary.protocol_id.value
+                                    ),
+                                    "complete_tool_call_count": len(
+                                        boundary.tool_call_blocks
+                                    ),
+                                },
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                            "recoverable": False,
+                        }
                     )
+                    stop = "malformed_action"
                     break
-                if not is_tool_call:
-                    extraction = extract_visual_answer(text)
+                if boundary.disposition is AssistantTurnDisposition.DIRECT_FINAL:
+                    if boundary.final_text is None:  # pragma: no cover - invariant
+                        raise RuntimeError("direct-final boundary lacks final text")
+                    extraction = extract_visual_answer(boundary.final_text)
                     final_answer = extraction.answer or None
                     stop = (
                         "final_answer"
@@ -585,13 +635,12 @@ class OfficialVisiblePolicyEvaluator:
                 if attempts >= DEEPEYES_MAX_ACTIVE_PERCEPTION:
                     stop = "tool_call_cap"
                     break
+                if boundary.selected_tool_call is None:  # pragma: no cover - invariant
+                    raise RuntimeError("tool-action boundary lacks selected call")
                 attempt_index = attempts
                 attempts += 1
                 try:
-                    # VisualToolBoxV2 and the PRL13 agent loop execute the last
-                    # call if a completion contains more than one.
-                    last_call = "<tool_call>" + tool_call_contents[-1] + "</tool_call>"
-                    parsed = parse_hermes_crop_call(last_call)
+                    parsed = parse_hermes_crop_call(boundary.selected_tool_call)
                     arguments = parsed["arguments"]
                     assert isinstance(arguments, dict)
                     box = normalize_official_visible_crop_box(
@@ -679,6 +728,7 @@ def official_visible_trajectory_audit_payload(
     task_manifest = evaluation_identity.get("task_manifest")
     model_identity = evaluation_identity.get("model_identity")
     protocol = evaluation_identity.get("protocol")
+    eval_contract = evaluation_identity.get("eval_contract")
     if not all(
         isinstance(value, Mapping)
         for value in (
@@ -687,6 +737,7 @@ def official_visible_trajectory_audit_payload(
             task_manifest,
             model_identity,
             protocol,
+            eval_contract,
         )
     ):
         raise ValueError("official-visible evaluation identity is malformed")
@@ -695,6 +746,23 @@ def official_visible_trajectory_audit_payload(
     assert isinstance(task_manifest, Mapping)
     assert isinstance(model_identity, Mapping)
     assert isinstance(protocol, Mapping)
+    assert isinstance(eval_contract, Mapping)
+    action_boundary = eval_contract.get("action_boundary")
+    if not isinstance(action_boundary, Mapping):
+        raise ValueError("official-visible action-boundary identity is missing")
+    try:
+        action_boundary_protocol_id = NativeActionBoundaryProtocolId(
+            action_boundary.get("protocol_id")
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "official-visible action-boundary identity is invalid"
+        ) from error
+    if any(
+        turn.get("action_boundary_protocol_id") != action_boundary_protocol_id.value
+        for turn in trajectory.assistant_turns
+    ):
+        raise ValueError("official-visible trajectory action-boundary identity differs")
     if (
         execution.get("world_size") != world_size
         or not 0 <= rank < world_size
@@ -792,6 +860,8 @@ def official_visible_trajectory_audit_payload(
         "tool_errors": list(trajectory.tool_errors),
         "successful_observation_count": len(trajectory.tool_calls),
         "evaluation_protocol": protocol["profile"],
+        "action_boundary_protocol_id": action_boundary_protocol_id.value,
+        "action_boundary_identity_sha256": action_boundary["identity_sha256"],
         "native_pixels": True,
         "precomputed_image_embeds": False,
         "legacy_adapter_loaded": False,

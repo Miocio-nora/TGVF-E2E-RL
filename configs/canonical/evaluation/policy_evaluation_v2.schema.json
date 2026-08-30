@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tgvf-policy-evaluation-v2",
+  "title": "TGVF explicit policy evaluation contract v2",
+  "description": "Schema aid for newly materialized evaluation configs. Historical v1 files under configs/evaluation are immutable evidence and are not executable templates.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evaluation_id",
+    "policy_config_path",
+    "lora_pointer_path",
+    "output_root",
+    "gpu_ids",
+    "declared_image_max_pixels",
+    "success_observation_protocol_id",
+    "action_boundary_protocol_id",
+    "evaluation_protocol",
+    "inference_concurrency_per_gpu",
+    "max_model_len",
+    "gpu_memory_utilization",
+    "expected_policy_run_id",
+    "expected_policy_run_identity_sha256",
+    "expected_optimizer_step",
+    "expected_policy_weights_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "enum": [
+        "tgvf-policy-coredev-evaluation-v2",
+        "tgvf-policy-benchmark-evaluation-v2"
+      ]
+    },
+    "evaluation_id": {"type": "string", "minLength": 1},
+    "policy_config_path": {"type": "string", "minLength": 1},
+    "lora_pointer_path": {"type": ["string", "null"]},
+    "lora_pointer_sha256": {"$ref": "#/$defs/sha256"},
+    "output_root": {"type": "string", "minLength": 1},
+    "gpu_ids": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 0}
+    },
+    "declared_image_max_pixels": {"type": "integer", "minimum": 1},
+    "success_observation_protocol_id": {"type": "string", "minLength": 1},
+    "action_boundary_protocol_id": {"type": "string", "minLength": 1},
+    "evaluation_protocol": {
+      "enum": [
+        "training_run",
+        "deepeyes_official_visible_native_crop_v1"
+      ]
+    },
+    "inference_concurrency_per_gpu": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 8
+    },
+    "max_model_len": {"type": "integer", "minimum": 1},
+    "max_num_batched_tokens": {"type": "integer", "minimum": 1},
+    "enable_chunked_prefill": {"type": "boolean"},
+    "gpu_memory_utilization": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1
+    },
+    "task_manifest_path": {"type": "string", "minLength": 1},
+    "task_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "expected_task_count": {"type": "integer", "minimum": 1},
+    "expected_single_image_count": {"type": "integer", "minimum": 0},
+    "expected_policy_run_id": {"type": "string", "minLength": 1},
+    "expected_policy_run_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "expected_optimizer_step": {"type": "integer", "minimum": 0},
+    "expected_policy_weights_sha256": {"$ref": "#/$defs/sha256"},
+    "snapshot_backend": {"enum": ["lora_adapter", "full_model"]},
+    "full_model_snapshot_manifest_path": {"type": "string", "minLength": 1},
+    "full_model_snapshot_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "full_model_materialization_receipt_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "full_model_materialization_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "required_snapshot_identity_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {"const": "tgvf-policy-benchmark-evaluation-v2"}
+        }
+      },
+      "then": {
+        "required": [
+          "task_manifest_path",
+          "task_manifest_sha256",
+          "expected_task_count",
+          "expected_single_image_count"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {"snapshot_backend": {"const": "full_model"}},
+        "required": ["snapshot_backend"]
+      },
+      "then": {
+        "required": [
+          "full_model_snapshot_manifest_path",
+          "full_model_snapshot_manifest_sha256",
+          "full_model_materialization_receipt_path",
+          "full_model_materialization_receipt_sha256",
+          "required_snapshot_identity_sha256"
+        ],
+        "properties": {"lora_pointer_path": {"type": "null"}}
+      },
+      "else": {
+        "required": ["lora_pointer_sha256"],
+        "properties": {
+          "lora_pointer_path": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

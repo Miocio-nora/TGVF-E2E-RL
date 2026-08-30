@@ -3,9 +3,10 @@
 The registry deliberately separates an evidence record (which includes the
 weights and score artifact) from its comparison contract.  A score may be
 reported for its own declared contract without being a valid causal
-comparator.  Deltas are available only between two golden rows inside a
-predeclared comparison group when immutable fields match and the actual
-treatment differences exactly equal the group's declared intervention axes.
+comparator.  Version 2 has no producer receipt binding score bytes to the
+evaluation identity, trajectory set, weights and comparison contract, so it
+mechanically rejects ``golden`` status and every numeric delta.  Those claims
+remain blocked until a later schema verifies that missing provenance chain.
 """
 
 from __future__ import annotations
@@ -57,6 +58,11 @@ INVARIANT_FIELDS = (
 _SHA256_LENGTH = 64
 _SCORE_MATCH_ABS_TOLERANCE = 5e-5
 _PREREGISTRATION_SCHEMA = "tgvf.comparison-preregistration.v1"
+_GOLDEN_PROMOTION_BLOCKED_REASON = (
+    "result registry v2 cannot promote golden results: score artifacts are not "
+    "mechanically bound to the evaluation identity, trajectory-set identity, "
+    "weights, and comparison contract; use a future provenance-receipt schema"
+)
 
 
 class RegistryValidationError(ValueError):
@@ -760,6 +766,12 @@ class ResultRecord:
             raise RegistryValidationError(
                 f"{context}.status is not a supported result status"
             ) from error
+        if status is ResultStatus.GOLDEN:
+            # Reject at the row parser as well as the registry aggregate.  A
+            # caller must not be able to materialize a v2 ``ResultRecord`` and
+            # present it as a provenance-verified result outside the normal
+            # registry loader.
+            raise RegistryValidationError(_GOLDEN_PROMOTION_BLOCKED_REASON)
         step_value = payload["optimizer_step"]
         if step_value is not None and (
             isinstance(step_value, bool)
@@ -872,6 +884,71 @@ class ResultRecord:
         return values
 
 
+def _validate_comparison_contract(
+    *,
+    result: ResultRecord,
+    baseline: ResultRecord,
+    definition: ComparisonDefinition,
+) -> None:
+    """Validate comparison algebra without authorizing a result claim.
+
+    This deliberately does not inspect or subtract scores.  It preserves the
+    invariant/intervention logic needed by a future receipt-verifying schema,
+    while registry v2 keeps both golden promotion and numeric deltas closed.
+    """
+
+    if result.comparison_group != baseline.comparison_group:
+        raise IncomparableResultsError("comparison_group differs")
+    if result.comparison_group != definition.comparison_group:
+        raise IncomparableResultsError(
+            "result comparison_group differs from comparison definition"
+        )
+    if (
+        result.result_id not in definition.member_result_ids
+        or baseline.result_id not in definition.member_result_ids
+    ):
+        raise IncomparableResultsError(
+            "result is not a member of the preregistered comparison group"
+        )
+    if (
+        result.declared_intervention_axes != definition.intervention_axes
+        or baseline.declared_intervention_axes != definition.intervention_axes
+    ):
+        raise IncomparableResultsError(
+            "result intervention axes differ from the preregistered definition"
+        )
+    result_invariants = result.contract.invariant_values()
+    baseline_invariants = baseline.contract.invariant_values()
+    invariant_differences = tuple(
+        field
+        for field in INVARIANT_FIELDS
+        if result_invariants[field] != baseline_invariants[field]
+    )
+    if invariant_differences:
+        raise IncomparableResultsError(
+            "comparison invariant differs: " + ", ".join(invariant_differences)
+        )
+    result_treatments = result.treatment_values()
+    baseline_treatments = baseline.treatment_values()
+    actual_axes = {
+        axis
+        for axis in INTERVENTION_AXES
+        if result_treatments[axis] != baseline_treatments[axis]
+    }
+    declared_axes = set(definition.intervention_axes)
+    undeclared_axes = actual_axes - declared_axes
+    missing_axes = declared_axes - actual_axes
+    if undeclared_axes:
+        raise IncomparableResultsError(
+            "undeclared intervention differences: " + ", ".join(sorted(undeclared_axes))
+        )
+    if missing_axes:
+        raise IncomparableResultsError(
+            "declared intervention axes did not differ: "
+            + ", ".join(sorted(missing_axes))
+        )
+
+
 @dataclass(frozen=True)
 class ResultTable:
     table_id: str
@@ -938,10 +1015,6 @@ class ResultRegistry:
             raise RegistryValidationError(
                 "registry contains duplicate comparison_group definitions"
             )
-        definitions = {
-            definition.comparison_group: definition
-            for definition in self.comparison_definitions
-        }
         for definition in self.comparison_definitions:
             unknown_members = set(definition.member_result_ids) - known
             if unknown_members:
@@ -952,30 +1025,14 @@ class ResultRegistry:
         for record in self.results:
             if not record.delta_eligible:
                 continue
-            definition = definitions.get(record.comparison_group)
-            if definition is None:
-                raise RegistryValidationError(
-                    f"golden result {record.result_id} has no preregistered "
-                    "comparison definition"
-                )
-            if record.result_id not in definition.member_result_ids:
-                raise RegistryValidationError(
-                    f"golden result {record.result_id} is not a preregistered member "
-                    f"of {definition.comparison_group}"
-                )
-            if record.declared_intervention_axes != definition.intervention_axes:
-                raise RegistryValidationError(
-                    f"golden result {record.result_id} intervention axes differ from "
-                    "its preregistered comparison definition"
-                )
-            if (
-                record.score_artifact is None
-                or record.score_artifact.kind != "score_summary"
-            ):
-                raise RegistryValidationError(
-                    f"golden result {record.result_id} requires a content-verifiable "
-                    "score_summary artifact"
-                )
+            # V2 can check that a typed score JSON contains the registered
+            # numbers, but it has no producer-authenticated receipt binding
+            # those bytes to the evaluated trajectory set, evaluation
+            # identity, weights, and comparison contract.  Preregistration is
+            # orthogonal to that missing score provenance.  Reject the status
+            # itself so neither parsing nor the table materializer can turn a
+            # caller-authored score file into a golden claim.
+            raise RegistryValidationError(_GOLDEN_PROMOTION_BLOCKED_REASON)
         for table in self.tables:
             missing = set(table.result_ids) - known
             if missing:
@@ -1045,63 +1102,11 @@ class ResultRegistry:
         )
 
     def delta(self, *, result_id: str, baseline_result_id: str) -> float:
-        result = self.result(result_id)
-        baseline = self.result(baseline_result_id)
-        if result.score is None or baseline.score is None:
-            raise IncomparableResultsError("delta requires two measured scores")
-        if not result.delta_eligible or not baseline.delta_eligible:
-            raise IncomparableResultsError(
-                "delta requires golden status on both records"
-            )
-        if result.comparison_group != baseline.comparison_group:
-            raise IncomparableResultsError("comparison_group differs")
-        definition = self.comparison_definition(result.comparison_group)
-        if (
-            result.result_id not in definition.member_result_ids
-            or baseline.result_id not in definition.member_result_ids
-        ):
-            raise IncomparableResultsError(
-                "result is not a member of the preregistered comparison group"
-            )
-        if (
-            result.declared_intervention_axes != definition.intervention_axes
-            or baseline.declared_intervention_axes != definition.intervention_axes
-        ):
-            raise IncomparableResultsError(
-                "result intervention axes differ from the preregistered definition"
-            )
-        result_invariants = result.contract.invariant_values()
-        baseline_invariants = baseline.contract.invariant_values()
-        invariant_differences = tuple(
-            field
-            for field in INVARIANT_FIELDS
-            if result_invariants[field] != baseline_invariants[field]
-        )
-        if invariant_differences:
-            raise IncomparableResultsError(
-                "comparison invariant differs: " + ", ".join(invariant_differences)
-            )
-        result_treatments = result.treatment_values()
-        baseline_treatments = baseline.treatment_values()
-        actual_axes = {
-            axis
-            for axis in INTERVENTION_AXES
-            if result_treatments[axis] != baseline_treatments[axis]
-        }
-        declared_axes = set(definition.intervention_axes)
-        undeclared_axes = actual_axes - declared_axes
-        missing_axes = declared_axes - actual_axes
-        if undeclared_axes:
-            raise IncomparableResultsError(
-                "undeclared intervention differences: "
-                + ", ".join(sorted(undeclared_axes))
-            )
-        if missing_axes:
-            raise IncomparableResultsError(
-                "declared intervention axes did not differ: "
-                + ", ".join(sorted(missing_axes))
-            )
-        return result.score.macro_star_percent - baseline.score.macro_star_percent
+        # Keep the public API fail-closed even for a registry object assembled
+        # outside ``from_json``.  V3 may replace this gate only after it verifies
+        # a producer receipt linking each score to evaluation identity,
+        # trajectory-set identity, weights and the full comparison contract.
+        raise IncomparableResultsError(_GOLDEN_PROMOTION_BLOCKED_REASON)
 
     def verify_artifacts(self, repository_root: Path) -> None:
         root = repository_root.resolve()
@@ -1183,7 +1188,7 @@ class ResultRegistry:
                 "",
                 "`Score evidence` is `content-checked` only when the registered Macro* and all seven components are parsed from and matched to a typed score summary; `digest-only` binds provenance bytes but does not validate the registered score content.",
                 "",
-                "`Δ` is emitted only for two golden rows in one independently preregistered comparison group when all invariants match and the actual differences equal the group-level intervention axes exactly; `contract differs` is a deliberate fail-closed result.",
+                "Registry v2 cannot promote `golden` rows or emit numeric `Δ`: its score artifacts are not mechanically bound to evaluation identity, trajectory-set identity, weights and the full comparison contract. `contract differs` is the deliberate fail-closed display until a later receipt schema closes that provenance chain.",
             )
         )
         return "\n".join(lines)

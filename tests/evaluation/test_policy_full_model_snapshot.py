@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,11 +9,14 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+import tgvf_rl.evaluation.policy_coredev as policy_coredev
 import tgvf_rl.evaluation.policy_full_model_snapshot as full_model_snapshot
 from tgvf_rl.evaluation.policy_full_model_snapshot import (
+    FULL_MODEL_EVALUATION_BACKEND,
     FullModelMaterializationMode,
     FullModelSourceKind,
     build_full_model_snapshot_manifest,
+    build_full_model_standalone_manager,
     full_model_materialization_preflight,
     full_model_policy_evaluation_identity,
     full_model_snapshot_identity_record,
@@ -27,6 +32,10 @@ from tgvf_rl.evaluation.policy_coredev import (
 from tgvf_rl.evaluation.policy_official_visible import OfficialVisiblePolicyEvaluator
 from tgvf_rl.policy.deepeyes_native_contract import (
     load_deepeyes_native_run_contract,
+)
+from tgvf_rl.protocol import (
+    NativeActionBoundaryProtocolId,
+    NativeSuccessObservationProtocolId,
 )
 
 
@@ -54,6 +63,28 @@ def _write_hf_model(path: Path, *, scale: float = 1.0) -> None:
             "model.language_model.layers.0.weight": torch.full((2, 2), scale + 1),
         },
         path / "pytorch_model.bin",
+    )
+
+
+def _write_hf_safetensors_model(path: Path, *, scale: float = 1.0) -> None:
+    from safetensors.torch import save_file
+
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["Qwen3VLForConditionalGeneration"],
+                "model_type": "qwen3_vl",
+            }
+        ),
+        encoding="utf-8",
+    )
+    save_file(
+        {
+            "model.visual.patch_embed.weight": torch.full((2, 2), scale),
+            "model.language_model.layers.0.weight": torch.full((2, 2), scale + 1),
+        },
+        path / "model.safetensors",
     )
 
 
@@ -153,6 +184,114 @@ def test_step_zero_full_model_snapshot_round_trip_and_tamper(tmp_path: Path) -> 
         load_full_model_evaluation_snapshot(
             manifest_path, receipt_path, require_launchable_run=False
         )
+
+
+def test_coredev_full_model_record_freeze_rehashes_same_size_weights(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = tmp_path / "base-model"
+    _write_hf_model(base)
+    contract = _contract(tmp_path, base)
+    manifest = build_full_model_snapshot_manifest(
+        contract, source_path=base, optimizer_step=0
+    )
+    receipt = materialize_full_model_snapshot(manifest)
+    manifest_path = tmp_path / "snapshot.json"
+    receipt_path = tmp_path / "receipt.json"
+    write_full_model_snapshot_manifest(manifest_path, manifest)
+    write_full_model_materialization_receipt(receipt_path, receipt)
+
+    runtime_modes: list[bool] = []
+
+    def load_template_snapshot(
+        bound_manifest_path: str | Path,
+        bound_receipt_path: str | Path,
+        *,
+        runtime_lightweight: bool,
+    ):
+        runtime_modes.append(runtime_lightweight)
+        return load_full_model_evaluation_snapshot(
+            bound_manifest_path,
+            bound_receipt_path,
+            require_launchable_run=False,
+            runtime_lightweight=runtime_lightweight,
+        )
+
+    monkeypatch.setattr(
+        policy_coredev,
+        "load_full_model_evaluation_snapshot",
+        load_template_snapshot,
+    )
+    config = SimpleNamespace(
+        snapshot_backend=FULL_MODEL_EVALUATION_BACKEND,
+        policy_config_path=contract.source_path,
+        output_root=tmp_path / "evaluation",
+        full_model_snapshot_manifest_path=manifest_path,
+        full_model_snapshot_manifest_sha256=hashlib.sha256(
+            manifest_path.read_bytes()
+        ).hexdigest(),
+        full_model_materialization_receipt_path=receipt_path,
+        full_model_materialization_receipt_sha256=hashlib.sha256(
+            receipt_path.read_bytes()
+        ).hexdigest(),
+        expected_policy_run_id=manifest.run_id,
+        expected_policy_run_identity_sha256=manifest.run_identity_sha256,
+        expected_optimizer_step=manifest.optimizer_step,
+        expected_policy_weights_sha256=manifest.weights_sha256,
+        required_snapshot_identity_sha256=manifest.identity_sha256,
+    )
+
+    source_snapshot = policy_coredev.load_policy_evaluation_snapshot(config)
+    frozen_snapshot = policy_coredev.freeze_policy_evaluation_snapshot(
+        config, source_snapshot
+    )
+    assert frozen_snapshot.policy_version == source_snapshot.policy_version
+    assert runtime_modes == [False, False]
+
+    weight_path = base / "pytorch_model.bin"
+    original = weight_path.read_bytes()
+    _write_hf_model(base, scale=9.0)
+    mutated = weight_path.read_bytes()
+    assert len(mutated) == len(original)
+    assert mutated != original
+
+    with pytest.raises(ValueError, match="checkpoint closure changed"):
+        policy_coredev.load_frozen_policy_evaluation_snapshot(config)
+    assert runtime_modes == [False, False, False]
+
+
+def test_full_model_builder_rehashes_same_size_safetensors_before_vllm_use(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base-model"
+    _write_hf_safetensors_model(base)
+    contract = _contract(tmp_path, base)
+    manifest = build_full_model_snapshot_manifest(
+        contract, source_path=base, optimizer_step=0
+    )
+    receipt = materialize_full_model_snapshot(manifest)
+    manifest_path = tmp_path / "snapshot.json"
+    receipt_path = tmp_path / "receipt.json"
+    write_full_model_snapshot_manifest(manifest_path, manifest)
+    write_full_model_materialization_receipt(receipt_path, receipt)
+    snapshot = load_full_model_evaluation_snapshot(
+        manifest_path,
+        receipt_path,
+        require_launchable_run=False,
+    )
+
+    weight_path = base / "model.safetensors"
+    original = weight_path.read_bytes()
+    _write_hf_safetensors_model(base, scale=7.0)
+    mutated = weight_path.read_bytes()
+    assert len(mutated) == len(original)
+    assert mutated != original
+
+    # Integrity verification is the builder's first action, before importing
+    # vLLM or constructing an engine over the receipt's external model path.
+    with pytest.raises(ValueError, match="checkpoint closure changed"):
+        asyncio.run(build_full_model_standalone_manager(SimpleNamespace(), snapshot))
 
 
 def test_full_model_snapshot_rejects_adapter_artifacts(tmp_path: Path) -> None:
@@ -418,8 +557,42 @@ def test_official_visible_constructor_accepts_only_adapter_free_full_snapshot(
         max_num_batched_tokens=32768,
         enable_chunked_prefill=False,
         inference_concurrency_per_gpu=1,
+        declared_image_max_pixels=snapshot.run.policy.image_max_pixels,
+        success_observation_protocol_id=(
+            NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1
+        ),
+        action_boundary_protocol_id=(
+            NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1
+        ),
     )
+    strict_config = SimpleNamespace(**vars(config))
+    strict_config.action_boundary_protocol_id = (
+        NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+    )
+    strict_identity = full_model_policy_evaluation_identity(strict_config, snapshot)
+
     identity = full_model_policy_evaluation_identity(config, snapshot)
+    assert identity["eval_contract"]["pixels"] == {
+        "training_image_max_pixels": snapshot.run.policy.image_max_pixels,
+        "declared_image_max_pixels": snapshot.run.policy.image_max_pixels,
+        "effective_image_max_pixels": snapshot.run.policy.image_max_pixels,
+    }
+    assert identity["eval_contract"]["success_observation"]["protocol_id"] == (
+        NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1.value
+    )
+    assert identity["eval_contract"]["parser"]["protocol_id"] == (
+        "deepeyes-hermes-last-complete-crop-call-v1"
+    )
+    assert identity["eval_contract"]["action_boundary"]["protocol_id"] == (
+        NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1.value
+    )
+    assert strict_identity["eval_contract"]["action_boundary"]["protocol_id"] == (
+        NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2.value
+    )
+    assert (
+        strict_identity["eval_contract"]["action_boundary"]["identity_sha256"]
+        != identity["eval_contract"]["action_boundary"]["identity_sha256"]
+    )
     processor = SimpleNamespace(tokenizer=SimpleNamespace(decode=lambda *_a, **_k: ""))
     manager = SimpleNamespace(
         native_pixels=True,
@@ -438,6 +611,18 @@ def test_official_visible_constructor_accepts_only_adapter_free_full_snapshot(
     assert evaluator.policy_version == snapshot.policy_version
     assert evaluator.full_model is True
     assert identity["policy_snapshot"]["snapshot_backend"] == "full_model"
+
+    strict_evaluator = OfficialVisiblePolicyEvaluator(
+        config=strict_config,
+        run=snapshot.run,
+        manager=manager,
+        processor=processor,
+        snapshot=snapshot,
+        evaluation_identity=strict_identity,
+    )
+    assert strict_evaluator.action_boundary_protocol_id is (
+        NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+    )
 
     manager.lora_request = object()
     with pytest.raises(ValueError, match="forbids LoRARequest"):

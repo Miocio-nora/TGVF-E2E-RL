@@ -14,6 +14,12 @@ from tgvf_rl.framework.verl.policy_weight_sync import (
     load_lora_snapshot_pointer,
 )
 from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
+from tgvf_rl.protocol import (
+    NativeActionBoundaryProtocolId,
+    NativeSuccessObservationProtocolId,
+    native_assistant_dialect_for_model,
+    validate_success_observation_protocol,
+)
 
 from .policy_coredev import (
     DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
@@ -71,6 +77,9 @@ def materialize_policy_benchmark_config(
     expected_single_image_count: int,
     output_root: str | Path,
     config_path: str | Path,
+    declared_image_max_pixels: int,
+    success_observation_protocol_id: NativeSuccessObservationProtocolId | str,
+    action_boundary_protocol_id: NativeActionBoundaryProtocolId | str,
     inference_concurrency_per_gpu: int = 8,
     max_model_len: int = 32768,
     max_num_batched_tokens: int = 32768,
@@ -95,6 +104,11 @@ def materialize_policy_benchmark_config(
     destination = Path(config_path).resolve()
     run = load_policy_e2e_smoke_run_config(
         policy_config, allow_external_agent_loop_config=True
+    )
+    selected_observation_protocol_id = validate_success_observation_protocol(
+        success_observation_protocol_id,
+        tool_profile=run.protocol.tool_profile,
+        assistant_dialect=native_assistant_dialect_for_model(run.model.model_name),
     )
     frozen_policy_config = evaluation_output / "runtime" / "frozen-policy-config.toml"
     _write_immutable(frozen_policy_config, policy_config.read_bytes())
@@ -130,6 +144,11 @@ def materialize_policy_benchmark_config(
         "expected_policy_weights_sha256": snapshot.policy_version.weights_sha256,
         "output_root": str(evaluation_output),
         "gpu_ids": [0, 1, 2, 3],
+        "declared_image_max_pixels": declared_image_max_pixels,
+        "success_observation_protocol_id": selected_observation_protocol_id.value,
+        "action_boundary_protocol_id": NativeActionBoundaryProtocolId(
+            action_boundary_protocol_id
+        ).value,
         "inference_concurrency_per_gpu": inference_concurrency_per_gpu,
         "max_model_len": max_model_len,
         "max_num_batched_tokens": max_num_batched_tokens,
@@ -161,6 +180,8 @@ def materialize_full_model_policy_benchmark_config(
     expected_single_image_count: int,
     output_root: str | Path,
     config_path: str | Path,
+    declared_image_max_pixels: int,
+    action_boundary_protocol_id: NativeActionBoundaryProtocolId | str,
     inference_concurrency_per_gpu: int = 8,
     max_model_len: int = 32768,
     max_num_batched_tokens: int = 32768,
@@ -168,12 +189,17 @@ def materialize_full_model_policy_benchmark_config(
     gpu_memory_utilization: float = 0.9,
     gpu_ids: tuple[int, ...] = (0, 1, 2, 3),
 ) -> dict[str, Any]:
-    """Bind an official-visible suite to one exact standalone full model.
+    """Bind an explicit-boundary official-visible suite to one full model.
 
     The manifest binds the source checkpoint and run contract; the receipt
     binds the directly loadable Hugging Face tree.  Both record files and the
     manifest identity are copied into the evaluator config so a changed or
     accidentally selected checkpoint fails before vLLM construction.
+
+    The caller must select either the historical answer-over-action/last-call
+    identity or strict single-terminal-call v2.  The choice is embedded in the
+    evaluation contract and dispatched by the dual-protocol evaluator; it is
+    never inferred from the checkpoint or prompt.
     """
 
     policy_config = Path(policy_config_path).resolve()
@@ -189,12 +215,13 @@ def materialize_full_model_policy_benchmark_config(
         snapshot_manifest,
         materialization_receipt,
     )
+    if declared_image_max_pixels != snapshot.run.policy.image_max_pixels:
+        raise ValueError(
+            "official-visible declared pixels differ from snapshot runtime pixels"
+        )
     if snapshot.policy_version.optimizer_step != expected_optimizer_step:
         raise ValueError("full-model optimizer step differs from requested step")
-    if (
-        _sha256_file(policy_config)
-        != snapshot.manifest.run_contract_file_sha256
-    ):
+    if _sha256_file(policy_config) != snapshot.manifest.run_contract_file_sha256:
         raise ValueError("policy config bytes differ from full-model run contract")
 
     task_sha256 = _sha256_file(task_manifest)
@@ -208,6 +235,14 @@ def materialize_full_model_policy_benchmark_config(
         require_image_identities=True,
     )
     frozen_policy_config = evaluation_output / "runtime" / "frozen-policy-config.toml"
+    try:
+        selected_action_boundary = NativeActionBoundaryProtocolId(
+            action_boundary_protocol_id
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "full-model action-boundary protocol must be explicit"
+        ) from error
     payload: dict[str, Any] = {
         "schema_version": POLICY_BENCHMARK_SCHEMA,
         "evaluation_id": evaluation_id,
@@ -217,9 +252,7 @@ def materialize_full_model_policy_benchmark_config(
         "full_model_snapshot_manifest_path": str(snapshot_manifest),
         "full_model_snapshot_manifest_sha256": snapshot_manifest_sha256,
         "full_model_materialization_receipt_path": str(materialization_receipt),
-        "full_model_materialization_receipt_sha256": (
-            materialization_receipt_sha256
-        ),
+        "full_model_materialization_receipt_sha256": (materialization_receipt_sha256),
         "required_snapshot_identity_sha256": snapshot.manifest.identity_sha256,
         "expected_policy_run_id": snapshot.policy_version.run_id,
         "expected_policy_run_identity_sha256": snapshot.run_identity_sha256,
@@ -227,6 +260,13 @@ def materialize_full_model_policy_benchmark_config(
         "expected_policy_weights_sha256": snapshot.policy_version.weights_sha256,
         "output_root": str(evaluation_output),
         "gpu_ids": list(gpu_ids),
+        "declared_image_max_pixels": declared_image_max_pixels,
+        "success_observation_protocol_id": (
+            NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1.value
+        ),
+        "action_boundary_protocol_id": (
+            selected_action_boundary.value
+        ),
         "inference_concurrency_per_gpu": inference_concurrency_per_gpu,
         "max_model_len": max_model_len,
         "max_num_batched_tokens": max_num_batched_tokens,

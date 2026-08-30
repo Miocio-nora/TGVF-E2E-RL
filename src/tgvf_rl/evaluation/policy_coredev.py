@@ -2,9 +2,10 @@
 
 The training runtime already owns the native multi-turn protocol and the
 colocated vLLM visual-tool implementation.  This module supplies only the
-post-training boundary: an immutable LoRA or full-model snapshot, one vLLM
-replica, and the official CoreDev prompt rows.  It deliberately performs no
-reward or update.
+post-training boundary: an immutable LoRA closure or immutable full-model
+identity records whose external weight closure is re-hashed before use, one
+vLLM replica, and the official CoreDev prompt rows. It deliberately performs
+no reward or update.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import csv
 from dataclasses import asdict
 import fcntl
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -30,6 +32,7 @@ import torch
 from PIL import Image
 
 from tgvf_rl.conditioning import TargetConditioningProviderKind
+from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.environment import (
     CropExecutionLedger,
@@ -40,6 +43,7 @@ from tgvf_rl.environment import (
     QwenNativeToolObservationAppender,
     record_trajectory_source_visual,
 )
+from tgvf_rl.environment.native_appender import NativeSuccessObservationContract
 from tgvf_rl.environment.qwen3_crop_materializer import preprocess_qwen3_rgb
 from tgvf_rl.framework.verl.native_agent_loop import VerlAsyncServerPolicyTurnClient
 from tgvf_rl.framework.verl.policy_weight_sync import (
@@ -88,7 +92,10 @@ from tgvf_rl.representation.training.distributed_checkpoint import (
 )
 from tgvf_rl.protocol import (
     native_assistant_dialect_for_model,
+    NativeActionBoundaryProtocolId,
+    NativeAssistantDialect,
     NativeProtocolRenderer,
+    NativeSuccessObservationProtocolId,
     NativeToolCapabilityProfile,
     StrictToolCallParser,
     build_native_tool_schemas,
@@ -115,9 +122,12 @@ from .policy_full_model_snapshot import (
 )
 
 
-POLICY_COREDEV_SCHEMA = "tgvf-policy-coredev-evaluation-v1"
-POLICY_BENCHMARK_SCHEMA = "tgvf-policy-benchmark-evaluation-v1"
+POLICY_COREDEV_LEGACY_SCHEMA_V1 = "tgvf-policy-coredev-evaluation-v1"
+POLICY_BENCHMARK_LEGACY_SCHEMA_V1 = "tgvf-policy-benchmark-evaluation-v1"
+POLICY_COREDEV_SCHEMA = "tgvf-policy-coredev-evaluation-v2"
+POLICY_BENCHMARK_SCHEMA = "tgvf-policy-benchmark-evaluation-v2"
 POLICY_EVALUATION_IDENTITY_SCHEMA = "tgvf-policy-evaluation-identity-v1"
+POLICY_EVAL_CONTRACT_SCHEMA = "tgvf-policy-eval-contract-v1"
 POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA = "tgvf-policy-coredev-trajectory-audit-v1"
 TRAINING_RUN_EVALUATION_PROTOCOL = "training_run"
 DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL = (
@@ -133,6 +143,15 @@ _LEGACY_COREDEV_TASK_COUNT = 2511
 _LEGACY_COREDEV_SINGLE_IMAGE_COUNT = 2240
 _SHA256_LENGTH = 64
 LORA_ADAPTER_EVALUATION_BACKEND = "lora_adapter"
+VLLM_LORA_ADAPTER_SCHEMA = "tgvf-policy-vllm-lora-adapter-v2"
+VLLM_LORA_ADAPTER_MODEL_FILENAME = "adapter_model.safetensors"
+VLLM_LORA_ADAPTER_CONFIG_FILENAME = "adapter_config.json"
+VLLM_LORA_ADAPTER_IDENTITY_FILENAME = "identity.json"
+VLLM_LORA_ENGINE_ATTESTATION = "unavailable-in-vllm-0.12-public-api"
+VLLM_LORA_RESIDUAL_RACE = (
+    "same-UID mutation between the final pre-generate verification and "
+    "vLLM's lazy adapter file read remains outside the public API boundary"
+)
 POLICY_EVALUATION_BACKENDS = frozenset(
     {LORA_ADAPTER_EVALUATION_BACKEND, FULL_MODEL_EVALUATION_BACKEND}
 )
@@ -145,6 +164,9 @@ class PolicyCoreDevConfig:
     lora_pointer_path: Path | None
     output_root: Path
     gpu_ids: tuple[int, ...]
+    declared_image_max_pixels: int
+    success_observation_protocol_id: NativeSuccessObservationProtocolId
+    action_boundary_protocol_id: NativeActionBoundaryProtocolId
     inference_concurrency_per_gpu: int = 8
     max_model_len: int = 16384
     max_num_batched_tokens: int = 16384
@@ -185,6 +207,41 @@ class PolicyCoreDevConfig:
             if value is not None:
                 object.__setattr__(self, name, Path(value))
         object.__setattr__(self, "gpu_ids", tuple(self.gpu_ids))
+        if (
+            type(self.declared_image_max_pixels) is not int
+            or self.declared_image_max_pixels <= 0
+        ):
+            raise ValueError("declared_image_max_pixels must be a positive integer")
+        try:
+            observation_protocol_id = NativeSuccessObservationProtocolId(
+                self.success_observation_protocol_id
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "success_observation_protocol_id must be an explicit known protocol"
+            ) from error
+        object.__setattr__(
+            self, "success_observation_protocol_id", observation_protocol_id
+        )
+        try:
+            action_boundary_protocol_id = NativeActionBoundaryProtocolId(
+                self.action_boundary_protocol_id
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "action_boundary_protocol_id must be an explicit known protocol"
+            ) from error
+        object.__setattr__(
+            self, "action_boundary_protocol_id", action_boundary_protocol_id
+        )
+        if self.schema_version in {
+            POLICY_COREDEV_LEGACY_SCHEMA_V1,
+            POLICY_BENCHMARK_LEGACY_SCHEMA_V1,
+        }:
+            raise ValueError(
+                "legacy v1 policy evaluation configs are immutable evidence only; "
+                "materialize an explicit v2 config before evaluation"
+            )
         if self.schema_version not in {POLICY_COREDEV_SCHEMA, POLICY_BENCHMARK_SCHEMA}:
             raise ValueError("policy benchmark config schema differs")
         if self.evaluation_protocol not in POLICY_EVALUATION_PROTOCOLS:
@@ -261,11 +318,9 @@ class PolicyCoreDevConfig:
             value is not None for value in common_snapshot_binding
         ):
             raise ValueError("explicit policy snapshot binding fields are all-or-none")
-        if self.schema_version == POLICY_BENCHMARK_SCHEMA and not all(
-            value is not None for value in common_snapshot_binding
-        ):
+        if not all(value is not None for value in common_snapshot_binding):
             raise ValueError(
-                "generic policy benchmark requires an explicit policy snapshot binding"
+                "v2 policy evaluation requires an explicit policy snapshot binding"
             )
         full_model_binding = (
             self.full_model_snapshot_manifest_path,
@@ -277,20 +332,24 @@ class PolicyCoreDevConfig:
         if self.snapshot_backend == LORA_ADAPTER_EVALUATION_BACKEND:
             if self.lora_pointer_path is None:
                 raise ValueError("LoRA snapshot backend requires a pointer path")
-            if self.schema_version == POLICY_BENCHMARK_SCHEMA and (
-                self.lora_pointer_sha256 is None
-            ):
-                raise ValueError("generic LoRA benchmark requires a pointer SHA256")
+            if self.lora_pointer_sha256 is None:
+                raise ValueError("v2 LoRA evaluation requires a pointer SHA256")
             if any(value is not None for value in full_model_binding):
                 raise ValueError("LoRA snapshot backend forbids full-model bindings")
         else:
-            if self.lora_pointer_path is not None or self.lora_pointer_sha256 is not None:
+            if (
+                self.lora_pointer_path is not None
+                or self.lora_pointer_sha256 is not None
+            ):
                 raise ValueError("full-model snapshot backend forbids LoRA bindings")
             if not all(value is not None for value in full_model_binding):
                 raise ValueError(
                     "full-model snapshot backend requires manifest, receipt, and identity bindings"
                 )
-            if self.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+            if (
+                self.evaluation_protocol
+                != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+            ):
                 raise ValueError(
                     "full-model snapshots are supported only by official-visible evaluation"
                 )
@@ -323,10 +382,23 @@ class PolicyCoreDevConfig:
             or self.expected_optimizer_step < 0
         ):
             raise ValueError("expected_optimizer_step must be a non-negative integer")
-        if (
-            self.evaluation_protocol
-            == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
-        ):
+        if self.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+            if (
+                self.success_observation_protocol_id
+                is not NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1
+            ):
+                raise ValueError(
+                    "official-visible Crop requires the explicit matched60 "
+                    "success observation protocol"
+                )
+            if self.action_boundary_protocol_id not in {
+                NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1,
+                NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2,
+            }:
+                raise ValueError(
+                    "official-visible evaluation requires an explicit supported "
+                    "action-boundary protocol"
+                )
             if self.schema_version != POLICY_BENCHMARK_SCHEMA:
                 raise ValueError(
                     "official-visible DeepEyes evaluation requires generic benchmark schema"
@@ -338,6 +410,13 @@ class PolicyCoreDevConfig:
                 raise ValueError(
                     "official-visible nonzero evaluation requires a full-model snapshot"
                 )
+        elif (
+            self.action_boundary_protocol_id
+            is not NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+        ):
+            raise ValueError(
+                "training-run evaluation requires the explicit strict action boundary"
+            )
 
     @property
     def uses_legacy_coredev_manifest(self) -> bool:
@@ -346,6 +425,19 @@ class PolicyCoreDevConfig:
 
 def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("policy benchmark config must be a JSON object")
+    schema_version = payload.get("schema_version")
+    if schema_version in {
+        POLICY_COREDEV_LEGACY_SCHEMA_V1,
+        POLICY_BENCHMARK_LEGACY_SCHEMA_V1,
+    }:
+        raise ValueError(
+            "legacy v1 policy evaluation config is immutable evidence only; "
+            "materialize an explicit v2 config before evaluation"
+        )
+    if schema_version not in {POLICY_COREDEV_SCHEMA, POLICY_BENCHMARK_SCHEMA}:
+        raise ValueError("policy benchmark config schema differs")
     required = {
         "schema_version",
         "evaluation_id",
@@ -353,6 +445,10 @@ def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
         "lora_pointer_path",
         "output_root",
         "gpu_ids",
+        "declared_image_max_pixels",
+        "success_observation_protocol_id",
+        "action_boundary_protocol_id",
+        "evaluation_protocol",
         "inference_concurrency_per_gpu",
         "max_model_len",
         "gpu_memory_utilization",
@@ -375,7 +471,6 @@ def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
         "full_model_materialization_receipt_path",
         "full_model_materialization_receipt_sha256",
         "required_snapshot_identity_sha256",
-        "evaluation_protocol",
     }
     if not required <= set(payload) or not set(payload) <= required | optional:
         raise ValueError("policy benchmark config fields differ")
@@ -456,7 +551,9 @@ def _assert_policy_snapshot_binding(
         raise ValueError(f"{owner} weights differ from evaluation binding")
     if isinstance(snapshot, FullModelEvaluationSnapshot):
         if config.required_snapshot_identity_sha256 is None:
-            raise ValueError("full-model evaluation lacks its required snapshot identity")
+            raise ValueError(
+                "full-model evaluation lacks its required snapshot identity"
+            )
         if (
             snapshot.manifest.identity_sha256
             != config.required_snapshot_identity_sha256
@@ -483,13 +580,10 @@ def _load_full_model_from_paths(
         raise ValueError("full-model evaluation file hashes are absent")
     if _sha256_file(manifest_path) != config.full_model_snapshot_manifest_sha256:
         raise ValueError("full-model snapshot manifest file SHA256 differs")
-    if (
-        _sha256_file(receipt_path)
-        != config.full_model_materialization_receipt_sha256
-    ):
+    if _sha256_file(receipt_path) != config.full_model_materialization_receipt_sha256:
         raise ValueError("full-model materialization receipt file SHA256 differs")
     snapshot = load_full_model_evaluation_snapshot(
-        manifest_path, receipt_path, runtime_lightweight=True
+        manifest_path, receipt_path, runtime_lightweight=False
     )
     _assert_policy_snapshot_binding(config, snapshot, owner="full-model snapshot")
     return snapshot
@@ -510,7 +604,9 @@ def load_policy_evaluation_snapshot(
         )
 
     run = load_policy_e2e_smoke_run_config(
-        config.policy_config_path, allow_external_agent_loop_config=True
+        config.policy_config_path,
+        allow_external_agent_loop_config=True,
+        allow_historical_reward_contract=True,
     )
     assert config.lora_pointer_path is not None
     state = PolicyWeightSyncState(
@@ -534,10 +630,20 @@ def frozen_policy_state_root(config: PolicyCoreDevConfig) -> Path:
 
 
 def frozen_full_model_state_root(config: PolicyCoreDevConfig) -> Path:
+    """Return the immutable record root; full-model payload bytes stay external."""
+
     return config.output_root / "runtime" / "frozen-full-model-state"
 
 
 def _write_immutable_snapshot_file(path: Path, payload: bytes) -> None:
+    """Legacy freeze writer for an evaluation-controlled output hierarchy.
+
+    This helper uses path-based parent creation and therefore does not claim a
+    TOCTOU-safe write boundary when the output ancestry is concurrently mutable.
+    LoRA callers subsequently re-open the frozen closure through the strict
+    snapshot reader, but that does not upgrade this writer's path boundary.
+    """
+
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() or path.is_symlink():
         if path.is_symlink() or not path.is_file():
@@ -564,7 +670,15 @@ def freeze_policy_evaluation_snapshot(
     config: PolicyCoreDevConfig,
     snapshot: PolicyEvaluationSubject,
 ) -> PolicyEvaluationSubject:
-    """Copy verified identity records into evaluation-private storage."""
+    """Copy verified identity records into trusted evaluation-private storage.
+
+    The legacy writer assumes non-adversarial output ancestry; this function is
+    not an end-to-end TOCTOU-free materializer. The LoRA branch copies and
+    reloads its complete closure through the descriptor-relative, no-symlink
+    reader. The full-model branch copies only manifest/receipt records because
+    duplicating the 100+ GiB checkpoint is out of scope; every reload therefore
+    streams and verifies the external source and materialized model bytes.
+    """
 
     if isinstance(snapshot, FullModelEvaluationSnapshot):
         assert config.full_model_snapshot_manifest_path is not None
@@ -614,7 +728,7 @@ def freeze_policy_evaluation_snapshot(
 def load_frozen_policy_evaluation_snapshot(
     config: PolicyCoreDevConfig,
 ) -> PolicyEvaluationSubject:
-    """Load only the evaluation-private identity records, never mutable latest."""
+    """Load private records and strongly verify every externally bound payload."""
 
     if config.snapshot_backend == FULL_MODEL_EVALUATION_BACKEND:
         frozen_root = frozen_full_model_state_root(config)
@@ -625,7 +739,9 @@ def load_frozen_policy_evaluation_snapshot(
         )
 
     run = load_policy_e2e_smoke_run_config(
-        config.policy_config_path, allow_external_agent_loop_config=True
+        config.policy_config_path,
+        allow_external_agent_loop_config=True,
+        allow_historical_reward_contract=True,
     )
     state = PolicyWeightSyncState(
         directory=frozen_policy_state_root(config),
@@ -643,43 +759,137 @@ def load_frozen_policy_evaluation_snapshot(
     return frozen
 
 
-def _write_private_file_exact(path: Path, payload: bytes) -> None:
-    """Write exact bytes without retaining a mutable hardlink to the source."""
+@dataclass(frozen=True, slots=True)
+class VLLMLoRAAdapterIntegrityVerifier:
+    """Re-read the exact private PEFT closure before vLLM can consume it.
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if path.is_symlink() or not path.is_file():
-            raise RuntimeError(f"evaluation output is not a regular file: {path}")
-        if path.read_bytes() != payload:
-            raise RuntimeError(f"immutable evaluation output differs: {path}")
-        if path.stat().st_nlink == 1:
-            return
-    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    try:
-        with temporary.open("xb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    vLLM 0.12 does not expose a digest receipt for the adapter bytes loaded by
+    the engine.  The verifier therefore binds the request path and checks all
+    three files immediately before every ``generate``.  A same-UID writer can
+    still race the small interval between that check and vLLM's lazy file read;
+    ``residual_race`` records that limitation instead of claiming a sealed
+    engine-side identity.
+    """
+
+    adapter_root: Path
+    materialization_identity_sha256: str
+    root_device: int
+    root_inode: int
+    adapter_model_bytes: bytes
+    adapter_model_sha256: str
+    adapter_config_bytes: bytes
+    adapter_config_sha256: str
+    identity_bytes: bytes
+    identity_sha256: str
+    engine_loaded_identity_attestation: str = VLLM_LORA_ENGINE_ATTESTATION
+    residual_race: str = VLLM_LORA_RESIDUAL_RACE
+
+    def __post_init__(self) -> None:
+        root = Path(self.adapter_root)
+        if not root.is_absolute():
+            raise ValueError("vLLM LoRA adapter root must be absolute")
+        object.__setattr__(
+            self,
+            "adapter_root",
+            Path(os.path.abspath(os.fspath(root))),
+        )
+        _require_sha256(
+            self.materialization_identity_sha256,
+            name="vLLM LoRA materialization identity",
+        )
+        for name, payload, digest in self._expected_files():
+            if not isinstance(payload, bytes) or not payload:
+                raise ValueError(f"vLLM LoRA {name} bytes must be non-empty")
+            _require_sha256(digest, name=f"vLLM LoRA {name} digest")
+            if not hmac.compare_digest(hashlib.sha256(payload).hexdigest(), digest):
+                raise ValueError(f"vLLM LoRA {name} digest differs from bytes")
+        if self.root_device < 0 or self.root_inode <= 0:
+            raise ValueError("vLLM LoRA root filesystem identity is invalid")
+        if self.engine_loaded_identity_attestation != VLLM_LORA_ENGINE_ATTESTATION:
+            raise ValueError("vLLM LoRA engine attestation statement changed")
+        if self.residual_race != VLLM_LORA_RESIDUAL_RACE:
+            raise ValueError("vLLM LoRA residual-race statement changed")
+
+    def _expected_files(self) -> tuple[tuple[str, bytes, str], ...]:
+        return (
+            (
+                VLLM_LORA_ADAPTER_MODEL_FILENAME,
+                self.adapter_model_bytes,
+                self.adapter_model_sha256,
+            ),
+            (
+                VLLM_LORA_ADAPTER_CONFIG_FILENAME,
+                self.adapter_config_bytes,
+                self.adapter_config_sha256,
+            ),
+            (
+                VLLM_LORA_ADAPTER_IDENTITY_FILENAME,
+                self.identity_bytes,
+                self.identity_sha256,
+            ),
+        )
+
+    def verify(self, *, phase: str) -> None:
+        if not isinstance(phase, str) or not phase:
+            raise ValueError("vLLM LoRA verification phase must be non-empty")
+        descriptor = _open_vllm_lora_adapter_root(
+            self.adapter_root,
+            owner=f"vLLM LoRA adapter during {phase}",
+        )
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                metadata.st_dev != self.root_device
+                or metadata.st_ino != self.root_inode
+            ):
+                raise ReplayMismatchError(
+                    f"vLLM LoRA adapter root changed during {phase}"
+                )
+            if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+                raise ReplayMismatchError(
+                    f"vLLM LoRA adapter root is not private during {phase}"
+                )
+            names = set(os.listdir(descriptor))
+            expected_names = {
+                name for name, _payload, _digest in self._expected_files()
+            }
+            if names != expected_names:
+                raise ReplayMismatchError(
+                    f"vLLM LoRA adapter files changed during {phase}"
+                )
+            for name, expected_bytes, expected_digest in self._expected_files():
+                observed = _read_private_vllm_lora_file_at(
+                    descriptor,
+                    name,
+                    phase=phase,
+                )
+                observed_digest = hashlib.sha256(observed).hexdigest()
+                if not hmac.compare_digest(observed_digest, expected_digest):
+                    raise ReplayMismatchError(
+                        f"vLLM LoRA {name} digest changed during {phase}"
+                    )
+                if observed != expected_bytes:
+                    raise ReplayMismatchError(
+                        f"vLLM LoRA {name} bytes changed during {phase}"
+                    )
+        finally:
+            os.close(descriptor)
+
+    def assert_lora_request_binding(self, lora_request: object) -> None:
+        request_path = getattr(lora_request, "lora_path", None)
+        if not isinstance(request_path, str) or not request_path:
+            raise TypeError("vLLM LoRARequest must expose its lora_path")
+        normalized = Path(os.path.abspath(request_path))
+        if normalized != self.adapter_root:
+            raise IdentityMismatchError(
+                "vLLM LoRARequest path differs from verified adapter root"
+            )
 
 
-def materialize_vllm_lora_adapter(
+def _vllm_lora_adapter_payloads(
     config: PolicyCoreDevConfig,
     snapshot: PolicyEvaluationSnapshot,
-) -> Path:
-    """Expose an exact runtime snapshot through vLLM's PEFT directory ABI."""
-
-    if not isinstance(snapshot, PolicyEvaluationSnapshot):
-        raise TypeError("snapshot must be a PolicyEvaluationSnapshot")
-    weights_sha256 = snapshot.policy_version.weights_sha256
-    adapter_root = config.output_root / "runtime" / "lora-adapter"
-    adapter_root.mkdir(parents=True, exist_ok=True)
-    model_file = adapter_root / "adapter_model.safetensors"
-    _write_private_file_exact(model_file, snapshot.lora.tensor_bytes)
-    if _sha256_file(model_file) != snapshot.lora.tensor_file_sha256:
-        raise RuntimeError("materialized vLLM LoRA differs from snapshot")
+) -> tuple[str, bytes, bytes]:
     adapter_config = {
         "base_model_name_or_path": str(snapshot.run.model.revision_or_path),
         "bias": "none",
@@ -708,25 +918,409 @@ def materialize_vllm_lora_adapter(
     config_bytes = (json.dumps(adapter_config, indent=2, sort_keys=True) + "\n").encode(
         "utf-8"
     )
-    adapter_config_path = adapter_root / "adapter_config.json"
-    _write_private_file_exact(adapter_config_path, config_bytes)
-    identity = {
-        "schema_version": "tgvf-policy-vllm-lora-adapter-v1",
+    materialization_content = {
+        "schema_version": VLLM_LORA_ADAPTER_SCHEMA,
         "evaluation_id": config.evaluation_id,
         "optimizer_step": snapshot.policy_version.optimizer_step,
         "policy_run_id": snapshot.policy_version.run_id,
         "policy_run_identity_sha256": snapshot.lora.run_identity_sha256,
-        "weights_sha256": weights_sha256,
+        "weights_sha256": snapshot.policy_version.weights_sha256,
         "pointer_file_sha256": snapshot.lora.pointer_file_sha256,
         "manifest_file_sha256": snapshot.lora.manifest_file_sha256,
-        "tensor_file_sha256": snapshot.lora.tensor_file_sha256,
-        "snapshot": str(snapshot.lora.tensor_file),
+        "adapter_model_file_sha256": snapshot.lora.tensor_file_sha256,
+        "adapter_config_file_sha256": hashlib.sha256(config_bytes).hexdigest(),
+        "base_model_name_or_path": str(snapshot.run.model.revision_or_path),
     }
-    identity_path = adapter_root / "identity.json"
+    materialization_identity_sha256 = _canonical_json_sha256(materialization_content)
+    identity = {
+        **materialization_content,
+        "materialization_identity_sha256": materialization_identity_sha256,
+        "adapter_model_file": VLLM_LORA_ADAPTER_MODEL_FILENAME,
+        "adapter_config_file": VLLM_LORA_ADAPTER_CONFIG_FILENAME,
+        "engine_loaded_identity_attestation": VLLM_LORA_ENGINE_ATTESTATION,
+        "residual_race": VLLM_LORA_RESIDUAL_RACE,
+    }
     identity_bytes = (json.dumps(identity, indent=2, sort_keys=True) + "\n").encode(
         "utf-8"
     )
-    _write_private_file_exact(identity_path, identity_bytes)
+    return materialization_identity_sha256, config_bytes, identity_bytes
+
+
+def _open_absolute_directory_nofollow(
+    path: Path,
+    *,
+    owner: str,
+    create_missing: bool = False,
+) -> int:
+    """Traverse an absolute directory from ``/`` without following symlinks."""
+
+    normalized = Path(os.path.abspath(os.fspath(path)))
+    if not normalized.is_absolute():
+        raise ValueError(f"{owner} path must be absolute")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(os.sep, flags)
+    completed = False
+    try:
+        for part in normalized.parts[1:]:
+            next_descriptor: int | None = None
+            try:
+                try:
+                    next_descriptor = os.open(part, flags, dir_fd=descriptor)
+                except FileNotFoundError:
+                    if not create_missing:
+                        raise
+                    try:
+                        os.mkdir(part, mode=0o700, dir_fd=descriptor)
+                    except FileExistsError:
+                        pass
+                    next_descriptor = os.open(part, flags, dir_fd=descriptor)
+                if not stat.S_ISDIR(os.fstat(next_descriptor).st_mode):
+                    raise ReplayMismatchError(f"{owner} path contains a non-directory")
+            except BaseException:
+                if next_descriptor is not None:
+                    os.close(next_descriptor)
+                raise
+            os.close(descriptor)
+            descriptor = next_descriptor
+        completed = True
+        return descriptor
+    except OSError as error:
+        raise ReplayMismatchError(
+            f"{owner} path is missing, unreadable, or contains a symlink"
+        ) from error
+    finally:
+        if not completed:
+            os.close(descriptor)
+
+
+def _open_vllm_lora_adapter_root(path: Path, *, owner: str) -> int:
+    return _open_absolute_directory_nofollow(path, owner=owner)
+
+
+def _open_or_create_private_directory_at(
+    parent_descriptor: int,
+    name: str,
+    *,
+    owner: str,
+) -> int:
+    if not isinstance(name, str) or not name or "/" in name or name in {".", ".."}:
+        raise ValueError(f"{owner} name must be one safe path component")
+    descriptor: int | None = None
+    completed = False
+    try:
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=parent_descriptor)
+        except FileExistsError:
+            pass
+        descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_descriptor,
+        )
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            raise ReplayMismatchError(f"{owner} is not a current-user directory")
+        os.fchmod(descriptor, 0o700)
+        completed = True
+        return descriptor
+    except OSError as error:
+        raise ReplayMismatchError(
+            f"{owner} is unreadable, non-directory, or symlinked"
+        ) from error
+    finally:
+        if descriptor is not None and not completed:
+            os.close(descriptor)
+
+
+def _read_private_vllm_lora_file_at(
+    root_descriptor: int,
+    name: str,
+    *,
+    phase: str,
+) -> bytes:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=root_descriptor,
+        )
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ReplayMismatchError(f"vLLM LoRA {name} is not regular during {phase}")
+        if (
+            metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o077
+            or metadata.st_nlink != 1
+        ):
+            raise ReplayMismatchError(f"vLLM LoRA {name} is not private during {phase}")
+        chunks: list[bytes] = []
+        while True:
+            block = os.read(descriptor, 8 * 1024 * 1024)
+            if not block:
+                break
+            chunks.append(block)
+        return b"".join(chunks)
+    except OSError as error:
+        raise ReplayMismatchError(
+            f"vLLM LoRA {name} is missing, unreadable, or symlinked during {phase}"
+        ) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _write_private_vllm_lora_file_at(
+    root_descriptor: int,
+    name: str,
+    payload: bytes,
+) -> None:
+    if not isinstance(name, str) or not name or "/" in name or name in {".", ".."}:
+        raise ValueError("vLLM LoRA output name must be one safe path component")
+    lock_acquired = False
+    try:
+        fcntl.flock(root_descriptor, fcntl.LOCK_EX)
+        lock_acquired = True
+        try:
+            _assert_private_vllm_lora_file_equals_at(
+                root_descriptor,
+                name,
+                payload,
+            )
+        except FileNotFoundError:
+            pass
+        else:
+            return
+
+        _publish_private_vllm_lora_file_at(root_descriptor, name, payload)
+    finally:
+        if lock_acquired:
+            fcntl.flock(root_descriptor, fcntl.LOCK_UN)
+
+
+def _assert_private_vllm_lora_file_equals_at(
+    root_descriptor: int,
+    name: str,
+    payload: bytes,
+) -> None:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=root_descriptor,
+        )
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ReplayMismatchError(f"vLLM LoRA output {name} is not a regular file")
+        if metadata.st_uid != os.geteuid():
+            raise ReplayMismatchError(
+                f"vLLM LoRA output {name} is not owned by the current user"
+            )
+        if metadata.st_nlink != 1:
+            raise ReplayMismatchError(
+                f"vLLM LoRA output {name} has an unexpected hardlink"
+            )
+        chunks: list[bytes] = []
+        while True:
+            block = os.read(descriptor, 8 * 1024 * 1024)
+            if not block:
+                break
+            chunks.append(block)
+        if b"".join(chunks) != payload:
+            raise ReplayMismatchError(
+                f"content-addressed vLLM LoRA output {name} differs"
+            )
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+    except FileNotFoundError:
+        raise
+    except OSError as error:
+        raise ReplayMismatchError(
+            f"vLLM LoRA output {name} is unreadable or symlinked"
+        ) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _publish_private_vllm_lora_file_at(
+    root_descriptor: int,
+    name: str,
+    payload: bytes,
+) -> None:
+    """Publish exact bytes without replacing a concurrent immutable winner."""
+
+    temporary_name = f".{name}.{uuid4().hex}.tmp"
+    temporary_descriptor: int | None = None
+    temporary_exists = False
+    try:
+        temporary_descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=root_descriptor,
+        )
+        temporary_exists = True
+        view = memoryview(payload)
+        while view:
+            written = os.write(temporary_descriptor, view)
+            if written <= 0:
+                raise OSError("short write while materializing vLLM LoRA")
+            view = view[written:]
+        os.fchmod(temporary_descriptor, 0o600)
+        os.fsync(temporary_descriptor)
+        os.close(temporary_descriptor)
+        temporary_descriptor = None
+        try:
+            os.link(
+                temporary_name,
+                name,
+                src_dir_fd=root_descriptor,
+                dst_dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            _assert_private_vllm_lora_file_equals_at(
+                root_descriptor,
+                name,
+                payload,
+            )
+        os.unlink(temporary_name, dir_fd=root_descriptor)
+        temporary_exists = False
+        os.fsync(root_descriptor)
+    except OSError as error:
+        raise ReplayMismatchError(
+            f"could not publish private vLLM LoRA output {name}"
+        ) from error
+    finally:
+        if temporary_descriptor is not None:
+            os.close(temporary_descriptor)
+        if temporary_exists:
+            try:
+                os.unlink(temporary_name, dir_fd=root_descriptor)
+            except FileNotFoundError:
+                pass
+
+
+def build_vllm_lora_adapter_integrity_verifier(
+    config: PolicyCoreDevConfig,
+    snapshot: PolicyEvaluationSnapshot,
+    adapter_root: Path,
+) -> VLLMLoRAAdapterIntegrityVerifier:
+    if not isinstance(snapshot, PolicyEvaluationSnapshot):
+        raise TypeError("snapshot must be a PolicyEvaluationSnapshot")
+    identity_sha256, config_bytes, identity_bytes = _vllm_lora_adapter_payloads(
+        config,
+        snapshot,
+    )
+    expected_root = config.output_root / "runtime" / "lora-adapters" / identity_sha256
+    expected_root = Path(os.path.abspath(os.fspath(expected_root)))
+    normalized_root = Path(os.path.abspath(os.fspath(adapter_root)))
+    if normalized_root != expected_root:
+        raise IdentityMismatchError(
+            "vLLM LoRA adapter root differs from content identity"
+        )
+    descriptor = _open_vllm_lora_adapter_root(
+        normalized_root,
+        owner="vLLM LoRA adapter",
+    )
+    try:
+        metadata = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    verifier = VLLMLoRAAdapterIntegrityVerifier(
+        adapter_root=normalized_root,
+        materialization_identity_sha256=identity_sha256,
+        root_device=metadata.st_dev,
+        root_inode=metadata.st_ino,
+        adapter_model_bytes=snapshot.lora.tensor_bytes,
+        adapter_model_sha256=snapshot.lora.tensor_file_sha256,
+        adapter_config_bytes=config_bytes,
+        adapter_config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+        identity_bytes=identity_bytes,
+        identity_sha256=hashlib.sha256(identity_bytes).hexdigest(),
+    )
+    verifier.verify(phase="verifier construction")
+    return verifier
+
+
+def materialize_vllm_lora_adapter(
+    config: PolicyCoreDevConfig,
+    snapshot: PolicyEvaluationSnapshot,
+) -> Path:
+    """Expose an exact runtime snapshot through vLLM's PEFT directory ABI.
+
+    Creation is relative to progressively opened, no-follow directory fds and
+    the lexical path is re-opened and verified before use.  A same-UID writer
+    can still rename ancestors after the final verification; that remaining
+    pre-consumption race is covered by ``VLLM_LORA_RESIDUAL_RACE``.
+    """
+
+    if not isinstance(snapshot, PolicyEvaluationSnapshot):
+        raise TypeError("snapshot must be a PolicyEvaluationSnapshot")
+    identity_sha256, config_bytes, identity_bytes = _vllm_lora_adapter_payloads(
+        config,
+        snapshot,
+    )
+    adapter_parent = Path(
+        os.path.abspath(os.fspath(config.output_root / "runtime" / "lora-adapters"))
+    )
+    adapter_root = adapter_parent / identity_sha256
+    parent_descriptor = _open_absolute_directory_nofollow(
+        adapter_parent,
+        owner="vLLM LoRA adapter parent",
+        create_missing=True,
+    )
+    descriptor: int | None = None
+    try:
+        parent_metadata = os.fstat(parent_descriptor)
+        if parent_metadata.st_uid != os.geteuid():
+            raise ReplayMismatchError(
+                "vLLM LoRA adapter parent is not owned by the current user"
+            )
+        os.fchmod(parent_descriptor, 0o700)
+        descriptor = _open_or_create_private_directory_at(
+            parent_descriptor,
+            identity_sha256,
+            owner="content-addressed vLLM LoRA adapter",
+        )
+        _write_private_vllm_lora_file_at(
+            descriptor,
+            VLLM_LORA_ADAPTER_MODEL_FILENAME,
+            snapshot.lora.tensor_bytes,
+        )
+        _write_private_vllm_lora_file_at(
+            descriptor,
+            VLLM_LORA_ADAPTER_CONFIG_FILENAME,
+            config_bytes,
+        )
+        _write_private_vllm_lora_file_at(
+            descriptor,
+            VLLM_LORA_ADAPTER_IDENTITY_FILENAME,
+            identity_bytes,
+        )
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent_descriptor)
+    build_vllm_lora_adapter_integrity_verifier(
+        config,
+        snapshot,
+        adapter_root,
+    ).verify(phase="post-materialization")
     return adapter_root
 
 
@@ -970,7 +1564,9 @@ def write_official_coredev_tasks(output_path: str | Path) -> dict[str, int]:
                     f"official prompt is incomplete: {dataset_name}/{index}"
                 )
             if index in sample_ids:
-                raise ValueError(f"CoreDev sample index is not globally unique: {index}")
+                raise ValueError(
+                    f"CoreDev sample index is not globally unique: {index}"
+                )
             sample_ids.add(index)
             rows.append(
                 {
@@ -1248,6 +1844,339 @@ def _canonical_json_sha256(payload: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class PolicyEvalContract:
+    """Immutable identity for every behavior-relevant evaluation boundary."""
+
+    evaluation_protocol: str
+    training_image_max_pixels: int
+    declared_image_max_pixels: int
+    effective_image_max_pixels: int
+    prompt_protocol_id: str
+    prompt_identity_sha256: str
+    parser_protocol_id: str
+    parser_identity_sha256: str
+    success_observation_protocol_id: NativeSuccessObservationProtocolId
+    success_observation_identity_sha256: str
+    action_boundary_protocol_id: NativeActionBoundaryProtocolId
+    action_boundary_identity_sha256: str
+    schema_version: str = POLICY_EVAL_CONTRACT_SCHEMA
+
+    def __post_init__(self) -> None:
+        if self.evaluation_protocol not in POLICY_EVALUATION_PROTOCOLS:
+            raise ValueError("evaluation contract protocol differs")
+        for name in (
+            "training_image_max_pixels",
+            "declared_image_max_pixels",
+            "effective_image_max_pixels",
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        for name in (
+            "prompt_protocol_id",
+            "parser_protocol_id",
+        ):
+            if not getattr(self, name):
+                raise ValueError(f"{name} must be non-empty")
+        for name in (
+            "prompt_identity_sha256",
+            "parser_identity_sha256",
+            "success_observation_identity_sha256",
+            "action_boundary_identity_sha256",
+        ):
+            _require_sha256(getattr(self, name), name=name)
+        if not isinstance(
+            self.success_observation_protocol_id,
+            NativeSuccessObservationProtocolId,
+        ):
+            raise TypeError(
+                "success_observation_protocol_id must be an explicit protocol ID"
+            )
+        if not isinstance(
+            self.action_boundary_protocol_id,
+            NativeActionBoundaryProtocolId,
+        ):
+            raise TypeError(
+                "action_boundary_protocol_id must be an explicit protocol ID"
+            )
+
+    @property
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "evaluation_protocol": self.evaluation_protocol,
+            "pixels": {
+                "training_image_max_pixels": self.training_image_max_pixels,
+                "declared_image_max_pixels": self.declared_image_max_pixels,
+                "effective_image_max_pixels": self.effective_image_max_pixels,
+            },
+            "prompt": {
+                "protocol_id": self.prompt_protocol_id,
+                "identity_sha256": self.prompt_identity_sha256,
+            },
+            "parser": {
+                "protocol_id": self.parser_protocol_id,
+                "identity_sha256": self.parser_identity_sha256,
+            },
+            "success_observation": {
+                "protocol_id": self.success_observation_protocol_id.value,
+                "identity_sha256": self.success_observation_identity_sha256,
+            },
+            "action_boundary": {
+                "protocol_id": self.action_boundary_protocol_id.value,
+                "identity_sha256": self.action_boundary_identity_sha256,
+            },
+        }
+
+    @property
+    def identity_sha256(self) -> str:
+        return _canonical_json_sha256(self.canonical_payload)
+
+
+def _policy_eval_parser_identity(
+    *,
+    evaluation_protocol: str,
+    run: PolicyE2ESmokeRunConfig,
+) -> tuple[str, str]:
+    if evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+        from tgvf_rl.policy.deepeyes_official_protocol import (
+            DEEPEYES_TOOL_NAME,
+            DEEPEYES_TOOL_PARSER,
+        )
+
+        protocol_id = "deepeyes-hermes-last-complete-crop-call-v1"
+        payload = {
+            "implementation": (
+                "tgvf_rl.policy.deepeyes_official_protocol.parse_hermes_crop_call"
+            ),
+            "upstream_parser": DEEPEYES_TOOL_PARSER,
+            "enabled_tool_names": [DEEPEYES_TOOL_NAME],
+            "multiple_complete_calls": "select_last",
+        }
+    else:
+        protocol_id = "strict-native-single-tool-call-v1"
+        payload = {
+            "implementation": "tgvf_rl.protocol.parser.StrictToolCallParser",
+            "enabled_tool_names": list(run.protocol.enabled_tool_names),
+            "tool_schema_sha256": run.protocol.tool_schema_sha256,
+            "complete_call_count": 1,
+            "trailing_assistant_text": "reject",
+        }
+    return protocol_id, _canonical_json_sha256(payload)
+
+
+def _policy_eval_action_boundary_identity(
+    *,
+    evaluation_protocol: str,
+    run: PolicyE2ESmokeRunConfig,
+    action_boundary_protocol_id: NativeActionBoundaryProtocolId,
+) -> tuple[NativeActionBoundaryProtocolId, str]:
+    sampling = run.policy.sampling
+    if evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+        payload: dict[str, object] = {
+            "dispatcher": (
+                "tgvf_rl.evaluation.policy_official_visible."
+                "OfficialVisiblePolicyEvaluator"
+            ),
+            "boundary_classifier": (
+                "tgvf_rl.protocol.action_boundary.classify_assistant_action_boundary"
+            ),
+            "tool_marker": "<tool_call>...</tool_call>",
+            "required_request_stop_strings": list(
+                getattr(sampling, "stop_strings", ()) or ()
+            ),
+            "required_request_stop_token_ids": list(
+                getattr(sampling, "stop_token_ids", ()) or ()
+            ),
+            "include_stop_str_in_output": bool(
+                getattr(sampling, "include_stop_str_in_output", False)
+            ),
+        }
+        if (
+            action_boundary_protocol_id
+            is NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1
+        ):
+            payload.update(
+                {
+                    "trailing_final_answer_precedence": "final_answer",
+                    "multiple_complete_calls": "execute_last",
+                    "malformed_tool_call_tags": "reject",
+                }
+            )
+        elif (
+            action_boundary_protocol_id
+            is NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+        ):
+            payload.update(
+                {
+                    "complete_call_count": 1,
+                    "terminal_tool_call_required": True,
+                    "trailing_assistant_text": "reject",
+                    "multiple_complete_calls": "reject",
+                    "malformed_tool_call_tags": "reject",
+                }
+            )
+        else:  # pragma: no cover - enum expansion requires an explicit contract
+            raise ValueError("official-visible action-boundary protocol is unsupported")
+    else:
+        if (
+            action_boundary_protocol_id
+            is not NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+        ):
+            raise ValueError("training-run evaluator requires strict boundary v2")
+        payload = {
+            "dispatcher": "tgvf_rl.environment.agent_loop.FrameworkNeutralAgentLoop",
+            "tool_marker_precedence": "any_marker_routes_strict_parser",
+            "multiple_complete_calls": "reject",
+            "trailing_assistant_text": "reject",
+            "cap_error_behavior": CapErrorBehavior.ONE_FINAL_ANSWER_TURN.value,
+            "decoding": _decoding_contract().canonical_payload,
+            "termination": _termination_contract(run).canonical_payload,
+        }
+    payload["protocol_id"] = action_boundary_protocol_id.value
+    return action_boundary_protocol_id, _canonical_json_sha256(payload)
+
+
+def _policy_eval_observation_identity(
+    contract: NativeSuccessObservationContract,
+) -> str:
+    from tgvf_rl.environment.native_appender import (
+        QWEN_NATIVE_IMAGE_PLACEHOLDER,
+        QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT_SHA256,
+        QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256,
+        QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX,
+        qwen_native_response_suffix,
+    )
+    from tgvf_rl.protocol.tool_prompts import (
+        IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT_SHA256,
+        QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER_SHA256,
+        TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE_SHA256,
+        TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE_SHA256,
+    )
+
+    if (
+        contract.protocol_id
+        is NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1
+    ):
+        return QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256
+    if (
+        contract.protocol_id
+        is NativeSuccessObservationProtocolId.LEGACY_CROP_GENERIC86_V1
+    ):
+        return QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT_SHA256
+    response_template_sha256 = {
+        NativeToolCapabilityProfile.TGVF_ONLY: (
+            TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE_SHA256
+        ),
+        NativeToolCapabilityProfile.CROP_ONLY: (
+            IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT_SHA256
+        ),
+        NativeToolCapabilityProfile.CROP_TGVF: (
+            TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE_SHA256
+        ),
+    }[contract.tool_profile]
+    payload = {
+        "protocol_id": contract.protocol_id.value,
+        "tool_profile": contract.tool_profile.value,
+        "assistant_dialect": contract.assistant_dialect.value,
+        "prefix_sha256": hashlib.sha256(
+            QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX.encode("utf-8")
+        ).hexdigest(),
+        "response_template_sha256": response_template_sha256,
+        "image_placeholder_sha256": hashlib.sha256(
+            QWEN_NATIVE_IMAGE_PLACEHOLDER.encode("utf-8")
+        ).hexdigest(),
+        "reasoning_reminder_sha256": (
+            QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER_SHA256
+            if contract.assistant_dialect is NativeAssistantDialect.QWEN3_VL_INSTRUCT
+            else None
+        ),
+        "suffix_sha256": hashlib.sha256(
+            qwen_native_response_suffix(contract.assistant_dialect).encode("utf-8")
+        ).hexdigest(),
+    }
+    return _canonical_json_sha256(payload)
+
+
+def effective_evaluation_image_max_pixels(
+    config: PolicyCoreDevConfig,
+    snapshot: PolicyEvaluationSubject,
+) -> int:
+    """Return the pixel cap actually consumed by the selected evaluator."""
+
+    if config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+        effective = snapshot.run.policy.image_max_pixels
+        if config.declared_image_max_pixels != effective:
+            raise ValueError(
+                "official-visible declared pixels differ from its effective runtime"
+            )
+        return effective
+    return config.declared_image_max_pixels
+
+
+def build_policy_eval_contract(
+    config: PolicyCoreDevConfig,
+    snapshot: PolicyEvaluationSubject,
+) -> PolicyEvalContract:
+    """Bind pixels, prompt, parser, observation bytes, and action boundary.
+
+    No observation renderer is inferred from a historical run schema.  The
+    evaluation config must name it, and validation against the actual tool
+    profile happens before any model or GPU runtime is constructed.
+    """
+
+    run = snapshot.run
+    dialect = native_assistant_dialect_for_model(run.model.model_name)
+    if config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+        from tgvf_rl.policy.deepeyes_official_protocol import (
+            DEEPEYES_OFFICIAL_PROTOCOL_SCHEMA,
+            VISUAL_PROMPT_IDENTITY,
+        )
+
+        observation_profile = NativeToolCapabilityProfile.CROP_ONLY
+        prompt_protocol_id = (
+            f"{DEEPEYES_OFFICIAL_PROTOCOL_SCHEMA}:{VISUAL_PROMPT_IDENTITY.version}"
+        )
+        prompt_identity_sha256 = VISUAL_PROMPT_IDENTITY.bundle_sha256
+    else:
+        observation_profile = run.protocol.tool_profile
+        prompt_protocol_id = "tgvf-native-run-prompt-v1"
+        prompt_identity_sha256 = run.protocol.prompt_sha256
+
+    observation_contract = NativeSuccessObservationContract(
+        protocol_id=config.success_observation_protocol_id,
+        tool_profile=observation_profile,
+        assistant_dialect=dialect,
+    )
+    parser_protocol_id, parser_identity_sha256 = _policy_eval_parser_identity(
+        evaluation_protocol=config.evaluation_protocol,
+        run=run,
+    )
+    action_protocol_id, action_identity_sha256 = _policy_eval_action_boundary_identity(
+        evaluation_protocol=config.evaluation_protocol,
+        run=run,
+        action_boundary_protocol_id=config.action_boundary_protocol_id,
+    )
+    effective_image_max_pixels = effective_evaluation_image_max_pixels(config, snapshot)
+    return PolicyEvalContract(
+        evaluation_protocol=config.evaluation_protocol,
+        training_image_max_pixels=run.policy.image_max_pixels,
+        declared_image_max_pixels=config.declared_image_max_pixels,
+        effective_image_max_pixels=effective_image_max_pixels,
+        prompt_protocol_id=prompt_protocol_id,
+        prompt_identity_sha256=prompt_identity_sha256,
+        parser_protocol_id=parser_protocol_id,
+        parser_identity_sha256=parser_identity_sha256,
+        success_observation_protocol_id=observation_contract.protocol_id,
+        success_observation_identity_sha256=(
+            _policy_eval_observation_identity(observation_contract)
+        ),
+        action_boundary_protocol_id=action_protocol_id,
+        action_boundary_identity_sha256=action_identity_sha256,
+    )
+
+
 def _base_equivalent_step_zero_lora(
     snapshot: PolicyEvaluationSnapshot,
 ) -> dict[str, object]:
@@ -1364,9 +2293,7 @@ def _evaluation_protocol_identity(
         "protocol_schema_version": DEEPEYES_OFFICIAL_PROTOCOL_SCHEMA,
         "source_repository": "https://github.com/Visual-Agent/DeepEyes",
         "source_commit": "11d20c6be32b2cf62c914e0c73a06db2f9a7e3a1",
-        "prompt_source_path": (
-            "verl/workers/agent/envs/mm_process_engine/prompt.py"
-        ),
+        "prompt_source_path": ("verl/workers/agent/envs/mm_process_engine/prompt.py"),
         "prompt_source_file_sha256": (
             "35ef1bae8da550827bc53e23751e64d4c8eecc76d9170ea5673aa2493628cc23"
         ),
@@ -1391,7 +2318,7 @@ def _evaluation_protocol_identity(
         "crop_source": "immutable_original_image",
         "native_pixels": True,
         "precomputed_image_embeds": False,
-        "image_max_pixels": snapshot.run.policy.image_max_pixels,
+        "image_max_pixels": effective_evaluation_image_max_pixels(config, snapshot),
         "native_image_limit_per_prompt": DEEPEYES_MAX_ACTIVE_PERCEPTION + 1,
         "observation_role": "user",
         "observation_envelope": (
@@ -1439,6 +2366,7 @@ def policy_evaluation_identity(
         if isinstance(snapshot, FullModelEvaluationSnapshot)
         else config.policy_config_path
     )
+    eval_contract = build_policy_eval_contract(config, snapshot)
     content: dict[str, object] = {
         "schema_version": POLICY_EVALUATION_IDENTITY_SCHEMA,
         "evaluation_id": config.evaluation_id,
@@ -1453,6 +2381,10 @@ def policy_evaluation_identity(
             "sha256": task_sha256,
             "task_count": config.expected_task_count,
             "single_image_count": config.expected_single_image_count,
+        },
+        "eval_contract": {
+            **eval_contract.canonical_payload,
+            "identity_sha256": eval_contract.identity_sha256,
         },
         "execution": {
             "world_size": len(config.gpu_ids),
@@ -1529,9 +2461,26 @@ class StandaloneTGVFVLLMManager:
         *,
         capture_hidden: bool,
         native_pixels: bool = False,
+        adapter_integrity_verifier: VLLMLoRAAdapterIntegrityVerifier | None = None,
     ) -> None:
+        if lora_request is None:
+            if adapter_integrity_verifier is not None:
+                raise ValueError(
+                    "full-model manager cannot receive a LoRA integrity verifier"
+                )
+        else:
+            if not isinstance(
+                adapter_integrity_verifier,
+                VLLMLoRAAdapterIntegrityVerifier,
+            ):
+                raise TypeError(
+                    "LoRA manager requires VLLMLoRAAdapterIntegrityVerifier"
+                )
+            adapter_integrity_verifier.assert_lora_request_binding(lora_request)
+            adapter_integrity_verifier.verify(phase="manager construction")
         self.engine = engine
         self.lora_request = lora_request
+        self.adapter_integrity_verifier = adapter_integrity_verifier
         self.capture_hidden = capture_hidden
         self.native_pixels = native_pixels
         self.turns: dict[str, _TurnRoute] = {}
@@ -1578,6 +2527,11 @@ class StandaloneTGVFVLLMManager:
         step = int(kwargs.pop("tgvf_expected_step"))
         if kwargs:
             raise TypeError(f"unsupported standalone vLLM arguments: {sorted(kwargs)}")
+        if self.adapter_integrity_verifier is not None:
+            self.adapter_integrity_verifier.assert_lora_request_binding(
+                self.lora_request
+            )
+            self.adapter_integrity_verifier.verify(phase="before engine.generate")
         backend_id = f"eval-{uuid4().hex}"
         maximum = sampling_params.get("max_tokens")
         if type(maximum) is not int or maximum <= 0:
@@ -1602,9 +2556,7 @@ class StandaloneTGVFVLLMManager:
             parameters["logprobs"] = 0
         final = None
         adapter_arguments = (
-            {}
-            if self.lora_request is None
-            else {"lora_request": self.lora_request}
+            {} if self.lora_request is None else {"lora_request": self.lora_request}
         )
         async for output in self.engine.generate(
             prompt,
@@ -1613,6 +2565,8 @@ class StandaloneTGVFVLLMManager:
             **adapter_arguments,
         ):
             final = output
+        if self.adapter_integrity_verifier is not None:
+            self.adapter_integrity_verifier.verify(phase="after engine.generate")
         if final is None or not final.finished or len(final.outputs) != 1:
             raise RuntimeError("standalone vLLM generation did not finish exactly once")
         completion = final.outputs[0]
@@ -1737,8 +2691,15 @@ async def build_standalone_manager(
         raise TypeError("snapshot must be a PolicyEvaluationSnapshot")
     run = snapshot.run
     adapter_root = materialize_vllm_lora_adapter(config, snapshot)
+    adapter_integrity_verifier = build_vllm_lora_adapter_integrity_verifier(
+        config,
+        snapshot,
+        adapter_root,
+    )
+    adapter_integrity_verifier.verify(phase="before engine construction")
     engine_args = AsyncEngineArgs(**_standalone_engine_kwargs(config, run))
     engine = AsyncLLM.from_engine_args(engine_args)
+    adapter_integrity_verifier.verify(phase="after engine construction")
     lora = LoRARequest(policy_lora_request_name(snapshot), 1, str(adapter_root))
     manager = StandaloneTGVFVLLMManager(
         engine,
@@ -1748,9 +2709,9 @@ async def build_standalone_manager(
             and run.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
         ),
         native_pixels=(
-            config.evaluation_protocol
-            == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+            config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
         ),
+        adapter_integrity_verifier=adapter_integrity_verifier,
     )
     return manager, engine, run
 
@@ -1869,6 +2830,12 @@ class PolicyCoreDevEvaluator:
         self.assistant_dialect = native_assistant_dialect_for_model(
             run.model.model_name
         )
+        self.eval_contract = build_policy_eval_contract(config, snapshot)
+        self.observation_contract = NativeSuccessObservationContract(
+            protocol_id=self.eval_contract.success_observation_protocol_id,
+            tool_profile=run.protocol.tool_profile,
+            assistant_dialect=self.assistant_dialect,
+        )
         self.renderer = NativeProtocolRenderer(
             processor,
             expected_tokenizer_length=run.model.tokenizer_length,
@@ -1935,7 +2902,7 @@ class PolicyCoreDevEvaluator:
             processor=self.processor,
             canonical_token_ids=rendered.token_ids,
             prompt_text=rendered.text,
-            image_max_pixels=self.run.policy.image_max_pixels,
+            image_max_pixels=self.eval_contract.effective_image_max_pixels,
             source_rgb=source_rgb,
         )
 
@@ -1959,7 +2926,7 @@ class PolicyCoreDevEvaluator:
         pixel_values, image_grid_thw = preprocess_qwen3_rgb(
             processor=self.processor,
             rgb=source_rgb,
-            image_max_pixels=self.run.policy.image_max_pixels,
+            image_max_pixels=self.eval_contract.effective_image_max_pixels,
         )
         source = await self.manager.materialize_source(
             request_id=trajectory_id,
@@ -1993,14 +2960,14 @@ class PolicyCoreDevEvaluator:
                 initial_prompt_token_ids=prompt_ids,
                 image_token_id=self.layout_builder.image_pad_id,
                 source=source,
-                image_max_pixels=self.run.policy.image_max_pixels,
+                image_max_pixels=self.eval_contract.effective_image_max_pixels,
             ),
         )
         appender = QwenNativeToolObservationAppender(
             tokenizer=self.layout_builder.tokenizer,
             registrar=registry,
             visual_token_count_resolver=_VisualTokenCountResolver(self.store),
-            assistant_dialect=self.assistant_dialect,
+            observation_contract=self.observation_contract,
         )
         if self.run.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
             tool_runtime = _RemoteTGVFFocusToolRuntime(
@@ -2013,6 +2980,7 @@ class PolicyCoreDevEvaluator:
                 execution_ledger=self.focus_ledger,
                 contextual_forward_identity=self.contextual_identity,
                 branch_merger_identities=self.branch_identities,
+                observation_contract=self.observation_contract,
             )
         elif self.run.protocol.tool_profile is NativeToolCapabilityProfile.CROP_ONLY:
             processor_identity = _artifact_identity(
@@ -2021,21 +2989,26 @@ class PolicyCoreDevEvaluator:
                 self.config.schema_version,
                 {
                     "model": self.run.model.revision_or_path,
-                    "max_pixels": self.run.policy.image_max_pixels,
+                    "max_pixels": self.eval_contract.effective_image_max_pixels,
                 },
             )
             layout_identity = _artifact_identity(
                 "policy-evaluation",
                 "qwen3-native-crop-layout",
                 self.config.schema_version,
-                {"model": self.run.model.revision_or_path},
+                {
+                    "model": self.run.model.revision_or_path,
+                    "success_observation_protocol_id": (
+                        self.observation_contract.protocol_id.value
+                    ),
+                },
             )
             materializer = _RemoteCropVisualMaterializer(
                 event_loop=asyncio.get_running_loop(),
                 server_client=self.manager,
                 processor=self.processor,
                 model_identity=self.run.model,
-                image_max_pixels=self.run.policy.image_max_pixels,
+                image_max_pixels=self.eval_contract.effective_image_max_pixels,
                 trajectory_id=trajectory_id,
                 behavior_policy=self.policy_version,
             )
@@ -2048,6 +3021,7 @@ class PolicyCoreDevEvaluator:
                 crop_layout_identity=layout_identity,
                 execution_ledger=self.crop_ledger,
                 coordinate_mapper=Qwen3VLAdapter(),
+                observation_contract=self.observation_contract,
             )
         else:
             raise RuntimeError("policy CoreDev supports the two trained atomic arms")
@@ -2403,16 +3377,24 @@ __all__ = [
     "CoreDevTask",
     "FULL_MODEL_EVALUATION_BACKEND",
     "LORA_ADAPTER_EVALUATION_BACKEND",
+    "POLICY_BENCHMARK_LEGACY_SCHEMA_V1",
     "POLICY_BENCHMARK_SCHEMA",
     "POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA",
+    "POLICY_COREDEV_LEGACY_SCHEMA_V1",
     "POLICY_COREDEV_SCHEMA",
+    "POLICY_EVAL_CONTRACT_SCHEMA",
     "POLICY_EVALUATION_IDENTITY_SCHEMA",
     "PolicyCoreDevConfig",
     "PolicyCoreDevEvaluator",
+    "PolicyEvalContract",
     "PolicyEvaluationSnapshot",
     "PolicyEvaluationSubject",
     "StandaloneTGVFVLLMManager",
+    "VLLMLoRAAdapterIntegrityVerifier",
+    "build_vllm_lora_adapter_integrity_verifier",
     "build_standalone_manager",
+    "build_policy_eval_contract",
+    "effective_evaluation_image_max_pixels",
     "freeze_policy_evaluation_snapshot",
     "frozen_full_model_state_root",
     "frozen_policy_state_root",

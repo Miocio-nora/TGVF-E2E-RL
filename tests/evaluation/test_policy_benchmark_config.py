@@ -9,6 +9,11 @@ import pytest
 
 from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.evaluation import policy_benchmark_config as implementation
+from tgvf_rl.protocol import (
+    NativeActionBoundaryProtocolId,
+    NativeSuccessObservationProtocolId,
+    NativeToolCapabilityProfile,
+)
 
 
 def test_config_materializer_binds_exact_pointer_and_task_manifest(
@@ -21,7 +26,12 @@ def test_config_materializer_binds_exact_pointer_and_task_manifest(
     policy_config.write_text("fixture\n", encoding="utf-8")
     tasks = tmp_path / "tasks.jsonl"
     tasks.write_text("{}\n", encoding="utf-8")
-    run = SimpleNamespace(run_id="PRL-11", identity_sha256="a" * 64)
+    run = SimpleNamespace(
+        run_id="PRL-11",
+        identity_sha256="a" * 64,
+        model=SimpleNamespace(model_name="Qwen3-VL-8B-Instruct"),
+        protocol=SimpleNamespace(tool_profile=NativeToolCapabilityProfile.TGVF_ONLY),
+    )
     snapshot = SimpleNamespace(
         pointer_file_sha256="b" * 64,
         run_identity_sha256="a" * 64,
@@ -54,6 +64,13 @@ def test_config_materializer_binds_exact_pointer_and_task_manifest(
         expected_single_image_count=591,
         output_root=tmp_path / "evaluation-step8",
         config_path=destination,
+        declared_image_max_pixels=262144,
+        success_observation_protocol_id=(
+            NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1
+        ),
+        action_boundary_protocol_id=(
+            NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+        ),
     )
 
     assert payload["expected_optimizer_step"] == 8
@@ -61,13 +78,21 @@ def test_config_materializer_binds_exact_pointer_and_task_manifest(
     assert payload["expected_policy_run_identity_sha256"] == "a" * 64
     assert payload["lora_pointer_sha256"] == "b" * 64
     assert payload["expected_policy_weights_sha256"] == "c" * 64
+    assert payload["success_observation_protocol_id"] == (
+        NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1.value
+    )
+    assert payload["action_boundary_protocol_id"] == (
+        NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2.value
+    )
     assert (
         payload["task_manifest_sha256"]
         == hashlib.sha256(tasks.read_bytes()).hexdigest()
     )
     assert observed_task_binding["verify_image_contents"] is True
     assert json.loads(destination.read_text()) == payload
-    frozen_policy_config = tmp_path / "evaluation-step8/runtime/frozen-policy-config.toml"
+    frozen_policy_config = (
+        tmp_path / "evaluation-step8/runtime/frozen-policy-config.toml"
+    )
     assert payload["policy_config_path"] == str(frozen_policy_config)
     assert frozen_policy_config.read_bytes() == policy_config.read_bytes()
 
@@ -82,11 +107,27 @@ def test_config_materializer_binds_exact_pointer_and_task_manifest(
             expected_single_image_count=591,
             output_root=tmp_path / "evaluation-step8",
             config_path=destination,
+            declared_image_max_pixels=262144,
+            success_observation_protocol_id=(
+                NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1
+            ),
+            action_boundary_protocol_id=(
+                NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+            ),
         )
 
 
+@pytest.mark.parametrize(
+    "action_boundary_protocol_id",
+    (
+        NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1,
+        NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2,
+    ),
+)
 def test_full_model_config_materializer_binds_manifest_receipt_and_identity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    action_boundary_protocol_id: NativeActionBoundaryProtocolId,
 ) -> None:
     policy_config = tmp_path / "policy.toml"
     policy_config.write_text("full-model-run\n", encoding="utf-8")
@@ -101,6 +142,9 @@ def test_full_model_config_materializer_binds_manifest_receipt_and_identity(
         manifest=SimpleNamespace(
             identity_sha256="d" * 64,
             run_contract_file_sha256=policy_config_sha256,
+        ),
+        run=SimpleNamespace(
+            policy=SimpleNamespace(image_max_pixels=262144),
         ),
         run_identity_sha256="a" * 64,
         policy_version=PolicyVersion("PRL-13-A", 8, "c" * 64),
@@ -131,6 +175,8 @@ def test_full_model_config_materializer_binds_manifest_receipt_and_identity(
         expected_single_image_count=2240,
         output_root=output_root,
         config_path=destination,
+        declared_image_max_pixels=262144,
+        action_boundary_protocol_id=action_boundary_protocol_id,
         gpu_ids=(4, 5, 6, 7),
     )
 
@@ -139,13 +185,21 @@ def test_full_model_config_materializer_binds_manifest_receipt_and_identity(
     assert payload["expected_optimizer_step"] == 8
     assert payload["expected_policy_run_id"] == "PRL-13-A"
     assert payload["required_snapshot_identity_sha256"] == "d" * 64
+    assert payload["success_observation_protocol_id"] == (
+        NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1.value
+    )
+    assert payload["action_boundary_protocol_id"] == (
+        action_boundary_protocol_id.value
+    )
     assert payload["gpu_ids"] == [4, 5, 6, 7]
-    assert payload["full_model_snapshot_manifest_sha256"] == hashlib.sha256(
-        snapshot_manifest.read_bytes()
-    ).hexdigest()
-    assert payload["full_model_materialization_receipt_sha256"] == hashlib.sha256(
-        receipt.read_bytes()
-    ).hexdigest()
+    assert (
+        payload["full_model_snapshot_manifest_sha256"]
+        == hashlib.sha256(snapshot_manifest.read_bytes()).hexdigest()
+    )
+    assert (
+        payload["full_model_materialization_receipt_sha256"]
+        == hashlib.sha256(receipt.read_bytes()).hexdigest()
+    )
     assert observed_task_binding["require_explicit_sample_ids"] is True
     assert observed_task_binding["require_image_identities"] is True
     assert json.loads(destination.read_text(encoding="utf-8")) == payload
@@ -165,4 +219,6 @@ def test_full_model_config_materializer_binds_manifest_receipt_and_identity(
             expected_single_image_count=2240,
             output_root=tmp_path / "evaluation-step20",
             config_path=tmp_path / "configs/step20.json",
+            declared_image_max_pixels=262144,
+            action_boundary_protocol_id=action_boundary_protocol_id,
         )

@@ -10,7 +10,11 @@ import pytest
 import torch
 
 from tgvf_rl.contracts.identity import ModelIdentity, PolicyVersion
-from tgvf_rl.evaluation.policy_coredev import CoreDevTask
+from tgvf_rl.evaluation import policy_official_visible
+from tgvf_rl.evaluation.policy_coredev import (
+    DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+    CoreDevTask,
+)
 from tgvf_rl.evaluation.policy_official_visible import (
     OfficialVisiblePolicyEvaluator,
     normalize_official_visible_crop_box,
@@ -20,6 +24,11 @@ from tgvf_rl.evaluation.policy_official_visible import (
 )
 from tgvf_rl.framework.verl.native_crop_tool import normalize_native_crop_box
 from tgvf_rl.policy.deepeyes_official_protocol import USER_PROMPT_V2
+from tgvf_rl.protocol.action_boundary import NativeActionBoundaryProtocolId
+from tgvf_rl.qwen.crop_coordinates import (
+    QWEN3_CROP_CONVERSION_VERSION,
+    QWEN3_CROP_COORDINATE_SPACE,
+)
 
 
 class _Tokenizer:
@@ -111,6 +120,84 @@ class _Processor:
         }
 
 
+class _BoundaryManager:
+    def __init__(self, token_ids: list[int]) -> None:
+        self.token_ids = token_ids
+        self.calls = 0
+        self.released: list[str] = []
+
+    async def generate(self, **_kwargs: object) -> object:
+        token_id = self.token_ids[self.calls]
+        self.calls += 1
+        return SimpleNamespace(
+            token_ids=[token_id],
+            log_probs=[-0.1],
+            extra_fields={"tgvf_vllm_finish_reason": "stop"},
+        )
+
+    async def release_trajectory(self, request_id: str) -> None:
+        self.released.append(request_id)
+
+
+def _boundary_evaluator(
+    *,
+    completions: list[str],
+    protocol_id: NativeActionBoundaryProtocolId,
+) -> tuple[OfficialVisiblePolicyEvaluator, _BoundaryManager]:
+    processor = _Processor()
+    token_ids = list(range(401, 401 + len(completions)))
+    processor.tokenizer.decoded = dict(zip(token_ids, completions, strict=True))
+    manager = _BoundaryManager(token_ids)
+    evaluator = OfficialVisiblePolicyEvaluator.__new__(OfficialVisiblePolicyEvaluator)
+    evaluator.config = SimpleNamespace(
+        evaluation_id="eval",
+        max_model_len=32768,
+        uses_legacy_coredev_manifest=False,
+    )
+    evaluator.run = SimpleNamespace(
+        model=ModelIdentity(
+            family="qwen3_vl",
+            model_name="Qwen3-VL-8B-Instruct",
+            revision_or_path="fixture",
+            tokenizer_length=123,
+            chat_template_sha256="b" * 64,
+        ),
+        policy=SimpleNamespace(
+            image_max_pixels=1_003_520,
+            sampling=SimpleNamespace(
+                remaining_response_tokens=lambda consumed: 100 - consumed,
+                as_vllm_parameters=lambda max_tokens: {
+                    "max_tokens": max_tokens,
+                    "logprobs": True,
+                },
+            ),
+        ),
+        rollout_rng=SimpleNamespace(master_seed=42),
+    )
+    evaluator.manager = manager
+    evaluator.processor = processor
+    evaluator.policy_version = PolicyVersion("run", 0, "a" * 64)
+    evaluator.tokenizer = processor.tokenizer
+    evaluator.action_boundary_protocol_id = protocol_id
+    return evaluator, manager
+
+
+def _boundary_task(tmp_path: Path) -> CoreDevTask:
+    image_path = tmp_path / "boundary-source.png"
+    Image.new("RGB", (100, 80), (10, 20, 30)).save(image_path)
+    return CoreDevTask(
+        ordinal=0,
+        dataset="fixture",
+        row_number=0,
+        index="sample",
+        sample_id="sample",
+        question="Which option?",
+        image_paths=(str(image_path),),
+        image_sha256s=(hashlib.sha256(image_path.read_bytes()).hexdigest(),),
+        image_dimensions=((100, 80),),
+    )
+
+
 def test_official_crop_maps_qwen3_grid_on_non_square_source() -> None:
     box = normalize_official_visible_crop_box(
         [75, 306, 435, 710], image_width=500, image_height=333
@@ -189,6 +276,70 @@ def test_static_processor_proof_includes_native_visual_expansion() -> None:
     assert (
         proof["continuation_expanded_prompt_token_count"]
         > proof["continuation_prompt_token_count"]
+    )
+
+
+def test_evaluator_requires_action_boundary_identity_to_match_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = object()
+    snapshot = SimpleNamespace(
+        run=run,
+        policy_version=PolicyVersion("run", 0, "a" * 64),
+    )
+    config = SimpleNamespace(
+        evaluation_protocol=DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+        action_boundary_protocol_id=(
+            NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1
+        ),
+    )
+    identity = {
+        "protocol": {
+            "profile": DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+            "native_pixels": True,
+            "precomputed_image_embeds": False,
+            "crop_coordinate_space": QWEN3_CROP_COORDINATE_SPACE,
+            "crop_coordinate_conversion_version": QWEN3_CROP_CONVERSION_VERSION,
+        },
+        "eval_contract": {
+            "action_boundary": {
+                "protocol_id": (
+                    NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2.value
+                )
+            }
+        },
+    }
+    monkeypatch.setattr(
+        policy_official_visible,
+        "policy_evaluation_identity",
+        lambda _config, _snapshot: identity,
+    )
+    manager = SimpleNamespace(native_pixels=True, capture_hidden=False)
+    processor = SimpleNamespace(tokenizer=SimpleNamespace(decode=lambda *_a: ""))
+
+    with pytest.raises(ValueError, match="differs from config"):
+        OfficialVisiblePolicyEvaluator(
+            config=config,
+            run=run,
+            manager=manager,
+            processor=processor,
+            snapshot=snapshot,
+            evaluation_identity=identity,
+        )
+
+    identity["eval_contract"]["action_boundary"]["protocol_id"] = (
+        NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1.value
+    )
+    evaluator = OfficialVisiblePolicyEvaluator(
+        config=config,
+        run=run,
+        manager=manager,
+        processor=processor,
+        snapshot=snapshot,
+        evaluation_identity=identity,
+    )
+    assert evaluator.action_boundary_protocol_id is (
+        NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1
     )
 
 
@@ -272,6 +423,9 @@ def test_evaluator_returns_native_source_pixel_crop_audit(tmp_path: Path) -> Non
     evaluator.processor = processor
     evaluator.policy_version = policy_version
     evaluator.tokenizer = processor.tokenizer
+    evaluator.action_boundary_protocol_id = (
+        NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1
+    )
 
     trajectory = asyncio.run(evaluator.evaluate(task))
 
@@ -302,3 +456,123 @@ def test_evaluator_returns_native_source_pixel_crop_audit(tmp_path: Path) -> Non
     assert locally_limited.stop == "context_limit"
     assert locally_limited.final_answer is None
     assert manager.calls == 0
+
+
+def test_legacy_boundary_preserves_answer_over_action(tmp_path: Path) -> None:
+    call = (
+        '<tool_call>{"name":"image_zoom_in_tool",'
+        '"arguments":{"bbox_2d":[0,0,500,500]}}</tool_call>'
+    )
+    evaluator, manager = _boundary_evaluator(
+        completions=[call + " B"],
+        protocol_id=(NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1),
+    )
+
+    trajectory = asyncio.run(evaluator.evaluate(_boundary_task(tmp_path)))
+
+    assert trajectory.stop == "final_answer"
+    assert trajectory.final_answer == "B"
+    assert trajectory.tool_calls == ()
+    assert manager.calls == 1
+    assert trajectory.assistant_turns[0]["action_boundary_protocol_id"] == (
+        NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1.value
+    )
+    assert trajectory.assistant_turns[0]["action_boundary_disposition"] == (
+        "direct_final"
+    )
+
+
+def test_legacy_boundary_preserves_last_call_execution(tmp_path: Path) -> None:
+    first = (
+        '<tool_call>{"name":"image_zoom_in_tool",'
+        '"arguments":{"bbox_2d":[0,0,400,500]}}</tool_call>'
+    )
+    second = (
+        '<tool_call>{"name":"image_zoom_in_tool",'
+        '"arguments":{"bbox_2d":[0,0,800,800]}}</tool_call>'
+    )
+    evaluator, manager = _boundary_evaluator(
+        completions=[first + second, "A"],
+        protocol_id=(NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1),
+    )
+
+    trajectory = asyncio.run(evaluator.evaluate(_boundary_task(tmp_path)))
+
+    assert trajectory.stop == "final_answer"
+    assert trajectory.final_answer == "A"
+    assert manager.calls == 2
+    assert len(trajectory.tool_calls) == 1
+    assert trajectory.tool_calls[0]["bbox_2d"] == [0, 0, 800, 800]
+
+
+def test_strict_boundary_executes_one_terminal_call(tmp_path: Path) -> None:
+    call = (
+        '<think>inspect</think><tool_call>{"name":"image_zoom_in_tool",'
+        '"arguments":{"bbox_2d":[0,0,500,500]}}</tool_call>\n'
+    )
+    evaluator, manager = _boundary_evaluator(
+        completions=[call, "A"],
+        protocol_id=(
+            NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+        ),
+    )
+
+    trajectory = asyncio.run(evaluator.evaluate(_boundary_task(tmp_path)))
+
+    assert trajectory.stop == "final_answer"
+    assert trajectory.final_answer == "A"
+    assert manager.calls == 2
+    assert len(trajectory.tool_calls) == 1
+    assert trajectory.assistant_turns[0]["action_boundary_disposition"] == (
+        "tool_action"
+    )
+
+
+@pytest.mark.parametrize(
+    ("completion", "violation_code"),
+    (
+        (
+            '<tool_call>{"name":"image_zoom_in_tool",'
+            '"arguments":{"bbox_2d":[0,0,500,500]}}</tool_call> A',
+            "tool_call_terminal_suffix",
+        ),
+        (
+            '<tool_call>{"name":"image_zoom_in_tool",'
+            '"arguments":{"bbox_2d":[0,0,500,500]}}</tool_call>'
+            '<tool_call>{"name":"image_zoom_in_tool",'
+            '"arguments":{"bbox_2d":[0,0,600,600]}}</tool_call>',
+            "multiple_tool_calls",
+        ),
+        (
+            '<tool_call>{"name":"image_zoom_in_tool",'
+            '"arguments":{"bbox_2d":[0,0,500,500]}}',
+            "malformed_tool_call_tags",
+        ),
+    ),
+)
+def test_strict_boundary_violations_fail_closed(
+    tmp_path: Path,
+    completion: str,
+    violation_code: str,
+) -> None:
+    evaluator, manager = _boundary_evaluator(
+        completions=[completion],
+        protocol_id=(
+            NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+        ),
+    )
+
+    trajectory = asyncio.run(evaluator.evaluate(_boundary_task(tmp_path)))
+
+    assert trajectory.stop == "malformed_action"
+    assert trajectory.final_answer is None
+    assert trajectory.tool_calls == ()
+    assert manager.calls == 1
+    assert trajectory.tool_errors[-1]["code"] == violation_code
+    assert trajectory.tool_errors[-1]["recoverable"] is False
+    assert trajectory.assistant_turns[0]["action_boundary_disposition"] == (
+        "invalid_action"
+    )
+    assert trajectory.assistant_turns[0]["action_boundary_violation_code"] == (
+        violation_code
+    )

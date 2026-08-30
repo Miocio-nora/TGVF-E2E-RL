@@ -22,6 +22,7 @@ import asyncio
 from collections.abc import Callable, Iterable, Iterator, Mapping
 import concurrent.futures
 from dataclasses import dataclass
+import fcntl
 from functools import wraps
 import hashlib
 import hmac
@@ -30,6 +31,7 @@ import inspect
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 from typing import Any, TypeVar
 from uuid import uuid4
@@ -67,7 +69,14 @@ class PolicyWeightSyncState:
         if not self.run_id:
             raise ValueError("TGVF_POLICY_RUN_ID must be non-empty")
         _require_sha256(self.run_identity_sha256, "TGVF_POLICY_RUN_IDENTITY_SHA256")
-        object.__setattr__(self, "directory", directory.resolve())
+        # Preserve the lexical root.  Resolving here would silently accept a
+        # symlinked state directory before the secure loader gets a chance to
+        # open the root itself with O_NOFOLLOW.
+        object.__setattr__(
+            self,
+            "directory",
+            Path(os.path.abspath(os.fspath(directory))),
+        )
 
     @classmethod
     def from_environment(
@@ -143,16 +152,34 @@ class PolicyLoRASnapshot:
     policy_version: PolicyVersion
     run_identity_sha256: str
     request_sha256: str
+    pointer_file: Path
+    pointer_file_sha256: str
+    pointer_bytes: bytes
     tensor_file: Path
     tensor_file_sha256: str
+    tensor_bytes: bytes
     manifest_file: Path
+    manifest_file_sha256: str
+    manifest_bytes: bytes
     tensors: Mapping[str, torch.Tensor]
 
     def __post_init__(self) -> None:
         _require_sha256(self.run_identity_sha256, "run identity")
         _require_sha256(self.request_sha256, "request identity")
+        _require_sha256(self.pointer_file_sha256, "pointer file digest")
         _require_sha256(self.tensor_file_sha256, "safetensors file digest")
-        if not self.tensor_file.is_absolute() or not self.manifest_file.is_absolute():
+        _require_sha256(self.manifest_file_sha256, "manifest file digest")
+        for owner, payload in (
+            ("pointer", self.pointer_bytes),
+            ("manifest", self.manifest_bytes),
+            ("tensor", self.tensor_bytes),
+        ):
+            if not isinstance(payload, bytes) or not payload:
+                raise ValueError(f"LoRA snapshot {owner} bytes must be non-empty")
+        if not all(
+            path.is_absolute()
+            for path in (self.pointer_file, self.tensor_file, self.manifest_file)
+        ):
             raise ValueError("LoRA snapshot paths must be absolute")
 
 
@@ -262,92 +289,147 @@ def load_latest_lora_snapshot(
 ) -> PolicyLoRASnapshot:
     """Load and verify the latest pointer, manifest, safetensors, and tensors."""
 
+    return load_lora_snapshot_pointer(
+        state,
+        pointer_path=state.latest_path,
+        expected_optimizer_step=expected_optimizer_step,
+        expected_request_sha256=expected_request_sha256,
+    )
+
+
+def load_lora_snapshot_pointer(
+    state: PolicyWeightSyncState,
+    *,
+    pointer_path: str | Path,
+    expected_pointer_file_sha256: str | None = None,
+    expected_optimizer_step: int | None = None,
+    expected_request_sha256: str | None = None,
+) -> PolicyLoRASnapshot:
+    """Strictly load one fixed pointer and its complete immutable closure."""
+
     if not isinstance(state, PolicyWeightSyncState):
         raise TypeError("state must be PolicyWeightSyncState")
+    pointer = Path(os.path.abspath(os.fspath(pointer_path)))
+    pointer_owner = (
+        "latest LoRA pointer" if pointer == state.latest_path else "LoRA pointer"
+    )
+    if not pointer.is_absolute():
+        raise ValueError("LoRA pointer path must be absolute")
+    if pointer.parent != state.directory:
+        raise ReplayMismatchError("LoRA pointer is outside its state directory")
+    if expected_pointer_file_sha256 is not None:
+        _require_sha256(
+            expected_pointer_file_sha256, "expected LoRA pointer file digest"
+        )
     if expected_optimizer_step is not None:
         _nonnegative_step(expected_optimizer_step)
     if expected_request_sha256 is not None:
         _require_sha256(expected_request_sha256, "expected request identity")
-    latest = _strict_json_mapping(
-        state.latest_path,
-        {
-            "schema_version",
-            "run_id",
-            "run_identity_sha256",
-            "optimizer_step",
-            "request_sha256",
-            "weights_sha256",
-            "manifest_file",
-            "manifest_file_sha256",
-            "integrity_sha256",
-        },
-        "latest LoRA pointer",
-    )
-    _verify_integrity_field(latest, "integrity_sha256", "latest LoRA pointer")
-    if latest["schema_version"] != POLICY_LORA_LATEST_SCHEMA:
-        raise ReplayMismatchError("latest LoRA pointer schema differs")
-    _require_run_identity(
-        state,
-        _required_text(latest, "run_id"),
-        _required_sha(latest, "run_identity_sha256"),
-    )
-    step = _required_step(latest, "optimizer_step")
-    request_sha256 = _required_sha(latest, "request_sha256")
-    weights_sha256 = _required_sha(latest, "weights_sha256")
-    if expected_optimizer_step is not None and step != expected_optimizer_step:
-        raise IdentityMismatchError("latest LoRA snapshot optimizer step differs")
-    if expected_request_sha256 is not None and not hmac.compare_digest(
-        request_sha256, expected_request_sha256
-    ):
-        raise IdentityMismatchError("latest LoRA snapshot request identity differs")
+    root_descriptor = _open_snapshot_root(state.directory)
+    try:
+        pointer_bytes = _read_relative_file_bytes_at(
+            root_descriptor,
+            pointer.name,
+            pointer_owner,
+        )
+        pointer_file_sha256 = _sha256_bytes(pointer_bytes)
+        if expected_pointer_file_sha256 is not None and not hmac.compare_digest(
+            pointer_file_sha256, expected_pointer_file_sha256
+        ):
+            raise ReplayMismatchError("LoRA pointer file digest mismatch")
+        latest = _strict_json_bytes_mapping(
+            pointer_bytes,
+            {
+                "schema_version",
+                "run_id",
+                "run_identity_sha256",
+                "optimizer_step",
+                "request_sha256",
+                "weights_sha256",
+                "manifest_file",
+                "manifest_file_sha256",
+                "integrity_sha256",
+            },
+            "LoRA pointer",
+        )
+        _verify_integrity_field(latest, "integrity_sha256", "LoRA pointer")
+        if latest["schema_version"] != POLICY_LORA_LATEST_SCHEMA:
+            raise ReplayMismatchError("LoRA pointer schema differs")
+        _require_run_identity(
+            state,
+            _required_text(latest, "run_id"),
+            _required_sha(latest, "run_identity_sha256"),
+        )
+        step = _required_step(latest, "optimizer_step")
+        request_sha256 = _required_sha(latest, "request_sha256")
+        weights_sha256 = _required_sha(latest, "weights_sha256")
+        if expected_optimizer_step is not None and step != expected_optimizer_step:
+            raise IdentityMismatchError("latest LoRA snapshot optimizer step differs")
+        if expected_request_sha256 is not None and not hmac.compare_digest(
+            request_sha256, expected_request_sha256
+        ):
+            raise IdentityMismatchError("latest LoRA snapshot request identity differs")
 
-    manifest_path = _safe_relative_path(
-        state.directory, _required_text(latest, "manifest_file")
-    )
-    manifest_file_sha256 = _required_sha(latest, "manifest_file_sha256")
-    manifest_bytes = _read_bytes(manifest_path, "LoRA manifest")
-    if not hmac.compare_digest(_sha256_bytes(manifest_bytes), manifest_file_sha256):
-        raise ReplayMismatchError("LoRA manifest file digest mismatch")
-    manifest = _strict_json_bytes_mapping(
-        manifest_bytes,
-        {
-            "schema_version",
-            "run_id",
-            "run_identity_sha256",
-            "optimizer_step",
-            "request_sha256",
-            "weights_sha256",
-            "tensor_file",
-            "tensor_file_sha256",
-            "tensor_names",
-            "tensor_metadata",
-            "integrity_sha256",
-        },
-        "LoRA manifest",
-    )
-    _verify_integrity_field(manifest, "integrity_sha256", "LoRA manifest")
-    if manifest["schema_version"] != POLICY_LORA_SNAPSHOT_SCHEMA:
-        raise ReplayMismatchError("LoRA manifest schema differs")
-    _require_run_identity(
-        state,
-        _required_text(manifest, "run_id"),
-        _required_sha(manifest, "run_identity_sha256"),
-    )
-    for field, expected in (
-        ("optimizer_step", step),
-        ("request_sha256", request_sha256),
-        ("weights_sha256", weights_sha256),
-    ):
-        if manifest[field] != expected:
-            raise ReplayMismatchError(f"LoRA manifest {field} differs from latest")
+        manifest_relative = _safe_snapshot_relative_path(
+            _required_text(latest, "manifest_file")
+        )
+        manifest_path = state.directory / manifest_relative
+        manifest_file_sha256 = _required_sha(latest, "manifest_file_sha256")
+        manifest_bytes = _read_relative_file_bytes_at(
+            root_descriptor,
+            manifest_relative.as_posix(),
+            "LoRA manifest",
+        )
+        if not hmac.compare_digest(_sha256_bytes(manifest_bytes), manifest_file_sha256):
+            raise ReplayMismatchError("LoRA manifest file digest mismatch")
+        manifest = _strict_json_bytes_mapping(
+            manifest_bytes,
+            {
+                "schema_version",
+                "run_id",
+                "run_identity_sha256",
+                "optimizer_step",
+                "request_sha256",
+                "weights_sha256",
+                "tensor_file",
+                "tensor_file_sha256",
+                "tensor_names",
+                "tensor_metadata",
+                "integrity_sha256",
+            },
+            "LoRA manifest",
+        )
+        _verify_integrity_field(manifest, "integrity_sha256", "LoRA manifest")
+        if manifest["schema_version"] != POLICY_LORA_SNAPSHOT_SCHEMA:
+            raise ReplayMismatchError("LoRA manifest schema differs")
+        _require_run_identity(
+            state,
+            _required_text(manifest, "run_id"),
+            _required_sha(manifest, "run_identity_sha256"),
+        )
+        for field, expected in (
+            ("optimizer_step", step),
+            ("request_sha256", request_sha256),
+            ("weights_sha256", weights_sha256),
+        ):
+            if manifest[field] != expected:
+                raise ReplayMismatchError(f"LoRA manifest {field} differs from latest")
 
-    tensor_path = _safe_relative_path(
-        state.directory, _required_text(manifest, "tensor_file")
-    )
-    tensor_file_sha256 = _required_sha(manifest, "tensor_file_sha256")
-    tensor_bytes = _read_bytes(tensor_path, "LoRA safetensors")
-    if not hmac.compare_digest(_sha256_bytes(tensor_bytes), tensor_file_sha256):
-        raise ReplayMismatchError("LoRA safetensors file digest mismatch")
+        tensor_relative = _safe_snapshot_relative_path(
+            _required_text(manifest, "tensor_file")
+        )
+        tensor_path = state.directory / tensor_relative
+        tensor_file_sha256 = _required_sha(manifest, "tensor_file_sha256")
+        tensor_bytes = _read_relative_file_bytes_at(
+            root_descriptor,
+            tensor_relative.as_posix(),
+            "LoRA safetensors",
+        )
+        if not hmac.compare_digest(_sha256_bytes(tensor_bytes), tensor_file_sha256):
+            raise ReplayMismatchError("LoRA safetensors file digest mismatch")
+        _assert_snapshot_root_path_binding(state.directory, root_descriptor)
+    finally:
+        os.close(root_descriptor)
     tensors = _load_safetensors_bytes(tensor_bytes)
     actual_weights_sha256 = lora_parameter_mapping_sha256(tensors)
     if not hmac.compare_digest(actual_weights_sha256, weights_sha256):
@@ -358,9 +440,15 @@ def load_latest_lora_snapshot(
         policy_version=version,
         run_identity_sha256=state.run_identity_sha256,
         request_sha256=request_sha256,
+        pointer_file=pointer,
+        pointer_file_sha256=pointer_file_sha256,
+        pointer_bytes=pointer_bytes,
         tensor_file=tensor_path,
         tensor_file_sha256=tensor_file_sha256,
+        tensor_bytes=tensor_bytes,
         manifest_file=manifest_path,
+        manifest_file_sha256=manifest_file_sha256,
+        manifest_bytes=manifest_bytes,
         tensors=tensors,
     )
 
@@ -625,7 +713,9 @@ def _load_safetensors_bytes(value: bytes) -> dict[str, torch.Tensor]:
     try:
         return _normalized_tensor_mapping(tensors)
     except (TypeError, ValueError) as error:
-        raise ReplayMismatchError("LoRA safetensors tensor mapping is invalid") from error
+        raise ReplayMismatchError(
+            "LoRA safetensors tensor mapping is invalid"
+        ) from error
 
 
 def _distributed_identity(
@@ -635,9 +725,17 @@ def _distributed_identity(
     environment: Mapping[str, str] | None,
 ) -> tuple[int, int]:
     values = os.environ if environment is None else environment
-    if rank is None and torch.distributed.is_available() and torch.distributed.is_initialized():
+    if (
+        rank is None
+        and torch.distributed.is_available()
+        and torch.distributed.is_initialized()
+    ):
         rank = torch.distributed.get_rank()
-    if world_size is None and torch.distributed.is_available() and torch.distributed.is_initialized():
+    if (
+        world_size is None
+        and torch.distributed.is_available()
+        and torch.distributed.is_initialized()
+    ):
         world_size = torch.distributed.get_world_size()
     try:
         if rank is None:
@@ -645,7 +743,9 @@ def _distributed_identity(
         if world_size is None:
             world_size = int(values["WORLD_SIZE"])
     except (KeyError, TypeError, ValueError) as error:
-        raise RuntimeError("LoRA publication requires explicit distributed identity") from error
+        raise RuntimeError(
+            "LoRA publication requires explicit distributed identity"
+        ) from error
     if type(rank) is not int or type(world_size) is not int:
         raise TypeError("rank and world_size must be integers")
     if world_size <= 0 or rank < 0 or rank >= world_size:
@@ -661,9 +761,13 @@ def _load_pinned_manager_class() -> type[object]:
 
     verify_verl_distribution_identity(expected_commit=SPIKE_CANDIDATE_VERL_COMMIT)
     try:
-        manager = getattr(import_module("verl.checkpoint_engine"), "CheckpointEngineManager")
+        manager = getattr(
+            import_module("verl.checkpoint_engine"), "CheckpointEngineManager"
+        )
     except (ImportError, AttributeError) as error:
-        raise RuntimeError("pinned veRL CheckpointEngineManager is unavailable") from error
+        raise RuntimeError(
+            "pinned veRL CheckpointEngineManager is unavailable"
+        ) from error
     if not isinstance(manager, type):
         raise TypeError("pinned veRL CheckpointEngineManager is not a class")
     return manager
@@ -709,12 +813,152 @@ def _atomic_replace_bytes(path: Path, value: bytes) -> None:
 
 
 def _write_immutable_bytes(path: Path, value: bytes, *, owner: str) -> None:
-    if path.exists():
-        observed = _read_bytes(path, owner)
-        if observed != value:
+    """Publish one immutable file without replacing a concurrent winner."""
+
+    directory_descriptor = _open_snapshot_root(path.parent, create_missing=True)
+    temporary_name = f".{path.name}.{uuid4().hex}.tmp"
+    temporary_descriptor: int | None = None
+    temporary_exists = False
+    lock_acquired = False
+    active_error: BaseException | None = None
+    try:
+        try:
+            fcntl.flock(directory_descriptor, fcntl.LOCK_EX)
+            lock_acquired = True
+            temporary_descriptor = os.open(
+                temporary_name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=directory_descriptor,
+            )
+            temporary_exists = True
+            remaining = memoryview(value)
+            while remaining:
+                written = os.write(temporary_descriptor, remaining)
+                if written <= 0:
+                    raise OSError(f"short write while publishing {owner}")
+                remaining = remaining[written:]
+            os.fchmod(temporary_descriptor, 0o600)
+            os.fsync(temporary_descriptor)
+            os.close(temporary_descriptor)
+            temporary_descriptor = None
+            try:
+                os.link(
+                    temporary_name,
+                    path.name,
+                    src_dir_fd=directory_descriptor,
+                    dst_dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileExistsError:
+                _assert_immutable_file_equals_at(
+                    directory_descriptor,
+                    path.name,
+                    value,
+                    owner=owner,
+                )
+            os.unlink(temporary_name, dir_fd=directory_descriptor)
+            temporary_exists = False
+            os.fsync(directory_descriptor)
+            _assert_snapshot_root_path_binding(path.parent, directory_descriptor)
+        except OSError as error:
+            raise ReplayMismatchError(f"could not publish immutable {owner}") from error
+    except BaseException as error:
+        active_error = error
+
+    cleanup_errors: list[tuple[str, BaseException]] = []
+
+    def attempt_cleanup(action: str, cleanup: Callable[[], None]) -> None:
+        try:
+            cleanup()
+        except BaseException as error:
+            cleanup_errors.append((action, error))
+
+    if temporary_descriptor is not None:
+        attempt_cleanup(
+            "close temporary descriptor",
+            lambda: os.close(temporary_descriptor),
+        )
+    if temporary_exists:
+        attempt_cleanup(
+            "unlink temporary file",
+            lambda: os.unlink(temporary_name, dir_fd=directory_descriptor),
+        )
+    if lock_acquired:
+        attempt_cleanup(
+            "unlock immutable publication directory",
+            lambda: fcntl.flock(directory_descriptor, fcntl.LOCK_UN),
+        )
+    attempt_cleanup(
+        "close immutable publication directory",
+        lambda: os.close(directory_descriptor),
+    )
+
+    if active_error is not None:
+        for action, cleanup_error in cleanup_errors:
+            active_error.add_note(
+                f"immutable {owner} cleanup also failed while attempting to {action}: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
+        if cleanup_errors:
+            raise active_error from cleanup_errors[0][1]
+        raise active_error
+    if cleanup_errors:
+        cleanup_failure = ReplayMismatchError(
+            f"immutable {owner} cleanup failed after publication"
+        )
+        for action, cleanup_error in cleanup_errors[1:]:
+            cleanup_failure.add_note(
+                f"additional cleanup failure while attempting to {action}: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
+        raise cleanup_failure from cleanup_errors[0][1]
+
+
+def _assert_immutable_file_equals_at(
+    directory_descriptor: int,
+    name: str,
+    value: bytes,
+    *,
+    owner: str,
+) -> None:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_descriptor,
+        )
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+        ):
+            raise ReplayMismatchError(
+                f"existing content-addressed {owner} has unsafe inode metadata"
+            )
+        chunks: list[bytes] = []
+        while True:
+            block = os.read(descriptor, 8 * 1024 * 1024)
+            if not block:
+                break
+            chunks.append(block)
+        if b"".join(chunks) != value:
             raise ReplayMismatchError(f"existing content-addressed {owner} differs")
-        return
-    _atomic_replace_bytes(path, value)
+        os.fsync(descriptor)
+    except OSError as error:
+        raise ReplayMismatchError(
+            f"existing content-addressed {owner} is unreadable or symlinked"
+        ) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -752,20 +996,152 @@ def _strict_json_bytes_mapping(
 
 
 def _read_bytes(path: Path, owner: str) -> bytes:
+    descriptor: int | None = None
     try:
-        return path.read_bytes()
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ReplayMismatchError(f"{owner} must be a regular file")
+        chunks: list[bytes] = []
+        while True:
+            block = os.read(descriptor, 8 * 1024 * 1024)
+            if not block:
+                break
+            chunks.append(block)
+        return b"".join(chunks)
     except OSError as error:
         raise ReplayMismatchError(f"{owner} is missing or unreadable") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
-def _safe_relative_path(root: Path, value: str) -> Path:
-    relative = Path(value)
-    if relative.is_absolute() or ".." in relative.parts:
+def _open_snapshot_root(root: Path, *, create_missing: bool = False) -> int:
+    """Open, and optionally create, a root without following component symlinks."""
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    normalized = Path(os.path.abspath(os.fspath(root)))
+    if not normalized.is_absolute():
+        raise ValueError("LoRA snapshot root must be absolute")
+    descriptor = os.open(os.sep, flags)
+    completed = False
+    try:
+        for part in normalized.parts[1:]:
+            next_descriptor: int | None = None
+            try:
+                try:
+                    next_descriptor = os.open(part, flags, dir_fd=descriptor)
+                except FileNotFoundError:
+                    if not create_missing:
+                        raise
+                    try:
+                        os.mkdir(part, mode=0o700, dir_fd=descriptor)
+                    except FileExistsError:
+                        pass
+                    next_descriptor = os.open(part, flags, dir_fd=descriptor)
+                if not stat.S_ISDIR(os.fstat(next_descriptor).st_mode):
+                    raise ReplayMismatchError(
+                        "LoRA snapshot root path contains a non-directory"
+                    )
+            except BaseException:
+                if next_descriptor is not None:
+                    os.close(next_descriptor)
+                raise
+            os.close(descriptor)
+            descriptor = next_descriptor
+        completed = True
+        return descriptor
+    except OSError as error:
+        raise ReplayMismatchError(
+            "LoRA snapshot root path is missing, unreadable, or contains a symlink"
+        ) from error
+    finally:
+        if not completed:
+            os.close(descriptor)
+
+
+def _safe_snapshot_relative_path(value: str) -> Path:
+    if not isinstance(value, str) or not value:
         raise ReplayMismatchError("LoRA snapshot contains an unsafe path")
-    resolved = (root / relative).resolve()
-    if not resolved.is_relative_to(root):
-        raise ReplayMismatchError("LoRA snapshot path escapes the state directory")
-    return resolved
+    if "\x00" in value or value.startswith("/"):
+        raise ReplayMismatchError("LoRA snapshot contains an unsafe path")
+    parts = value.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ReplayMismatchError("LoRA snapshot contains an unsafe path")
+    return Path(*parts)
+
+
+def _assert_snapshot_root_path_binding(root: Path, root_descriptor: int) -> None:
+    """Reject replacement of the lexical root while its closure was read."""
+
+    expected = os.fstat(root_descriptor)
+    observed_descriptor = _open_snapshot_root(root)
+    try:
+        observed = os.fstat(observed_descriptor)
+        if (observed.st_dev, observed.st_ino) != (expected.st_dev, expected.st_ino):
+            raise ReplayMismatchError("LoRA snapshot root changed while loading")
+    finally:
+        os.close(observed_descriptor)
+
+
+def _read_relative_file_bytes_at(
+    root_descriptor: int,
+    relative_path: str,
+    owner: str,
+) -> bytes:
+    """Read one regular file via openat from an already-open immutable root."""
+
+    relative = _safe_snapshot_relative_path(relative_path)
+    parts = relative.parts
+    directory_descriptor = os.dup(root_descriptor)
+    file_descriptor: int | None = None
+    try:
+        directory_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        for part in parts[:-1]:
+            next_descriptor = os.open(
+                part,
+                directory_flags,
+                dir_fd=directory_descriptor,
+            )
+            metadata = os.fstat(next_descriptor)
+            if not stat.S_ISDIR(metadata.st_mode):
+                os.close(next_descriptor)
+                raise ReplayMismatchError(f"{owner} parent must be a regular directory")
+            os.close(directory_descriptor)
+            directory_descriptor = next_descriptor
+        file_descriptor = os.open(
+            parts[-1],
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_descriptor,
+        )
+        metadata = os.fstat(file_descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ReplayMismatchError(f"{owner} must be a regular file")
+        chunks: list[bytes] = []
+        while True:
+            block = os.read(file_descriptor, 8 * 1024 * 1024)
+            if not block:
+                break
+            chunks.append(block)
+        return b"".join(chunks)
+    except OSError as error:
+        raise ReplayMismatchError(
+            f"{owner} is missing or unreadable (including symlink rejection)"
+        ) from error
+    finally:
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+        os.close(directory_descriptor)
 
 
 def _require_run_identity(
@@ -808,8 +1184,10 @@ def _nonnegative_step(value: object) -> None:
 
 
 def _require_sha256(value: object, owner: str) -> None:
-    if not isinstance(value, str) or len(value) != 64 or any(
-        character not in "0123456789abcdef" for character in value
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
     ):
         raise ValueError(f"{owner} must be a lowercase SHA256")
 
@@ -846,6 +1224,7 @@ __all__ = [
     "TGVFPolicyCheckpointEngineManager",
     "load_latest_lora_snapshot",
     "load_latest_policy_version",
+    "load_lora_snapshot_pointer",
     "load_policy_weight_sync_request",
     "lora_parameter_mapping_sha256",
     "publish_policy_weight_sync_request",

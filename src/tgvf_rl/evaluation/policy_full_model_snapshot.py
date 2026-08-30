@@ -1240,6 +1240,52 @@ def _assert_model_header_matches_manifest(
             raise ValueError("materialized full-model header differs from snapshot")
 
 
+def _verify_exact_full_model_content(
+    contract: DeepEyesNativeRunContract,
+    manifest: FullModelSnapshotManifest,
+    receipt: FullModelMaterializationReceipt,
+) -> None:
+    """Stream and compare every byte in the evaluation-owned checkpoint closure."""
+
+    rebuilt = build_full_model_snapshot_manifest(
+        contract,
+        source_path=manifest.source_path,
+        optimizer_step=manifest.optimizer_step,
+        runtime_fsdp_world_size=(
+            manifest.fsdp_world_size
+            if manifest.source_kind is FullModelSourceKind.VERL_FSDP
+            else None
+        ),
+    )
+    if rebuilt != manifest:
+        raise ValueError("full-model checkpoint closure changed")
+
+    declared_model_path = Path(receipt.model_path)
+    if declared_model_path.is_symlink() or not declared_model_path.is_dir():
+        raise ValueError("materialized full-model root is absent or not regular")
+    model_path = declared_model_path.resolve(strict=True)
+    model_files = _receipt_files_from_manifest(rebuilt, receipt)
+    if model_files is None:
+        model_files = _scan_regular_tree(model_path)
+    if model_files != receipt.model_files:
+        raise ValueError("materialized full-model bytes changed")
+    _assert_model_header_matches_manifest(model_path, model_files, manifest)
+
+
+def verify_full_model_evaluation_snapshot_content(
+    snapshot: FullModelEvaluationSnapshot,
+) -> None:
+    """Re-hash the exact checkpoint/model closure immediately before model use."""
+
+    if not isinstance(snapshot, FullModelEvaluationSnapshot):
+        raise TypeError("snapshot must be a FullModelEvaluationSnapshot")
+    _verify_exact_full_model_content(
+        snapshot.contract,
+        snapshot.manifest,
+        snapshot.receipt,
+    )
+
+
 def load_full_model_evaluation_snapshot(
     manifest_path: str | Path,
     receipt_path: str | Path,
@@ -1247,12 +1293,11 @@ def load_full_model_evaluation_snapshot(
     require_launchable_run: bool = True,
     runtime_lightweight: bool = False,
 ) -> FullModelEvaluationSnapshot:
-    """Load a snapshot with strong or runtime-safe lightweight verification.
+    """Load a snapshot with strong or diagnostic-only lightweight verification.
 
-    Snapshot/config materialization keeps the default strong byte verification.
-    Evaluation workers may opt into ``runtime_lightweight`` after those immutable
-    records have been bound; that path checks file sets, sizes, small-file bytes,
-    FSDP ranks, and HF weight headers without re-hashing multi-GiB payloads.
+    The default streams every bound checkpoint/model payload. The lightweight
+    path checks only sets, sizes, small files, FSDP ranks, and HF headers; it is
+    suitable for metadata diagnostics only and must never authorize execution.
     """
 
     if type(runtime_lightweight) is not bool:
@@ -1273,7 +1318,7 @@ def load_full_model_evaluation_snapshot(
     if receipt.snapshot_identity_sha256 != manifest.identity_sha256:
         raise ValueError("full-model materialization belongs to another snapshot")
     model_path = Path(receipt.model_path).resolve(strict=True)
-    manifest_receipt_files = _receipt_files_from_manifest(manifest, receipt)
+    _receipt_files_from_manifest(manifest, receipt)
     if runtime_lightweight:
         _assert_tree_names_safe(Path(manifest.source_path))
         _verify_fsdp_rank_sets(manifest)
@@ -1284,32 +1329,15 @@ def load_full_model_evaluation_snapshot(
             model_path, receipt.model_files, exact_tree=True
         )
         _assert_model_header_matches_manifest(model_path, receipt.model_files, manifest)
-    else:
-        rebuilt = build_full_model_snapshot_manifest(
-            contract,
-            source_path=manifest.source_path,
-            optimizer_step=manifest.optimizer_step,
-            runtime_fsdp_world_size=(
-                manifest.fsdp_world_size
-                if manifest.source_kind is FullModelSourceKind.VERL_FSDP
-                else None
-            ),
-        )
-        if rebuilt != manifest:
-            raise ValueError("full-model checkpoint closure changed")
-        if manifest_receipt_files is not None:
-            model_files = manifest_receipt_files
-        else:
-            model_files = _scan_regular_tree(model_path)
-        if model_files != receipt.model_files:
-            raise ValueError("materialized full-model bytes changed")
-        _assert_model_header_matches_manifest(model_path, model_files, manifest)
-    return FullModelEvaluationSnapshot(
+    snapshot = FullModelEvaluationSnapshot(
         contract=contract,
         manifest=manifest,
         receipt=receipt,
         run=_native_evaluation_run_view(contract, manifest),
     )
+    if not runtime_lightweight:
+        verify_full_model_evaluation_snapshot_content(snapshot)
+    return snapshot
 
 
 def full_model_snapshot_identity_record(
@@ -1415,7 +1443,14 @@ async def build_full_model_standalone_manager(
     config: object,
     snapshot: FullModelEvaluationSnapshot,
 ) -> tuple[object, object, object]:
-    """Construct stock vLLM over full weights, never a ``LoRARequest``."""
+    """Re-hash full weights, then construct stock vLLM without a LoRA request."""
+
+    # The frozen runtime directory owns immutable identity records, not a second
+    # copy of a potentially 100+ GiB model. Re-hash the external checkpoint and
+    # materialized HF closure at the final application boundary. A same-UID
+    # writer can still race vLLM's subsequent file reads; callers must not claim
+    # an engine-loaded digest attestation that vLLM does not expose.
+    verify_full_model_evaluation_snapshot_content(snapshot)
 
     from vllm import AsyncEngineArgs
     from vllm.v1.engine.async_llm import AsyncLLM
@@ -1467,6 +1502,7 @@ __all__ = [
     "load_full_model_materialization_receipt",
     "load_full_model_snapshot_manifest",
     "materialize_full_model_snapshot",
+    "verify_full_model_evaluation_snapshot_content",
     "write_full_model_materialization_receipt",
     "write_full_model_snapshot_manifest",
 ]
