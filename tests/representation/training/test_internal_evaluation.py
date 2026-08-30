@@ -3,6 +3,7 @@ from __future__ import annotations
 from hashlib import sha256
 import json
 import math
+from pathlib import Path
 import pickle
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ import torch
 from torch import nn
 
 from tgvf_rl.conditioning.base import TargetConditioningProviderKind
+from tgvf_rl.immutable_publication import ImmutablePublicationRaceError
 from tgvf_rl.qwen.base import InjectedForwardRequest, InjectedVisualBlock
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter, TGVFAdapterVariant
@@ -47,6 +49,9 @@ from tgvf_rl.representation.training.internal_evaluation_artifact import (
     REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
     RepresentationInternalEvaluationArtifact as ExtractedEvaluationArtifact,
 )
+from tgvf_rl.representation.training import (
+    internal_evaluation_artifact as artifact_implementation,
+)
 from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
 from tgvf_rl.representation.training.readout import (
     RepresentationAttentionTensorBundle,
@@ -82,6 +87,20 @@ def test_artifact_boundary_preserves_public_reexport_identity() -> None:
         pickle.loads(pickle.dumps(RepresentationInternalEvaluationArtifact))
         is RepresentationInternalEvaluationArtifact
     )
+
+
+def test_artifact_boundary_translates_publication_race_to_create_only_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def reject(_path: Path, _payload: bytes) -> None:
+        raise ImmutablePublicationRaceError("unstable destination")
+
+    monkeypatch.setattr(artifact_implementation, "publish_bytes_create_only", reject)
+
+    with pytest.raises(FileExistsError, match="File exists"):
+        artifact_implementation._publish_representation_internal_evaluation_report_atomic(  # noqa: SLF001
+            {}, (tmp_path / "report.json").resolve()
+        )
 
 
 def test_bf16_cell_score_uses_the_same_reduction_order_as_l_gen() -> None:
