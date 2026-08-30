@@ -1146,7 +1146,7 @@ def test_execution_surface_manifest_is_exact_and_content_bound() -> None:
         )
     )
     assert policy["schema_version"] == "tgvf-execution-surface-policy-v2"
-    assert policy["revision"] == 8
+    assert policy["revision"] == 9
     completed = subprocess.run(
         [
             sys.executable,
@@ -1164,7 +1164,7 @@ def test_execution_surface_manifest_is_exact_and_content_bound() -> None:
     assert completed.returncode == 0, completed.stderr or completed.stdout
     report = json.loads(completed.stdout)
     inventory = report["execution_surface_inventory"]
-    assert len(inventory) == 79
+    assert len(inventory) == 80
     assert all(row["status"] == "content_bound" for row in inventory)
     assert [row["path"] for row in inventory] == sorted(
         row["path"] for row in inventory
@@ -1178,6 +1178,27 @@ def test_execution_surface_manifest_is_exact_and_content_bound() -> None:
         row for row in inventory if row["classification"] == "import_only_support"
     )
     assert support["path"] == "spikes/verl_compat/verl_sync_fixed_reward.py"
+    bootstrap = next(
+        row for row in inventory if row["path"] == "src/tgvf_rl/worker_bootstrap.py"
+    )
+    assert bootstrap == {
+        "path": "src/tgvf_rl/worker_bootstrap.py",
+        "kind": "python_main",
+        "classification": "canonical_internal_worker",
+        "allowed_modes": ["authorized-inspection-only"],
+        "blocked_modes": ["target-dispatch"],
+        "authorization_kind": "inherited_worker_receipt",
+        "capabilities": {
+            "gpu": False,
+            "network": False,
+            "subprocess": False,
+            "arbitrary_exec": False,
+            "destructive_fs": False,
+        },
+        "workload_kinds": ["control"],
+        "content_sha256": bootstrap["content_sha256"],
+        "status": "content_bound",
+    }
     check_gate = next(
         row for row in inventory if row["path"] == "tools/check_launch_gate.py"
     )
@@ -1220,6 +1241,43 @@ def test_control_plane_audit_blocks_execution_surface_content_drift(
         "benchmark_prl13_schedule_index.py" in item and "content SHA256 differs" in item
         for item in report["violations"]
     )
+
+
+def test_control_plane_audit_blocks_internal_worker_classification_downgrade(
+    tmp_path: Path,
+) -> None:
+    repository = _minimal_audit_repository(tmp_path)
+    policy_path = repository / "configs/ops/execution_surface_policy.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    bootstrap = next(
+        row
+        for row in policy["surfaces"]
+        if row["path"] == "src/tgvf_rl/worker_bootstrap.py"
+    )
+    bootstrap["classification"] = "read_only_utility"
+    bootstrap["allowed_modes"] = ["read-only"]
+    bootstrap["blocked_modes"] = []
+    bootstrap["authorization_kind"] = "none_offline"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(REPOSITORY_ROOT / "tools/check_launch_gate.py"),
+            "audit-control-plane",
+            "--repository-root",
+            str(repository),
+        ],
+        cwd=REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 1
+    report = json.loads(completed.stdout)
+    assert "canonical internal worker inventory differs" in report["violations"]
 
 
 def test_control_plane_audit_blocks_missing_manifest_row(tmp_path: Path) -> None:

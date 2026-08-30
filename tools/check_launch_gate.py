@@ -42,7 +42,7 @@ DEFAULT_EXECUTION_SURFACE_POLICY = (
     REPOSITORY_ROOT / "configs/ops/execution_surface_policy.json"
 )
 EXECUTION_SURFACE_POLICY_SCHEMA = "tgvf-execution-surface-policy-v2"
-EXECUTION_SURFACE_POLICY_REVISION = 8
+EXECUTION_SURFACE_POLICY_REVISION = 9
 EXECUTION_SURFACE_CONTENT_BINDING = "sha256-file-bytes-v1"
 EXECUTION_SURFACE_ROOTS = ("src", "tools", "spikes")
 EXECUTION_SHELL_ROOTS = ("tools", "spikes")
@@ -82,6 +82,12 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CANONICAL_ACTIVE_CONTROLLERS = {
     "src/tgvf_rl/cli.py": "neutral_public_cli",
 }
+CANONICAL_INTERNAL_WORKERS = frozenset(
+    {
+        "src/tgvf_rl/framework/verl/policy_main.py",
+        "src/tgvf_rl/worker_bootstrap.py",
+    }
+)
 LEGACY_QUARANTINED_CONTROLLERS = (
     "src/tgvf_rl/framework/verl/prl13_main.py",
     "spikes/verl_compat/fsdp2_smoke.py",
@@ -2177,6 +2183,7 @@ def _audit_execution_surface_inventory(
     permanent_shell: set[str] = set()
     mixed_python: set[str] = set()
     import_only_python: set[str] = set()
+    canonical_internal_workers: set[str] = set()
     authorization_by_classification = {
         "artifact_materializer": "bounded_artifact_write",
         "canonical_internal_worker": "inherited_worker_receipt",
@@ -2299,10 +2306,13 @@ def _audit_execution_surface_inventory(
             and relative != "src/tgvf_rl/cli.py"
         ):
             row_violations.append("canonical public CLI path differs")
-        if classification == "canonical_internal_worker" and relative != (
-            "src/tgvf_rl/framework/verl/policy_main.py"
+        if (
+            classification == "canonical_internal_worker"
+            and relative not in CANONICAL_INTERNAL_WORKERS
         ):
             row_violations.append("canonical internal worker path differs")
+        if classification == "canonical_internal_worker":
+            canonical_internal_workers.add(relative)
         if relative == "tools/check_launch_gate.py":
             if classification != "control_utility":
                 row_violations.append("check-launch-gate classification differs")
@@ -2382,6 +2392,8 @@ def _audit_execution_surface_inventory(
         violations.append(f"unmanifested execution surface discovered: {relative}")
     for relative in sorted(manifest_set - set(discovered)):
         violations.append(f"manifested execution surface is missing: {relative}")
+    if canonical_internal_workers != set(CANONICAL_INTERNAL_WORKERS):
+        violations.append("canonical internal worker inventory differs")
     if permanent_python != set(LEGACY_QUARANTINED_CONTROLLERS):
         violations.append("permanent Python quarantine inventory differs from manifest")
     if permanent_shell != set(LEGACY_QUARANTINED_SHELL_CONTROLLERS):

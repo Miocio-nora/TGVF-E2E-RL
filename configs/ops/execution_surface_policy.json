@@ -1,6 +1,6 @@
 {
   "schema_version": "tgvf-execution-surface-policy-v2",
-  "revision": 8,
+  "revision": 9,
   "content_binding": "sha256-file-bytes-v1",
   "python_roots": [
     "src",
@@ -209,6 +209,29 @@
       "content_sha256": "1dab692244ae5e022287de676d923b7d2d8347d8f97384d27be252ce7ee9b4b1"
     },
     {
+      "path": "src/tgvf_rl/worker_bootstrap.py",
+      "kind": "python_main",
+      "classification": "canonical_internal_worker",
+      "allowed_modes": [
+        "authorized-inspection-only"
+      ],
+      "blocked_modes": [
+        "target-dispatch"
+      ],
+      "authorization_kind": "inherited_worker_receipt",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "control"
+      ],
+      "content_sha256": "f113f9bc8ee4718718504d58a113870d7b48a6941d51785edc689358eb28b591"
+    },
+    {
       "path": "tools/analyze_prl13_group_signal.py",
       "kind": "python_main",
       "classification": "permanent_quarantine",
@@ -343,7 +366,7 @@
       "workload_kinds": [
         "control"
       ],
-      "content_sha256": "c0c817275234200138b55aeb9703b866249ca3fc8a5bf85b6df117647ab3a273"
+      "content_sha256": "5b0c8d40f5e65464e4d0e9724ea6b2b3b5cb743221bf079c44e71c1d26f49e73"
     },
     {
       "path": "tools/check_policy_mcq_terminal_reward.py",
