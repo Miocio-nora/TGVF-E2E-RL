@@ -203,13 +203,6 @@
       "reason": "Full-model artifact materialization and the evaluation runtime adapter remain colocated."
     },
     {
-      "current_ceiling": 1175,
-      "next_split_seam": "Move enums, immutable record schemas, and comparison validation into result_registry_schema.py.",
-      "owner": "policy-evaluation",
-      "path": "src/tgvf_rl/evaluation/result_registry.py",
-      "reason": "Registry record schemas and filesystem-backed registry operations remain colocated."
-    },
-    {
       "current_ceiling": 1475,
       "next_split_seam": "Move validate_data_proto_integrity and ownership validation helpers into data_proto_integrity.py.",
       "owner": "verl-runtime",
@@ -308,7 +301,7 @@
       "reason": "External judge configuration and client code remain mixed with the veRL reward manager."
     }
   ],
-  "revision": 5,
+  "revision": 6,
   "run_specific_code_allowlist": [
     "src/tgvf_rl/framework/verl/prl13_main.py",
     "src/tgvf_rl/policy/prl13_group_signal.py",
