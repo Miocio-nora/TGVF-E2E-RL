@@ -10,981 +10,125 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
-from enum import Enum
-import hashlib
-import json
-import math
-import os
+from dataclasses import dataclass as dataclass
+from enum import Enum as Enum
+import hashlib as hashlib
+import json as json
+import math as math
+import os as os
 from pathlib import Path
 import random
-import tempfile
+import tempfile as tempfile
 from typing import Protocol
 
 import torch
 
-from tgvf_rl.conditioning.base import TargetConditioningConfig
+# Retained here so get_type_hints() keeps resolving the historical public types.
+from tgvf_rl.conditioning.base import (
+    TargetConditioningConfig as TargetConditioningConfig,
+)
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
-from tgvf_rl.contracts.identity import CodeIdentity, ModelIdentity
-from tgvf_rl.objectives.base import spec_identity_sha256
-from tgvf_rl.observations.store import tensor_checksum
-from tgvf_rl.representation.adapter import TGVFAdapter, TGVFAdapterVariant
+from tgvf_rl.contracts.identity import (
+    CodeIdentity as CodeIdentity,
+    ModelIdentity as ModelIdentity,
+)
+from tgvf_rl.objectives.base import spec_identity_sha256 as spec_identity_sha256
+from tgvf_rl.observations.store import tensor_checksum as tensor_checksum
+from tgvf_rl.representation.adapter import (
+    TGVFAdapter,
+    TGVFAdapterVariant as TGVFAdapterVariant,
+)
 
-from .objective import RepresentationObjectiveConfig
+from .checkpoint_integrity import (
+    _HEX as _HEX,
+    _adapter_state_to_cpu as _adapter_state_to_cpu,
+    _finite_ratio as _finite_ratio,
+    _integer as _integer,
+    _mapping_key as _mapping_key,
+    _non_empty_text as _non_empty_text,
+    _non_negative_finite_float as _non_negative_finite_float,
+    _non_negative_int as _non_negative_int,
+    _plain_cpu_state as _plain_cpu_state,
+    _positive_finite_float as _positive_finite_float,
+    _positive_int as _positive_int,
+    _qualified_type as _qualified_type,
+    _require_adapter as _require_adapter,
+    _runtime_bool as _runtime_bool,
+    _runtime_float as _runtime_float,
+    _runtime_optional_bool as _runtime_optional_bool,
+    _save_atomic as _save_atomic,
+    _sha256 as _sha256,
+    _state_digest as _state_digest,
+    _strictly_increasing_non_negative_ints as _strictly_increasing_non_negative_ints,
+    _tensor_checksum as _tensor_checksum,
+    _torch_load as _torch_load,
+    _update_state_digest as _update_state_digest,
+)
+from .checkpoint_identity import (
+    L_GEN_GLOBAL_REDUCTION as L_GEN_GLOBAL_REDUCTION,
+    MATRIX_CE_GLOBAL_REDUCTION as MATRIX_CE_GLOBAL_REDUCTION,
+    REPRESENTATION_ACCUMULATION_SCHEMA_VERSION as REPRESENTATION_ACCUMULATION_SCHEMA_VERSION,
+    REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2 as REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2,
+    REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION as REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION,
+    REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION_V2 as REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION_V2,
+    REPRESENTATION_INITIALIZATION_SCHEMA_VERSION as REPRESENTATION_INITIALIZATION_SCHEMA_VERSION,
+    REPRESENTATION_OPTIMIZER_IDENTITY_SCHEMA_VERSION as REPRESENTATION_OPTIMIZER_IDENTITY_SCHEMA_VERSION,
+    REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION as REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION,
+    REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V2 as REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V2,
+    REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3 as REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3,
+    REPRESENTATION_SAMPLER_CONTRACT_SCHEMA_VERSION as REPRESENTATION_SAMPLER_CONTRACT_SCHEMA_VERSION,
+    REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION as REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION,
+    REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION_V2 as REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION_V2,
+    REPRESENTATION_TRAINER_EXECUTION_SCHEMA_VERSION as REPRESENTATION_TRAINER_EXECUTION_SCHEMA_VERSION,
+    RepresentationAccumulationIdentity,
+    RepresentationAccumulationIdentityV2 as RepresentationAccumulationIdentityV2,
+    RepresentationAdapterContractIdentity as RepresentationAdapterContractIdentity,
+    RepresentationAdapterContractIdentityV2 as RepresentationAdapterContractIdentityV2,
+    RepresentationInitializationIdentity as RepresentationInitializationIdentity,
+    RepresentationOptimizerIdentity,
+    RepresentationRunIdentity,
+    RepresentationRunIdentityV3 as RepresentationRunIdentityV3,
+    RepresentationSamplerContractIdentity,
+    RepresentationSchedulerIdentity,
+    RepresentationSchedulerIdentityV2 as RepresentationSchedulerIdentityV2,
+    RepresentationTrainerExecutionIdentity,
+    _validate_accumulation_identity as _validate_accumulation_identity,
+    _validate_run_identity as _validate_run_identity,
+    representation_adapter_contract_identity as representation_adapter_contract_identity,
+)
+from .checkpoint_schema import (
+    REPRESENTATION_ADAPTER_ARTIFACT_SCHEMA_VERSION as REPRESENTATION_ADAPTER_ARTIFACT_SCHEMA_VERSION,
+    REPRESENTATION_RNG_STATE_SCHEMA_VERSION,
+    REPRESENTATION_TRAINING_CHECKPOINT_SCHEMA_VERSION as REPRESENTATION_TRAINING_CHECKPOINT_SCHEMA_VERSION,
+    RepresentationAdapterArtifact,
+    RepresentationAdapterArtifactManifest,
+    RepresentationResumeResult,
+    RepresentationTensorManifestEntry,
+    RepresentationTrainingCheckpoint,
+    RepresentationTrainingCheckpointManifest,
+    _validate_tensor_manifest as _validate_tensor_manifest,
+)
+from .objective import RepresentationObjectiveConfig as RepresentationObjectiveConfig
 from .sampling import (
-    SAMPLER_IDENTITY_SCHEMA_VERSION,
-    SAMPLER_STATE_SCHEMA_VERSION,
+    SAMPLER_IDENTITY_SCHEMA_VERSION as SAMPLER_IDENTITY_SCHEMA_VERSION,
+    SAMPLER_STATE_SCHEMA_VERSION as SAMPLER_STATE_SCHEMA_VERSION,
     SameImageBatchSampler,
 )
-from .validation_identity import RepresentationValidationDataIdentity
+from .validation_identity import (
+    RepresentationValidationDataIdentity as RepresentationValidationDataIdentity,
+)
 
-
-REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION = "representation-run-identity-v2"
-REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V2 = (
-    REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION
-)
-REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3 = "representation-run-identity-v3"
-REPRESENTATION_ACCUMULATION_SCHEMA_VERSION = "representation-accumulation-v1"
-REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2 = "representation-accumulation-v2"
-REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION = "representation-adapter-contract-v1"
-REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION_V2 = "representation-adapter-contract-v2"
-REPRESENTATION_OPTIMIZER_IDENTITY_SCHEMA_VERSION = (
-    "representation-optimizer-identity-v1"
-)
-REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION = (
-    "representation-scheduler-identity-v1"
-)
-REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION_V2 = (
-    "representation-scheduler-identity-v2"
-)
-REPRESENTATION_TRAINER_EXECUTION_SCHEMA_VERSION = "representation-trainer-execution-v1"
-REPRESENTATION_INITIALIZATION_SCHEMA_VERSION = "representation-initialization-v1"
-REPRESENTATION_SAMPLER_CONTRACT_SCHEMA_VERSION = "representation-sampler-contract-v1"
-REPRESENTATION_ADAPTER_ARTIFACT_SCHEMA_VERSION = "representation-adapter-artifact-v2"
-REPRESENTATION_TRAINING_CHECKPOINT_SCHEMA_VERSION = (
-    "representation-training-checkpoint-v2"
-)
-REPRESENTATION_RNG_STATE_SCHEMA_VERSION = "representation-rng-state-v2"
-
-MATRIX_CE_GLOBAL_REDUCTION = "global_ce_numerator_over_valid_rows"
-L_GEN_GLOBAL_REDUCTION = "global_sum_of_per_sample_mean_nll_over_sample_count"
 
 _BORROWED_QWEN_PREFIXES = (
     "main_projection.",
     "d_deepstack_projections.",
 )
-_HEX = frozenset("0123456789abcdef")
 
 
 class _Stateful(Protocol):
     def state_dict(self) -> Mapping[str, object]: ...
 
     def load_state_dict(self, state: Mapping[str, object]) -> object: ...
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationAccumulationIdentity:
-    """Exact logical-batch reduction and optimizer-boundary contract."""
-
-    gradient_accumulation_steps: int
-    data_parallel_world_size: int
-    matrix_ce_reduction: str = MATRIX_CE_GLOBAL_REDUCTION
-    l_gen_reduction: str = L_GEN_GLOBAL_REDUCTION
-    checkpoint_at_optimizer_boundary: bool = True
-    schema_version: str = REPRESENTATION_ACCUMULATION_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        self._validate_common_fields()
-        if self.schema_version != REPRESENTATION_ACCUMULATION_SCHEMA_VERSION:
-            raise ValueError("representation accumulation schema mismatch")
-
-    def _validate_common_fields(self) -> None:
-        _positive_int(
-            self.gradient_accumulation_steps,
-            field_name="gradient_accumulation_steps",
-        )
-        _positive_int(
-            self.data_parallel_world_size, field_name="data_parallel_world_size"
-        )
-        if self.matrix_ce_reduction != MATRIX_CE_GLOBAL_REDUCTION:
-            raise ValueError("unsupported Matrix-CE accumulation reduction")
-        if self.l_gen_reduction != L_GEN_GLOBAL_REDUCTION:
-            raise ValueError("unsupported L_gen accumulation reduction")
-        if self.checkpoint_at_optimizer_boundary is not True:
-            raise ValueError(
-                "representation checkpoints must be taken at optimizer boundaries"
-            )
-
-    @property
-    def identity_sha256(self) -> str:
-        return spec_identity_sha256(self)
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class RepresentationAccumulationIdentityV2(RepresentationAccumulationIdentity):
-    """Exact optimizer batch identity for multiple direct groups per rank."""
-
-    groups_per_rank_per_optimizer_step: int
-    schema_version: str = REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2
-
-    def __post_init__(self) -> None:
-        RepresentationAccumulationIdentity._validate_common_fields(self)
-        _positive_int(
-            self.groups_per_rank_per_optimizer_step,
-            field_name="groups_per_rank_per_optimizer_step",
-        )
-        if self.groups_per_rank_per_optimizer_step <= 1:
-            raise ValueError(
-                "representation accumulation v2 requires more than one direct "
-                "group per rank per optimizer step"
-            )
-        if (
-            self.groups_per_rank_per_optimizer_step % self.gradient_accumulation_steps
-            != 0
-        ):
-            raise ValueError(
-                "groups_per_rank_per_optimizer_step must be evenly divisible by "
-                "gradient_accumulation_steps"
-            )
-        if self.groups_per_accumulation_microstep <= 1:
-            raise ValueError(
-                "representation accumulation v2 requires more than one direct "
-                "group per accumulation microstep"
-            )
-        if self.schema_version != REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2:
-            raise ValueError("representation accumulation v2 schema mismatch")
-
-    @property
-    def groups_per_accumulation_microstep(self) -> int:
-        return (
-            self.groups_per_rank_per_optimizer_step // self.gradient_accumulation_steps
-        )
-
-
-def _validate_accumulation_identity(identity: object) -> None:
-    if type(identity) is RepresentationAccumulationIdentity:
-        expected_schema_version = REPRESENTATION_ACCUMULATION_SCHEMA_VERSION
-    elif type(identity) is RepresentationAccumulationIdentityV2:
-        expected_schema_version = REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2
-    else:
-        raise TypeError("unsupported representation accumulation identity type")
-    if identity.schema_version != expected_schema_version:
-        raise ValueError("representation accumulation identity schema mismatch")
-    identity.__post_init__()
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationOptimizerIdentity:
-    """Initial AdamW hyperparameters, including resolved torch options."""
-
-    optimizer_type: str
-    learning_rate: float
-    betas: tuple[float, float]
-    eps: float
-    weight_decay: float
-    amsgrad: bool
-    maximize: bool
-    foreach: bool | None
-    capturable: bool
-    differentiable: bool
-    fused: bool | None
-    decoupled_weight_decay: bool
-    schema_version: str = REPRESENTATION_OPTIMIZER_IDENTITY_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        _non_empty_text(self.optimizer_type, field_name="optimizer_type")
-        _positive_finite_float(self.learning_rate, field_name="learning_rate")
-        if (
-            not isinstance(self.betas, tuple)
-            or len(self.betas) != 2
-            or any(not isinstance(value, float) for value in self.betas)
-            or not 0 <= self.betas[0] < 1
-            or not 0 <= self.betas[1] < 1
-        ):
-            raise ValueError("optimizer betas must be an explicit float pair in [0,1)")
-        _positive_finite_float(self.eps, field_name="eps")
-        _non_negative_finite_float(self.weight_decay, field_name="weight_decay")
-        for field_name in (
-            "amsgrad",
-            "maximize",
-            "capturable",
-            "differentiable",
-            "decoupled_weight_decay",
-        ):
-            if not isinstance(getattr(self, field_name), bool):
-                raise TypeError(f"{field_name} must be bool")
-        for field_name in ("foreach", "fused"):
-            value = getattr(self, field_name)
-            if value is not None and not isinstance(value, bool):
-                raise TypeError(f"{field_name} must be bool or None")
-        if not self.decoupled_weight_decay:
-            raise ValueError("representation AdamW must use decoupled weight decay")
-        if self.schema_version != REPRESENTATION_OPTIMIZER_IDENTITY_SCHEMA_VERSION:
-            raise ValueError("representation optimizer identity schema mismatch")
-
-    @classmethod
-    def from_optimizer(
-        cls, optimizer: torch.optim.Optimizer
-    ) -> RepresentationOptimizerIdentity:
-        if not isinstance(optimizer, torch.optim.AdamW):
-            raise TypeError("representation optimizer identity requires AdamW")
-        defaults = optimizer.defaults
-        if len(optimizer.param_groups) != 1:
-            raise ValueError(
-                "representation optimizer identity v1 requires one parameter group"
-            )
-        required = {
-            "lr",
-            "betas",
-            "eps",
-            "weight_decay",
-            "amsgrad",
-            "maximize",
-            "foreach",
-            "capturable",
-            "differentiable",
-            "fused",
-        }
-        if not required <= set(defaults):
-            raise ValueError(
-                "AdamW defaults do not expose the required hyperparameters"
-            )
-        betas = defaults["betas"]
-        if not isinstance(betas, tuple) or len(betas) != 2:
-            raise ValueError("AdamW defaults contain malformed betas")
-        group = optimizer.param_groups[0]
-        for option in required - {"lr"}:
-            if group.get(option) != defaults[option]:
-                raise ValueError(
-                    f"AdamW parameter-group {option} differs from optimizer defaults"
-                )
-        group_initial_lr = group.get("initial_lr", group.get("lr"))
-        if group_initial_lr != defaults["lr"]:
-            raise ValueError(
-                "AdamW parameter-group initial lr differs from optimizer defaults"
-            )
-        return cls(
-            optimizer_type=_qualified_type(optimizer),
-            learning_rate=_runtime_float(defaults["lr"], field_name="lr"),
-            betas=(
-                _runtime_float(betas[0], field_name="beta1"),
-                _runtime_float(betas[1], field_name="beta2"),
-            ),
-            eps=_runtime_float(defaults["eps"], field_name="eps"),
-            weight_decay=_runtime_float(
-                defaults["weight_decay"], field_name="weight_decay"
-            ),
-            amsgrad=_runtime_bool(defaults["amsgrad"], field_name="amsgrad"),
-            maximize=_runtime_bool(defaults["maximize"], field_name="maximize"),
-            foreach=_runtime_optional_bool(defaults["foreach"], field_name="foreach"),
-            capturable=_runtime_bool(defaults["capturable"], field_name="capturable"),
-            differentiable=_runtime_bool(
-                defaults["differentiable"], field_name="differentiable"
-            ),
-            fused=_runtime_optional_bool(defaults["fused"], field_name="fused"),
-            # Torch versions before this explicit option still implement AdamW
-            # with decoupled decay; absence therefore resolves to True.
-            decoupled_weight_decay=_runtime_bool(
-                defaults.get("decoupled_weight_decay", True),
-                field_name="decoupled_weight_decay",
-            ),
-        )
-
-    @property
-    def identity_sha256(self) -> str:
-        return spec_identity_sha256(self)
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationSchedulerIdentity:
-    """Project LambdaLR construction that cannot be recovered from state_dict."""
-
-    scheduler_type: str
-    kind: str
-    total_steps: int
-    warmup_steps: int
-    schema_version: str = REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        _non_empty_text(self.scheduler_type, field_name="scheduler_type")
-        if self.kind not in {"constant", "linear_warmup_decay"}:
-            raise ValueError("unsupported representation scheduler kind")
-        _positive_int(self.total_steps, field_name="total_steps")
-        _non_negative_int(self.warmup_steps, field_name="warmup_steps")
-        if self.warmup_steps >= self.total_steps:
-            raise ValueError("scheduler warmup_steps must be smaller than total_steps")
-        if self.kind == "constant" and self.warmup_steps:
-            raise ValueError("constant scheduler cannot have warmup steps")
-        if self.schema_version != REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION:
-            raise ValueError("representation scheduler identity schema mismatch")
-
-    @classmethod
-    def project_lambda(
-        cls, *, kind: str, total_steps: int, warmup_steps: int
-    ) -> RepresentationSchedulerIdentity:
-        return cls(
-            scheduler_type=("torch.optim.lr_scheduler.LambdaLR"),
-            kind=kind,
-            total_steps=total_steps,
-            warmup_steps=warmup_steps,
-        )
-
-    @classmethod
-    def from_config(cls, config: object) -> RepresentationSchedulerIdentity:
-        kind = getattr(config, "kind", None)
-        kind_value = getattr(kind, "value", kind)
-        min_lr_ratio = getattr(config, "min_lr_ratio", None)
-        if min_lr_ratio is not None or kind_value == "historical_cosine":
-            return RepresentationSchedulerIdentityV2.project_lambda(
-                kind=kind_value,
-                total_steps=getattr(config, "total_steps", None),
-                warmup_steps=getattr(config, "warmup_steps", None),
-                min_lr_ratio=min_lr_ratio,
-            )
-        return cls.project_lambda(
-            kind=kind_value,
-            total_steps=getattr(config, "total_steps", None),
-            warmup_steps=getattr(config, "warmup_steps", None),
-        )
-
-    @property
-    def identity_sha256(self) -> str:
-        return spec_identity_sha256(self)
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class RepresentationSchedulerIdentityV2(RepresentationSchedulerIdentity):
-    """Scheduler identity that binds the historical cosine minimum ratio."""
-
-    min_lr_ratio: float
-    schema_version: str = REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION_V2
-
-    def __post_init__(self) -> None:
-        _non_empty_text(self.scheduler_type, field_name="scheduler_type")
-        if self.kind != "historical_cosine":
-            raise ValueError("scheduler identity v2 requires historical_cosine")
-        _positive_int(self.total_steps, field_name="total_steps")
-        _non_negative_int(self.warmup_steps, field_name="warmup_steps")
-        if self.warmup_steps >= self.total_steps:
-            raise ValueError("scheduler warmup_steps must be smaller than total_steps")
-        _finite_ratio(self.min_lr_ratio, field_name="min_lr_ratio")
-        if self.schema_version != REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION_V2:
-            raise ValueError("representation scheduler identity v2 schema mismatch")
-
-    @classmethod
-    def project_lambda(
-        cls,
-        *,
-        kind: str,
-        total_steps: int,
-        warmup_steps: int,
-        min_lr_ratio: float,
-    ) -> RepresentationSchedulerIdentityV2:
-        return cls(
-            scheduler_type="torch.optim.lr_scheduler.LambdaLR",
-            kind=kind,
-            total_steps=total_steps,
-            warmup_steps=warmup_steps,
-            min_lr_ratio=min_lr_ratio,
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationTrainerExecutionIdentity:
-    """Precision and gradient-clipping semantics used by every update."""
-
-    precision: str
-    max_grad_norm: float
-    require_all_adapter_gradients: bool
-    gradient_clip_norm_type: float = 2.0
-    gradient_clip_error_if_nonfinite: bool = True
-    schema_version: str = REPRESENTATION_TRAINER_EXECUTION_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        if self.precision not in {"fp32", "bf16"}:
-            raise ValueError("representation precision must be fp32 or bf16")
-        _positive_finite_float(self.max_grad_norm, field_name="max_grad_norm")
-        if not isinstance(self.require_all_adapter_gradients, bool):
-            raise TypeError("require_all_adapter_gradients must be bool")
-        if self.gradient_clip_norm_type != 2.0:
-            raise ValueError("representation trainer requires L2 gradient clipping")
-        if self.gradient_clip_error_if_nonfinite is not True:
-            raise ValueError("gradient clipping must fail on non-finite norms")
-        if self.schema_version != REPRESENTATION_TRAINER_EXECUTION_SCHEMA_VERSION:
-            raise ValueError("representation trainer execution schema mismatch")
-
-    @classmethod
-    def from_config(cls, config: object) -> RepresentationTrainerExecutionIdentity:
-        precision = getattr(config, "precision", None)
-        precision_value = getattr(precision, "value", precision)
-        return cls(
-            precision=precision_value,
-            max_grad_norm=getattr(config, "max_grad_norm", None),
-            require_all_adapter_gradients=getattr(
-                config, "require_all_adapter_gradients", None
-            ),
-        )
-
-    @property
-    def identity_sha256(self) -> str:
-        return spec_identity_sha256(self)
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationInitializationIdentity:
-    """Original Adapter initialization, distinct from a resume checkpoint."""
-
-    kind: str
-    seed: int
-    initial_adapter_state_sha256: str
-    source_artifact_sha256: str | None
-    schema_version: str = REPRESENTATION_INITIALIZATION_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        if self.kind not in {"fresh_random", "adapter_artifact"}:
-            raise ValueError("unsupported representation initialization kind")
-        _integer(self.seed, field_name="initialization seed")
-        _sha256(
-            self.initial_adapter_state_sha256,
-            field_name="initial_adapter_state_sha256",
-        )
-        if self.kind == "fresh_random":
-            if self.source_artifact_sha256 is not None:
-                raise ValueError("fresh initialization cannot name a source artifact")
-        else:
-            _sha256(
-                self.source_artifact_sha256,
-                field_name="source_artifact_sha256",
-            )
-        if self.schema_version != REPRESENTATION_INITIALIZATION_SCHEMA_VERSION:
-            raise ValueError("representation initialization schema mismatch")
-
-    @classmethod
-    def from_adapter(
-        cls,
-        adapter: TGVFAdapter,
-        *,
-        kind: str,
-        seed: int,
-        source_artifact_sha256: str | None,
-    ) -> RepresentationInitializationIdentity:
-        return cls(
-            kind=kind,
-            seed=seed,
-            initial_adapter_state_sha256=_state_digest(_adapter_state_to_cpu(adapter)),
-            source_artifact_sha256=source_artifact_sha256,
-        )
-
-    @property
-    def identity_sha256(self) -> str:
-        return spec_identity_sha256(self)
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationSamplerContractIdentity:
-    """Rank-independent same-image grouping and deterministic shuffle contract."""
-
-    batch_size: int
-    seed: int
-    world_size: int
-    data_manifest_sha256: str
-    sampler_identity_schema_version: str = SAMPLER_IDENTITY_SCHEMA_VERSION
-    sampler_state_schema_version: str = SAMPLER_STATE_SCHEMA_VERSION
-    schema_version: str = REPRESENTATION_SAMPLER_CONTRACT_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        _positive_int(self.batch_size, field_name="sampler batch_size")
-        if self.batch_size < 2:
-            raise ValueError("same-image Matrix CE requires sampler batch_size >= 2")
-        _integer(self.seed, field_name="sampler seed")
-        _positive_int(self.world_size, field_name="sampler world_size")
-        _sha256(self.data_manifest_sha256, field_name="data_manifest_sha256")
-        if self.sampler_identity_schema_version != SAMPLER_IDENTITY_SCHEMA_VERSION:
-            raise ValueError("same-image sampler identity schema mismatch")
-        if self.sampler_state_schema_version != SAMPLER_STATE_SCHEMA_VERSION:
-            raise ValueError("same-image sampler state schema mismatch")
-        if self.schema_version != REPRESENTATION_SAMPLER_CONTRACT_SCHEMA_VERSION:
-            raise ValueError("representation sampler contract schema mismatch")
-
-    @classmethod
-    def from_sampler(
-        cls, sampler: SameImageBatchSampler
-    ) -> RepresentationSamplerContractIdentity:
-        if not isinstance(sampler, SameImageBatchSampler):
-            raise TypeError("sampler must be a SameImageBatchSampler")
-        return cls(
-            batch_size=sampler.batch_size,
-            seed=sampler.seed,
-            world_size=sampler.world_size,
-            data_manifest_sha256=sampler.data_manifest_sha256,
-        )
-
-    @property
-    def identity_sha256(self) -> str:
-        return spec_identity_sha256(self)
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationAdapterContractIdentity:
-    """Architecture plus borrowed-Qwen projection identities required to load."""
-
-    d_lm: int
-    d_v: int
-    attention_dim: int
-    spatial_merge_size: int
-    deepstack_branch_layers: tuple[int, ...]
-    main_projection_identity: str
-    deepstack_projection_identities: tuple[str, ...]
-    schema_version: str = REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        for field_name in ("d_lm", "d_v", "attention_dim", "spatial_merge_size"):
-            _positive_int(getattr(self, field_name), field_name=field_name)
-        _strictly_increasing_non_negative_ints(
-            self.deepstack_branch_layers, field_name="deepstack_branch_layers"
-        )
-        _non_empty_text(
-            self.main_projection_identity, field_name="main_projection_identity"
-        )
-        if len(self.deepstack_projection_identities) != len(
-            self.deepstack_branch_layers
-        ):
-            raise ValueError(
-                "D-DeepStack projection identities must align with branch layers"
-            )
-        for identity in self.deepstack_projection_identities:
-            _non_empty_text(identity, field_name="deepstack_projection_identity")
-        all_projection_identities = (
-            self.main_projection_identity,
-            *self.deepstack_projection_identities,
-        )
-        if len(set(all_projection_identities)) != len(all_projection_identities):
-            raise ValueError(
-                "main and D-DeepStack projection identities must be unique"
-            )
-        if self.schema_version != REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION:
-            raise ValueError("representation Adapter contract schema mismatch")
-
-    @classmethod
-    def from_adapter(
-        cls, adapter: TGVFAdapter
-    ) -> RepresentationAdapterContractIdentity:
-        _require_adapter(adapter)
-        if adapter.variant is not TGVFAdapterVariant.FULL_D_DEEPSTACK:
-            raise ValueError(
-                "adapter contract v1 can identify only the full D-DeepStack variant"
-            )
-        return cls(
-            d_lm=adapter.d_lm,
-            d_v=adapter.d_v,
-            attention_dim=adapter.attn_dim,
-            spatial_merge_size=adapter.spatial_merge_size,
-            deepstack_branch_layers=tuple(adapter.d_deepstack_branch_layers),
-            main_projection_identity=adapter.main_output_projection_identity,
-            deepstack_projection_identities=(
-                adapter.deepstack_output_projection_identities
-            ),
-        )
-
-    def assert_matches(self, adapter: TGVFAdapter) -> None:
-        if self != type(self).from_adapter(adapter):
-            raise IdentityMismatchError(
-                "TGVF Adapter architecture/projection identity mismatch"
-            )
-
-    @property
-    def identity_sha256(self) -> str:
-        return spec_identity_sha256(self)
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class RepresentationAdapterContractIdentityV2(RepresentationAdapterContractIdentity):
-    """Adapter contract that content-binds the selected structural variant."""
-
-    variant: str
-    schema_version: str = REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION_V2
-
-    def __post_init__(self) -> None:
-        for field_name in ("d_lm", "d_v", "attention_dim", "spatial_merge_size"):
-            _positive_int(getattr(self, field_name), field_name=field_name)
-        _strictly_increasing_non_negative_ints(
-            self.deepstack_branch_layers, field_name="deepstack_branch_layers"
-        )
-        _non_empty_text(
-            self.main_projection_identity, field_name="main_projection_identity"
-        )
-        if len(self.deepstack_projection_identities) != len(
-            self.deepstack_branch_layers
-        ):
-            raise ValueError(
-                "D-DeepStack projection identities must align with branch layers"
-            )
-        for identity in self.deepstack_projection_identities:
-            _non_empty_text(identity, field_name="deepstack_projection_identity")
-        all_projection_identities = (
-            self.main_projection_identity,
-            *self.deepstack_projection_identities,
-        )
-        if len(set(all_projection_identities)) != len(all_projection_identities):
-            raise ValueError(
-                "main and D-DeepStack projection identities must be unique"
-            )
-        if self.variant not in {variant.value for variant in TGVFAdapterVariant}:
-            raise ValueError("unknown TGVF Adapter structural variant")
-        if self.schema_version != REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION_V2:
-            raise ValueError("representation Adapter contract v2 schema mismatch")
-
-    @classmethod
-    def from_adapter(
-        cls, adapter: TGVFAdapter
-    ) -> RepresentationAdapterContractIdentityV2:
-        _require_adapter(adapter)
-        return cls(
-            d_lm=adapter.d_lm,
-            d_v=adapter.d_v,
-            attention_dim=adapter.attn_dim,
-            spatial_merge_size=adapter.spatial_merge_size,
-            deepstack_branch_layers=tuple(adapter.d_deepstack_branch_layers),
-            main_projection_identity=adapter.main_output_projection_identity,
-            deepstack_projection_identities=(
-                adapter.deepstack_output_projection_identities
-            ),
-            variant=adapter.variant.value,
-        )
-
-    def assert_matches(self, adapter: TGVFAdapter) -> None:
-        if self != type(self).from_adapter(adapter):
-            raise IdentityMismatchError(
-                "TGVF Adapter architecture/projection/variant identity mismatch"
-            )
-
-
-def representation_adapter_contract_identity(
-    adapter: TGVFAdapter,
-) -> RepresentationAdapterContractIdentity:
-    """Keep existing full artifacts v1-compatible; use v2 for new variants."""
-
-    _require_adapter(adapter)
-    if adapter.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK:
-        return RepresentationAdapterContractIdentity.from_adapter(adapter)
-    return RepresentationAdapterContractIdentityV2.from_adapter(adapter)
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationRunIdentity:
-    """Complete immutable identity shared by artifact and training checkpoint."""
-
-    run_id: str
-    code: CodeIdentity
-    model: ModelIdentity
-    provider: TargetConditioningConfig
-    data_manifest_sha256: str
-    prompt_sha256: str
-    objective: RepresentationObjectiveConfig
-    adapter_contract: RepresentationAdapterContractIdentity
-    accumulation: RepresentationAccumulationIdentity
-    optimizer: RepresentationOptimizerIdentity
-    scheduler: RepresentationSchedulerIdentity | None
-    trainer_execution: RepresentationTrainerExecutionIdentity
-    initialization: RepresentationInitializationIdentity
-    sampler_contract: RepresentationSamplerContractIdentity
-    schema_version: str = REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        self._validate_common_fields()
-        if self.schema_version != REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V2:
-            raise ValueError("representation run identity v2 schema mismatch")
-
-    def _validate_common_fields(self) -> None:
-        _non_empty_text(self.run_id, field_name="run_id")
-        if not isinstance(self.code, CodeIdentity):
-            raise TypeError("code must be a CodeIdentity")
-        if not isinstance(self.model, ModelIdentity):
-            raise TypeError("model must be a ModelIdentity")
-        if not isinstance(self.provider, TargetConditioningConfig):
-            raise TypeError("provider must be a TargetConditioningConfig")
-        _sha256(self.data_manifest_sha256, field_name="data_manifest_sha256")
-        _sha256(self.prompt_sha256, field_name="prompt_sha256")
-        if not isinstance(self.objective, RepresentationObjectiveConfig):
-            raise TypeError("objective must be a RepresentationObjectiveConfig")
-        if not isinstance(self.adapter_contract, RepresentationAdapterContractIdentity):
-            raise TypeError(
-                "adapter_contract must be a RepresentationAdapterContractIdentity"
-            )
-        _validate_accumulation_identity(self.accumulation)
-        if not isinstance(self.optimizer, RepresentationOptimizerIdentity):
-            raise TypeError("optimizer must be a RepresentationOptimizerIdentity")
-        if self.scheduler is not None and not isinstance(
-            self.scheduler, RepresentationSchedulerIdentity
-        ):
-            raise TypeError(
-                "scheduler must be a RepresentationSchedulerIdentity or None"
-            )
-        if not isinstance(
-            self.trainer_execution, RepresentationTrainerExecutionIdentity
-        ):
-            raise TypeError(
-                "trainer_execution must be a RepresentationTrainerExecutionIdentity"
-            )
-        if not isinstance(self.initialization, RepresentationInitializationIdentity):
-            raise TypeError(
-                "initialization must be a RepresentationInitializationIdentity"
-            )
-        if not isinstance(self.sampler_contract, RepresentationSamplerContractIdentity):
-            raise TypeError(
-                "sampler_contract must be a RepresentationSamplerContractIdentity"
-            )
-        if self.sampler_contract.data_manifest_sha256 != self.data_manifest_sha256:
-            raise ValueError("sampler contract data manifest differs from run identity")
-        if (
-            self.sampler_contract.world_size
-            != self.accumulation.data_parallel_world_size
-        ):
-            raise ValueError("sampler and accumulation world sizes must match")
-
-    @property
-    def identity_sha256(self) -> str:
-        return spec_identity_sha256(self)
-
-    @property
-    def provider_identity_sha256(self) -> str:
-        return spec_identity_sha256(self.provider)
-
-    @property
-    def model_identity_sha256(self) -> str:
-        return spec_identity_sha256(self.model)
-
-    @property
-    def objective_identity_sha256(self) -> str:
-        return spec_identity_sha256(self.objective)
-
-    @property
-    def scheduler_identity_sha256(self) -> str | None:
-        return None if self.scheduler is None else self.scheduler.identity_sha256
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class RepresentationRunIdentityV3(RepresentationRunIdentity):
-    """Run identity that also freezes validation data and the planned horizon."""
-
-    validation_identity: RepresentationValidationDataIdentity
-    planned_target_optimizer_steps: int
-    schema_version: str = REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3
-
-    def __post_init__(self) -> None:
-        RepresentationRunIdentity._validate_common_fields(self)
-        if not isinstance(
-            self.validation_identity,
-            RepresentationValidationDataIdentity,
-        ):
-            raise TypeError(
-                "validation_identity must be a RepresentationValidationDataIdentity"
-            )
-        self.validation_identity.__post_init__()
-        if (
-            self.validation_identity.train_retained_manifest_sha256
-            != self.data_manifest_sha256
-        ):
-            raise ValueError(
-                "validation identity train manifest differs from run identity"
-            )
-        _positive_int(
-            self.planned_target_optimizer_steps,
-            field_name="planned_target_optimizer_steps",
-        )
-        if (
-            self.scheduler is not None
-            and self.planned_target_optimizer_steps > self.scheduler.total_steps
-        ):
-            raise ValueError("planned optimizer steps exceed the scheduler horizon")
-        if self.schema_version != REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3:
-            raise ValueError("representation run identity v3 schema mismatch")
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationTensorManifestEntry:
-    name: str
-    shape: tuple[int, ...]
-    dtype: str
-    tensor_sha256: str
-
-    def __post_init__(self) -> None:
-        _non_empty_text(self.name, field_name="tensor name")
-        if not self.shape or any(
-            isinstance(size, bool) or not isinstance(size, int) or size < 0
-            for size in self.shape
-        ):
-            raise ValueError("tensor shape must contain non-negative integer sizes")
-        _non_empty_text(self.dtype, field_name="tensor dtype")
-        _sha256(self.tensor_sha256, field_name="tensor_sha256")
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationAdapterArtifactManifest:
-    run_identity: RepresentationRunIdentity
-    run_identity_sha256: str
-    global_step: int
-    adapter_state_sha256: str
-    tensors: tuple[RepresentationTensorManifestEntry, ...]
-    schema_version: str = REPRESENTATION_ADAPTER_ARTIFACT_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        _validate_run_identity(self.run_identity)
-        _sha256(self.run_identity_sha256, field_name="run_identity_sha256")
-        if self.run_identity_sha256 != self.run_identity.identity_sha256:
-            raise ValueError("artifact run identity digest mismatch")
-        _non_negative_int(self.global_step, field_name="global_step")
-        _sha256(self.adapter_state_sha256, field_name="adapter_state_sha256")
-        _validate_tensor_manifest(self.tensors)
-        if self.schema_version != REPRESENTATION_ADAPTER_ARTIFACT_SCHEMA_VERSION:
-            raise ValueError("representation Adapter artifact schema mismatch")
-
-    @property
-    def artifact_identity_sha256(self) -> str:
-        return spec_identity_sha256(self)
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationAdapterArtifact:
-    manifest: RepresentationAdapterArtifactManifest
-    adapter_state: dict[str, torch.Tensor]
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationTrainingCheckpointManifest:
-    run_identity: RepresentationRunIdentity
-    run_identity_sha256: str
-    global_step: int
-    accumulation_microstep: int
-    adapter_state_sha256: str
-    adapter_tensors: tuple[RepresentationTensorManifestEntry, ...]
-    optimizer_type: str
-    optimizer_parameter_names_by_group: tuple[tuple[str, ...], ...]
-    optimizer_identity_sha256: str
-    optimizer_state_sha256: str
-    scheduler_type: str | None
-    scheduler_identity_sha256: str | None
-    scheduler_state_sha256: str | None
-    sampler_type: str
-    sampler_contract_identity_sha256: str
-    sampler_identity_sha256: str
-    sampler_state_sha256: str
-    trainer_execution_identity_sha256: str
-    initialization_identity_sha256: str
-    rng_state_sha256: str
-    schema_version: str = REPRESENTATION_TRAINING_CHECKPOINT_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        _validate_run_identity(self.run_identity)
-        _sha256(self.run_identity_sha256, field_name="run_identity_sha256")
-        if self.run_identity_sha256 != self.run_identity.identity_sha256:
-            raise ValueError("checkpoint run identity digest mismatch")
-        _non_negative_int(self.global_step, field_name="global_step")
-        if self.accumulation_microstep != 0:
-            raise ValueError(
-                "representation checkpoints cannot contain partial accumulation"
-            )
-        _sha256(self.adapter_state_sha256, field_name="adapter_state_sha256")
-        _validate_tensor_manifest(self.adapter_tensors)
-        _non_empty_text(self.optimizer_type, field_name="optimizer_type")
-        if not self.optimizer_parameter_names_by_group or any(
-            not group for group in self.optimizer_parameter_names_by_group
-        ):
-            raise ValueError("optimizer parameter-name groups must be non-empty")
-        flattened = tuple(
-            name for group in self.optimizer_parameter_names_by_group for name in group
-        )
-        if any(not isinstance(name, str) or not name for name in flattened):
-            raise ValueError("optimizer parameter names must be non-empty strings")
-        if len(flattened) != len(set(flattened)):
-            raise ValueError("optimizer parameters must occur exactly once")
-        _sha256(self.optimizer_identity_sha256, field_name="optimizer_identity_sha256")
-        if (
-            self.optimizer_identity_sha256
-            != self.run_identity.optimizer.identity_sha256
-        ):
-            raise ValueError("checkpoint optimizer identity digest mismatch")
-        _sha256(self.optimizer_state_sha256, field_name="optimizer_state_sha256")
-        scheduler_fields = (
-            self.scheduler_type,
-            self.scheduler_identity_sha256,
-            self.scheduler_state_sha256,
-        )
-        if any(value is None for value in scheduler_fields) != all(
-            value is None for value in scheduler_fields
-        ):
-            raise ValueError("scheduler type, identity, and state presence must align")
-        if self.scheduler_type is not None:
-            _non_empty_text(self.scheduler_type, field_name="scheduler_type")
-            _sha256(
-                self.scheduler_identity_sha256,
-                field_name="scheduler_identity_sha256",
-            )
-            _sha256(
-                self.scheduler_state_sha256,
-                field_name="scheduler_state_sha256",
-            )
-        if (
-            self.scheduler_identity_sha256
-            != self.run_identity.scheduler_identity_sha256
-        ):
-            raise ValueError("checkpoint scheduler identity digest mismatch")
-        _non_empty_text(self.sampler_type, field_name="sampler_type")
-        _sha256(
-            self.sampler_contract_identity_sha256,
-            field_name="sampler_contract_identity_sha256",
-        )
-        if (
-            self.sampler_contract_identity_sha256
-            != self.run_identity.sampler_contract.identity_sha256
-        ):
-            raise ValueError("checkpoint sampler contract identity digest mismatch")
-        _sha256(self.sampler_identity_sha256, field_name="sampler_identity_sha256")
-        _sha256(self.sampler_state_sha256, field_name="sampler_state_sha256")
-        _sha256(
-            self.trainer_execution_identity_sha256,
-            field_name="trainer_execution_identity_sha256",
-        )
-        if (
-            self.trainer_execution_identity_sha256
-            != self.run_identity.trainer_execution.identity_sha256
-        ):
-            raise ValueError("checkpoint trainer execution identity digest mismatch")
-        _sha256(
-            self.initialization_identity_sha256,
-            field_name="initialization_identity_sha256",
-        )
-        if (
-            self.initialization_identity_sha256
-            != self.run_identity.initialization.identity_sha256
-        ):
-            raise ValueError("checkpoint initialization identity digest mismatch")
-        _sha256(self.rng_state_sha256, field_name="rng_state_sha256")
-        if self.schema_version != REPRESENTATION_TRAINING_CHECKPOINT_SCHEMA_VERSION:
-            raise ValueError("representation training checkpoint schema mismatch")
-
-    @property
-    def checkpoint_identity_sha256(self) -> str:
-        return spec_identity_sha256(self)
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationTrainingCheckpoint:
-    manifest: RepresentationTrainingCheckpointManifest
-    adapter_state: dict[str, torch.Tensor]
-    optimizer_state: dict[str, object]
-    scheduler_state: dict[str, object] | None
-    sampler_state: dict[str, object]
-    rng_state: dict[str, object]
-
-
-@dataclass(frozen=True, slots=True)
-class RepresentationResumeResult:
-    global_step: int
-    next_global_step: int
-    run_identity_sha256: str
-    checkpoint_identity_sha256: str
-    exact: bool = True
 
 
 def save_representation_adapter_artifact_atomic(
@@ -1355,35 +499,6 @@ def _validate_runtime_identity(
             )
 
 
-def _validate_run_identity(identity: object) -> None:
-    if not isinstance(identity, RepresentationRunIdentity):
-        raise TypeError("run identity must be a RepresentationRunIdentity")
-    schema_version = getattr(identity, "schema_version", None)
-    if type(identity) is RepresentationRunIdentity:
-        expected_schema_version = REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V2
-    elif type(identity) is RepresentationRunIdentityV3:
-        expected_schema_version = REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3
-    else:
-        raise TypeError("unsupported representation run identity type")
-    if schema_version != expected_schema_version:
-        raise ValueError("representation run identity schema mismatch")
-    identity.code.__post_init__()
-    identity.model.__post_init__()
-    identity.provider.__post_init__()
-    identity.objective.__post_init__()
-    identity.adapter_contract.__post_init__()
-    _validate_accumulation_identity(identity.accumulation)
-    identity.optimizer.__post_init__()
-    if identity.scheduler is not None:
-        identity.scheduler.__post_init__()
-    identity.trainer_execution.__post_init__()
-    identity.initialization.__post_init__()
-    identity.sampler_contract.__post_init__()
-    if isinstance(identity, RepresentationRunIdentityV3):
-        identity.validation_identity.__post_init__()
-    identity.__post_init__()
-
-
 def _validate_initial_state_at_step_zero(
     identity: RepresentationRunIdentity,
     adapter: TGVFAdapter,
@@ -1406,14 +521,6 @@ def _assert_same_run_identity(
         raise IdentityMismatchError(
             "representation checkpoint/artifact run identity mismatch"
         )
-
-
-def _adapter_state_to_cpu(adapter: TGVFAdapter) -> dict[str, torch.Tensor]:
-    _require_adapter(adapter)
-    return {
-        name: value.detach().to(device="cpu").clone()
-        for name, value in adapter.artifact_state_dict().items()
-    }
 
 
 def _validate_adapter_state(
@@ -1447,20 +554,6 @@ def _tensor_manifest(
         )
         for name, value in sorted(state.items())
     )
-
-
-def _validate_tensor_manifest(
-    entries: tuple[RepresentationTensorManifestEntry, ...],
-) -> None:
-    if not isinstance(entries, tuple) or not entries:
-        raise ValueError("Adapter tensor manifest must be a non-empty tuple")
-    for entry in entries:
-        if not isinstance(entry, RepresentationTensorManifestEntry):
-            raise TypeError("Adapter tensor manifest has an invalid entry")
-        entry.__post_init__()
-    names = tuple(entry.name for entry in entries)
-    if names != tuple(sorted(names)) or len(names) != len(set(names)):
-        raise ValueError("Adapter tensor manifest names must be unique and sorted")
 
 
 def _optimizer_parameter_names_by_group(
@@ -1688,202 +781,3 @@ def _validate_rng_state(state: Mapping[str, object]) -> None:
             raise ReplayMismatchError(
                 "current CUDA device index differs from checkpoint"
             )
-
-
-def _plain_cpu_state(value: object) -> object:
-    if isinstance(value, torch.Tensor):
-        return value.detach().to(device="cpu").clone()
-    if isinstance(value, Mapping):
-        return {key: _plain_cpu_state(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_plain_cpu_state(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_plain_cpu_state(item) for item in value)
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    raise TypeError(f"unsupported checkpoint state value {type(value).__qualname__}")
-
-
-def _state_digest(value: object) -> str:
-    digest = hashlib.sha256()
-    _update_state_digest(digest, value)
-    return digest.hexdigest()
-
-
-def _update_state_digest(digest: "hashlib._Hash", value: object) -> None:
-    if isinstance(value, torch.Tensor):
-        digest.update(b"tensor\0")
-        digest.update(str(tuple(value.shape)).encode())
-        digest.update(b"\0")
-        digest.update(str(value.dtype).encode())
-        digest.update(b"\0")
-        digest.update(_tensor_checksum(value).encode())
-    elif isinstance(value, Mapping):
-        digest.update(b"mapping\0")
-        ordered = sorted(value.items(), key=lambda item: _mapping_key(item[0]))
-        for key, item in ordered:
-            _update_state_digest(digest, key)
-            _update_state_digest(digest, item)
-    elif isinstance(value, tuple):
-        digest.update(b"tuple\0")
-        for item in value:
-            _update_state_digest(digest, item)
-    elif isinstance(value, list):
-        digest.update(b"list\0")
-        for item in value:
-            _update_state_digest(digest, item)
-    elif isinstance(value, Enum):
-        digest.update(b"enum\0")
-        _update_state_digest(digest, value.value)
-    elif isinstance(value, str):
-        digest.update(b"str\0")
-        digest.update(value.encode("utf-8"))
-    elif isinstance(value, bool):
-        digest.update(b"bool\0")
-        digest.update(b"1" if value else b"0")
-    elif isinstance(value, int):
-        digest.update(b"int\0")
-        digest.update(str(value).encode())
-    elif isinstance(value, float):
-        digest.update(b"float\0")
-        digest.update(json.dumps(value, allow_nan=False).encode())
-    elif value is None:
-        digest.update(b"none\0")
-    else:
-        raise TypeError(
-            f"unsupported checkpoint digest value {type(value).__qualname__}"
-        )
-
-
-def _mapping_key(value: object) -> tuple[str, str]:
-    if isinstance(value, str):
-        return ("str", value)
-    if isinstance(value, bool):
-        return ("bool", "1" if value else "0")
-    if isinstance(value, int):
-        return ("int", str(value))
-    raise TypeError(f"unsupported checkpoint mapping key {type(value).__qualname__}")
-
-
-def _tensor_checksum(value: torch.Tensor) -> str:
-    # The shared checksum helper expects at least one dimension when re-viewing
-    # bytes; optimizer state legitimately contains scalar step tensors.
-    canonical = value if value.ndim else value.reshape(1)
-    return tensor_checksum(canonical)
-
-
-def _save_atomic(value: object, path: str | Path) -> None:
-    destination = Path(path)
-    if destination.exists() and destination.is_dir():
-        raise IsADirectoryError(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            prefix=f".{destination.name}.",
-            suffix=".tmp",
-            dir=destination.parent,
-            delete=False,
-        ) as handle:
-            temporary = Path(handle.name)
-            torch.save(value, handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, destination)
-        temporary = None
-        directory_fd = os.open(destination.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
-
-
-def _torch_load(path: str | Path) -> object:
-    try:
-        return torch.load(Path(path), map_location="cpu", weights_only=False)
-    except (OSError, RuntimeError, EOFError) as error:
-        raise ReplayMismatchError(
-            f"cannot load representation checkpoint: {error}"
-        ) from error
-
-
-def _qualified_type(value: object) -> str:
-    return f"{type(value).__module__}.{type(value).__qualname__}"
-
-
-def _require_adapter(adapter: object) -> None:
-    if not isinstance(adapter, TGVFAdapter):
-        raise TypeError("adapter must be a TGVFAdapter")
-
-
-def _non_empty_text(value: object, *, field_name: str) -> None:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field_name} must be a non-empty string")
-
-
-def _sha256(value: object, *, field_name: str) -> None:
-    if not isinstance(value, str) or len(value) != 64 or not set(value) <= _HEX:
-        raise ValueError(f"{field_name} must be a lowercase SHA256")
-
-
-def _positive_int(value: object, *, field_name: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{field_name} must be a positive integer")
-
-
-def _integer(value: object, *, field_name: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{field_name} must be an integer")
-
-
-def _non_negative_int(value: object, *, field_name: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError(f"{field_name} must be a non-negative integer")
-
-
-def _strictly_increasing_non_negative_ints(values: object, *, field_name: str) -> None:
-    if not isinstance(values, tuple) or not values:
-        raise ValueError(f"{field_name} must be a non-empty tuple")
-    if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
-        raise ValueError(f"{field_name} must contain integers")
-    if any(value < 0 for value in values) or tuple(sorted(set(values))) != values:
-        raise ValueError(f"{field_name} must be unique and strictly increasing")
-
-
-def _positive_finite_float(value: object, *, field_name: str) -> None:
-    if not isinstance(value, float) or not math.isfinite(value) or value <= 0:
-        raise ValueError(f"{field_name} must be an explicit positive finite float")
-
-
-def _non_negative_finite_float(value: object, *, field_name: str) -> None:
-    if not isinstance(value, float) or not math.isfinite(value) or value < 0:
-        raise ValueError(f"{field_name} must be an explicit non-negative finite float")
-
-
-def _finite_ratio(value: object, *, field_name: str) -> None:
-    if not isinstance(value, float) or not math.isfinite(value) or not 0 <= value <= 1:
-        raise ValueError(f"{field_name} must be an explicit finite float in [0,1]")
-
-
-def _runtime_float(value: object, *, field_name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError(f"runtime optimizer {field_name} must be a real scalar")
-    resolved = float(value)
-    if not math.isfinite(resolved):
-        raise ValueError(f"runtime optimizer {field_name} must be finite")
-    return resolved
-
-
-def _runtime_bool(value: object, *, field_name: str) -> bool:
-    if not isinstance(value, bool):
-        raise TypeError(f"runtime optimizer {field_name} must be bool")
-    return value
-
-
-def _runtime_optional_bool(value: object, *, field_name: str) -> bool | None:
-    if value is not None and not isinstance(value, bool):
-        raise TypeError(f"runtime optimizer {field_name} must be bool or None")
-    return value
