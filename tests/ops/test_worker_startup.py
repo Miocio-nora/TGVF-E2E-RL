@@ -167,6 +167,29 @@ def test_identity_rejects_non_exact_command(command: object) -> None:
         WorkerStartupIdentity(**values)  # type: ignore[arg-type]
 
 
+def test_identity_and_envelope_reject_lone_unicode_command_surrogate() -> None:
+    with pytest.raises(ValueError, match="valid UTF-8 text"):
+        WorkerStartupIdentity(
+            role=POLICY_DRIVER_ROLE,
+            command=("/runtime/python", "\ud800"),
+            target="tgvf_rl.framework.verl.policy_main:main",
+            runtime_package_sha256="a" * 64,
+            dependency_roots_sha256="b" * 64,
+        )
+
+    malformed = (
+        _representation_envelope()
+        .to_json()
+        .replace(
+            '"command":[',
+            '"command":["\\ud800",',
+            1,
+        )
+    )
+    with pytest.raises(ValueError, match="valid UTF-8 text"):
+        WorkerStartupEnvelope.from_json(malformed)
+
+
 @pytest.mark.parametrize(
     "target",
     [

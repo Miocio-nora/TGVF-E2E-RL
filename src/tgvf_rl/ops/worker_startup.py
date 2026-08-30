@@ -129,6 +129,12 @@ def _require_command(value: object) -> tuple[str, ...]:
             raise ValueError(
                 f"worker startup command[{index}] contains a forbidden character"
             )
+        try:
+            item.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise ValueError(
+                f"worker startup command[{index}] must be valid UTF-8 text"
+            ) from error
     return value
 
 
