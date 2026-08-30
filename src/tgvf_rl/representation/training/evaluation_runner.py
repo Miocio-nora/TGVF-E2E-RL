@@ -253,9 +253,19 @@ def load_representation_internal_evaluation_run_config(
 def run_representation_internal_evaluation_from_artifact(
     config_path: str | Path,
 ) -> dict[str, object]:
-    """Evaluate one immutable Adapter export without resuming its training run."""
+    """Read-only compatibility wrapper for non-authorized callers."""
 
     config = load_representation_internal_evaluation_run_config(config_path)
+    return run_representation_internal_evaluation(config)
+
+
+def run_representation_internal_evaluation(
+    config: RepresentationInternalEvaluationRunConfig,
+) -> dict[str, object]:
+    """Evaluate one already-bound config without reopening its source path."""
+
+    if not isinstance(config, RepresentationInternalEvaluationRunConfig):
+        raise TypeError("config must be RepresentationInternalEvaluationRunConfig")
     _require_launch_environment(config)
     _verify_live_code_identity(config)
     training = load_representation_training_config(config.training_config_path)
@@ -625,5 +635,6 @@ __all__ = [
     "REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION",
     "RepresentationInternalEvaluationRunConfig",
     "load_representation_internal_evaluation_run_config",
+    "run_representation_internal_evaluation",
     "run_representation_internal_evaluation_from_artifact",
 ]

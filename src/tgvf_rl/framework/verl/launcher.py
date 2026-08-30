@@ -12,7 +12,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
-import os
 from pathlib import Path
 from types import MappingProxyType
 
@@ -26,6 +25,15 @@ from .compatibility import (
     FSDP2BridgeConfig,
     SPIKE_CANDIDATE_VERL_COMMIT,
     VerlRuntimeRequirements,
+)
+from .compile_prerequisites import (
+    POLICY_COMPILE_PREREQUISITE_BINDING_SCHEMA,
+    POLICY_COMPILE_PREREQUISITE_MISSING_BLOCKER,
+    POLICY_COMPILE_PREREQUISITE_RECEIPT_SCHEMA,
+    PolicyCompilePrerequisiteBinding,
+    PolicyCompilePrerequisiteFileReceipt,
+    PolicyCompilePrerequisiteReceipt,
+    preflight_policy_compile_prerequisites,
 )
 from .exact_replay_engine import TGVF_EXACT_REPLAY_MODEL_TYPE
 from .smoke_dataset import VerlSelectedSampleDatasetBinding
@@ -77,17 +85,6 @@ POLICY_CHECKPOINT_ENGINE_MANAGER_FQN = (
 
 VERL_POLICY_SMOKE_LAUNCH_SCHEMA = "tgvf-verl-policy-smoke-launch-v1"
 
-_POLICY_REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-_TRITON_CC = Path("/usr/bin/gcc")
-_TRITON_CXX = Path("/usr/bin/g++")
-_PYTHON312_DEV_INCLUDE_ROOT = (
-    _POLICY_REPOSITORY_ROOT / ".deps/python312-dev/root/usr/include"
-)
-_PYTHON312_DEV_INCLUDE = _PYTHON312_DEV_INCLUDE_ROOT / "python3.12"
-_TRITON_CPATH = os.pathsep.join(
-    (str(_PYTHON312_DEV_INCLUDE_ROOT), str(_PYTHON312_DEV_INCLUDE))
-)
-
 
 @dataclass(frozen=True, slots=True)
 class UpstreamVerlLaunchPlan:
@@ -96,6 +93,7 @@ class UpstreamVerlLaunchPlan:
     run_identity_sha256: str
     overrides: Mapping[str, object]
     environment: Mapping[str, str]
+    compile_prerequisites: PolicyCompilePrerequisiteBinding | None
     external_components: Mapping[str, str]
     launch_blockers: tuple[str, ...]
     inherited_upstream_fields: tuple[str, ...]
@@ -117,6 +115,10 @@ class UpstreamVerlLaunchPlan:
         if self.runner_fqn != UPSTREAM_VERL_V0_RUNNER_FQN:
             raise ValueError("accepted e003 launch must use the v0 TaskRunner")
         _require_sha256(self.run_identity_sha256, "run_identity_sha256")
+        if self.compile_prerequisites is not None and not isinstance(
+            self.compile_prerequisites, PolicyCompilePrerequisiteBinding
+        ):
+            raise TypeError("compile_prerequisites must be a binding or None")
         object.__setattr__(self, "overrides", MappingProxyType(dict(self.overrides)))
         object.__setattr__(
             self, "environment", MappingProxyType(dict(self.environment))
@@ -225,26 +227,45 @@ class UpstreamVerlLaunchPlan:
             raise ValueError(
                 "launch plan must isolate rollout from veRL full determinism"
             )
-        if self.environment.get("CC") != str(_TRITON_CC):
-            raise ValueError("Policy rollout must bind the accepted Triton C compiler")
-        if self.environment.get("CXX") != str(_TRITON_CXX):
-            raise ValueError(
-                "Policy rollout must bind the accepted Triton C++ compiler"
-            )
-        if self.environment.get("CPATH") != _TRITON_CPATH:
-            raise ValueError(
-                "Policy rollout must bind the accepted Python 3.12 headers"
-            )
-        for required_path in (
-            _TRITON_CC,
-            _TRITON_CXX,
-            _PYTHON312_DEV_INCLUDE / "Python.h",
-            _PYTHON312_DEV_INCLUDE / "pyconfig.h",
-        ):
-            if not required_path.is_file():
-                raise ValueError(
-                    f"Policy rollout compile prerequisite is missing: {required_path}"
-                )
+        compile_environment_names = (
+            "CC",
+            "CXX",
+            "CPATH",
+            "TGVF_POLICY_COMPILE_PREREQUISITE_BINDING_SHA256",
+            "TGVF_POLICY_COMPILE_PREREQUISITE_MANIFEST_PATH",
+            "TGVF_POLICY_COMPILE_PREREQUISITE_MANIFEST_SHA256",
+        )
+        if self.compile_prerequisites is None:
+            if any(name in self.environment for name in compile_environment_names):
+                raise ValueError("blocked Policy plan leaked compile environment")
+            if POLICY_COMPILE_PREREQUISITE_MISSING_BLOCKER not in self.launch_blockers:
+                raise ValueError("blocked Policy plan lost its missing-manifest blocker")
+        else:
+            binding = self.compile_prerequisites
+            expected_compile_environment = {
+                "CC": str(binding.c_compiler),
+                "CXX": str(binding.cxx_compiler),
+                "CPATH": binding.cpath,
+                "TGVF_POLICY_COMPILE_PREREQUISITE_BINDING_SHA256": (
+                    binding.identity_sha256
+                ),
+                "TGVF_POLICY_COMPILE_PREREQUISITE_MANIFEST_PATH": str(
+                    binding.manifest_source_path
+                ),
+                "TGVF_POLICY_COMPILE_PREREQUISITE_MANIFEST_SHA256": (
+                    binding.manifest_source_sha256
+                ),
+            }
+            if any(
+                self.environment.get(name) != value
+                for name, value in expected_compile_environment.items()
+            ):
+                raise ValueError("Policy rollout compile binding environment differs")
+            if any(
+                blocker not in self.launch_blockers
+                for blocker in binding.launch_blockers
+            ):
+                raise ValueError("Policy plan lost a compile residual blocker")
         state_dir = self.environment.get("TGVF_POLICY_STATE_DIR", "")
         if not state_dir.endswith("/runtime-policy-state"):
             raise ValueError("runtime Policy state directory is not explicitly bound")
@@ -261,6 +282,13 @@ class UpstreamVerlLaunchPlan:
                 "upstream veRL launch remains blocked: "
                 + "; ".join(self.launch_blockers)
             )
+
+    def preflight_live_prerequisites(self) -> PolicyCompilePrerequisiteReceipt:
+        """Validate the minimum declarations without weakening plan purity."""
+
+        if self.compile_prerequisites is None:
+            raise RuntimeError(POLICY_COMPILE_PREREQUISITE_MISSING_BLOCKER)
+        return preflight_policy_compile_prerequisites(self.compile_prerequisites)
 
     def as_nested_mapping(self) -> dict[str, object]:
         """Return the project-owned overrides as a plain nested mapping."""
@@ -326,6 +354,16 @@ class UpstreamVerlLaunchPlan:
             "launch_blockers": list(self.launch_blockers),
             "inherited_upstream_fields": list(self.inherited_upstream_fields),
             "environment": dict(self.environment),
+            "compile_prerequisites": (
+                None
+                if self.compile_prerequisites is None
+                else self.compile_prerequisites.as_record()
+            ),
+            "compile_prerequisites_sha256": (
+                None
+                if self.compile_prerequisites is None
+                else self.compile_prerequisites.identity_sha256
+            ),
             "external_components": dict(self.external_components),
             "overrides": _plain(self.overrides),
         }
@@ -343,11 +381,17 @@ def build_policy_e2e_smoke_verl_plan(
     config: PolicyE2ESmokeRunConfig,
     *,
     horizon_extension: PolicyHorizonExtension | None = None,
+    compile_prerequisites: PolicyCompilePrerequisiteBinding | None = None,
 ) -> UpstreamVerlLaunchPlan:
     """Map one strict smoke identity onto pinned veRL's public config paths."""
 
     if not isinstance(config, PolicyE2ESmokeRunConfig):
         raise TypeError("config must be PolicyE2ESmokeRunConfig")
+    prerequisite_binding = compile_prerequisites
+    if prerequisite_binding is not None and not isinstance(
+        prerequisite_binding, PolicyCompilePrerequisiteBinding
+    ):
+        raise TypeError("compile_prerequisites must be a binding or None")
     if horizon_extension is not None:
         if not isinstance(horizon_extension, PolicyHorizonExtension):
             raise TypeError("horizon_extension must be PolicyHorizonExtension")
@@ -815,19 +859,34 @@ def build_policy_e2e_smoke_verl_plan(
     environment["PYTHONHASHSEED"] = str(config.rollout_rng.master_seed)
     environment["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     environment["TOKENIZERS_PARALLELISM"] = "false"
-    # Triton compiles its CUDA launcher lazily on the first real LoRA forward.
-    # The host Python 3.12 sysconfig include is incomplete, so bind the pinned,
-    # repository-local development headers already accepted by the veRL spike.
-    environment["CC"] = str(_TRITON_CC)
-    environment["CXX"] = str(_TRITON_CXX)
-    environment["CPATH"] = _TRITON_CPATH
+    # Triton compiles its CUDA launcher lazily.  Never infer compiler/header
+    # paths from this worktree or a sibling checkout: only an explicitly loaded,
+    # content-bound manifest may contribute these environment variables.
+    if prerequisite_binding is not None:
+        environment["CC"] = str(prerequisite_binding.c_compiler)
+        environment["CXX"] = str(prerequisite_binding.cxx_compiler)
+        environment["CPATH"] = prerequisite_binding.cpath
+        environment["TGVF_POLICY_COMPILE_PREREQUISITE_BINDING_SHA256"] = (
+            prerequisite_binding.identity_sha256
+        )
+        environment["TGVF_POLICY_COMPILE_PREREQUISITE_MANIFEST_PATH"] = str(
+            prerequisite_binding.manifest_source_path
+        )
+        environment["TGVF_POLICY_COMPILE_PREREQUISITE_MANIFEST_SHA256"] = (
+            prerequisite_binding.manifest_source_sha256
+        )
 
-    blockers: tuple[str, ...] = ()
+    blockers = (
+        (POLICY_COMPILE_PREREQUISITE_MISSING_BLOCKER,)
+        if prerequisite_binding is None
+        else prerequisite_binding.launch_blockers
+    )
     inherited: tuple[str, ...] = ()
     return UpstreamVerlLaunchPlan(
         run_identity_sha256=config.identity_sha256,
         overrides=values,
         environment=environment,
+        compile_prerequisites=prerequisite_binding,
         external_components=external_components,
         launch_blockers=blockers,
         inherited_upstream_fields=inherited,
@@ -1056,11 +1115,17 @@ __all__ = [
     "NATIVE_AGENT_LOOP_FQN",
     "NATIVE_AGENT_LOOP_NAME",
     "NATIVE_INVOCATION_FACTORY_FQN",
+    "POLICY_COMPILE_PREREQUISITE_BINDING_SCHEMA",
+    "POLICY_COMPILE_PREREQUISITE_RECEIPT_SCHEMA",
     "POLICY_CHECKPOINT_ENGINE_MANAGER_FQN",
+    "PolicyCompilePrerequisiteBinding",
+    "PolicyCompilePrerequisiteFileReceipt",
+    "PolicyCompilePrerequisiteReceipt",
     "UPSTREAM_VERL_CONFIG_NAME",
     "UPSTREAM_VERL_MAIN_MODULE",
     "UPSTREAM_VERL_V0_RUNNER_FQN",
     "UpstreamVerlLaunchPlan",
     "build_policy_e2e_smoke_verl_plan",
     "compose_upstream_verl_config",
+    "preflight_policy_compile_prerequisites",
 ]

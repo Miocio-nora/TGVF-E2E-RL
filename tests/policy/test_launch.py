@@ -5,6 +5,7 @@ import subprocess
 
 import pytest
 
+from tgvf_rl.policy import launch as launch_module
 from tgvf_rl.policy.launch import _assert_code_commit_or_ledger_only_descendant
 
 
@@ -101,3 +102,24 @@ def test_launch_commit_allows_the_tracked_config_and_ledger_descendant(
         observed_commit=manifest_commit,
         config_source_path=config_path,
     )
+
+
+def test_execution_rejects_unprepared_direct_config_before_execve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(
+        launch_module.os,
+        "execve",
+        lambda *_args, **_kwargs: events.append("execve"),
+    )
+
+    with pytest.raises(TypeError, match="prepared must be PreparedPolicyLaunch"):
+        launch_module.execute_policy_e2e_smoke(
+            object(),  # type: ignore[arg-type]
+            launch_identity=object(),  # type: ignore[arg-type]
+            worker_authorization=object(),  # type: ignore[arg-type]
+            gate_directory=Path("/gate"),
+        )
+
+    assert events == []

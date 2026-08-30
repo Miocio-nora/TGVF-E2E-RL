@@ -19,8 +19,21 @@ tgvf-rl = "tgvf_rl.cli:main"
 tgvf_qwen3_precomputed = "tgvf_rl.framework.vllm:register_tgvf_qwen3_vllm_plugin"
 
 [project.optional-dependencies]
-qwen = ["transformers>=4.57", "safetensors>=0.4"]
-test = ["pytest>=8.3", "ruff>=0.12"]
+qwen = [
+  "numpy>=1.26",
+  "Pillow>=10.0",
+  "safetensors>=0.4",
+  "transformers>=4.57",
+]
+test = [
+  "aiohttp>=3.9",
+  "hydra-core>=1.3",
+  "omegaconf>=2.3",
+  "pandas>=2.2",
+  "pytest>=8.3",
+  "ruff>=0.12",
+  "tensordict>=0.5",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

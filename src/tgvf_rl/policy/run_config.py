@@ -53,10 +53,13 @@ from tgvf_rl.judges import (
     load_tgvf_visual_quality_judge,
 )
 from tgvf_rl.protocol import (
+    NativeActionBoundaryProtocolId,
     NativeAssistantDialect,
+    NativeSuccessObservationProtocolId,
     NativeToolCapabilityProfile,
     StandardToolError,
     ToolErrorCode,
+    validate_success_observation_protocol,
     visual_tool_prompt_identity,
 )
 from tgvf_rl.protocol.native import native_assistant_dialect_for_model
@@ -82,6 +85,10 @@ from .config import (
     PolicyTGVFStage3ExperimentConfig,
     PolicyVisualToolExperimentConfig,
 )
+from .deepeyes_strict_control import (
+    DeepEyesStrictControlBinding,
+    DeepEyesVisualAnswerVerifierMode,
+)
 
 
 POLICY_E2E_SMOKE_CONFIG_SCHEMA = "policy-e2e-smoke-config-v3"
@@ -91,6 +98,15 @@ POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA = "policy-e2e-stage3-shaped-run-confi
 POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA = (
     "policy-e2e-deepeyes-scaled-crop-run-config-v1"
 )
+POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-deepeyes-strict-control-run-config-v1"
+)
+POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-explicit-observation-run-config-v1"
+)
+# Stabilization bridge for this historical run-config family. It proves that
+# observation and action identities are explicit, but it is not a replacement
+# for the newer method-specific NoTool/Crop/TGVF/Atomic @512 schemas.
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
 POLICY_E2E_SMOKE_JUDGE_MODE = "not_applicable"
 POLICY_E2E_SMOKE_REWARD_TASK = "multiple_choice"
@@ -99,6 +115,19 @@ POLICY_E2E_SMOKE_SEED_DERIVATION_NAME = "content-addressed-vllm-turn-rng-v1"
 POLICY_E2E_MIXED_REWARD_TASK = "mixed"
 POLICY_E2E_MIXED_ANSWER_VERIFIER = "rule_first_qwen25_72b"
 POLICY_E2E_MIXED_JUDGE_MODE = "qwen25_72b_semantic_fallback"
+POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER = (
+    "visual_always_qwen25_72b_thinklite_rule_first"
+)
+POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER_SHA256 = (
+    "9f8136fc11af71e9debb3ee2eb040592ab5c524678ed8b90a1be22dd02b835e9"
+)
+POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_JUDGE_MODE = "qwen25_72b_always_visual"
+POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_JUDGE_CONFIG_SHA256 = (
+    "26b733aa079fa3adc4c0eeddb7e847c15c809a1dcc2affe2bc6947e6e7ac1dee"
+)
+POLICY_E2E_DEEPEYES_RULE_FIRST_JUDGE_CONFIG_SHA256 = (
+    "1ec38f640f943702ad812dc367fc66edf843a663a1c1048ebb39a0d25fac18a9"
+)
 
 _SUPPORTED_POLICY_MODEL_IDENTITIES = frozenset(
     {
@@ -206,6 +235,16 @@ POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256 = _fixed_contract_sha256(
         "judge_failure": "abort_reward_batch",
         "mcq_judge_calls": "forbidden",
     }
+)
+# Historical verifier identities remain readable only for immutable evaluation
+# snapshots.  They are not accepted by the default training/launch loader: the
+# implementation behind these identities was superseded, so silently treating
+# them as the current verifier would change the reward contract of an old run.
+POLICY_E2E_SMOKE_ANSWER_VERIFIER_V2_SHA256 = (
+    "2a3d5fa4b7e594939aabb2d1b1192499deea86040d980374f7bc8af3e9082e1c"
+)
+POLICY_E2E_MIXED_ANSWER_VERIFIER_V1_SHA256 = (
+    "661133336fc1db8b4a14a360efa84fc4180f040b7f1be4992f83b4d5cdda8e17"
 )
 POLICY_E2E_SMOKE_CAP_ERROR_SHA256 = StandardToolError(
     code=ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value,
@@ -325,6 +364,8 @@ class SmokeProtocolBinding:
     tool_schema_sha256: str
     enabled_tool_names: tuple[str, ...]
     maximum_tool_calls: int
+    success_observation_protocol_id: NativeSuccessObservationProtocolId | None = None
+    action_boundary_protocol_id: NativeActionBoundaryProtocolId | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -480,6 +521,7 @@ class PolicyE2ESmokeRunConfig:
     source_path: Path
     source_sha256: str
     canonical_json: str
+    deepeyes_control: DeepEyesStrictControlBinding | None = None
     formal_pilot: bool = False
     schema_version: str = POLICY_E2E_SMOKE_CONFIG_SCHEMA
 
@@ -490,6 +532,8 @@ class PolicyE2ESmokeRunConfig:
             POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA: True,
             POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA: False,
         }
         if self.schema_version not in accepted:
             raise ValueError("policy E2E run config schema mismatch")
@@ -537,9 +581,19 @@ def formal_deepeyes47k_iteration_identity_sha256(
 
 def load_policy_e2e_smoke_run_config(
     path: str | Path,
+    *,
+    allow_external_agent_loop_config: bool = False,
+    allow_historical_reward_contract: bool = False,
+    allow_historical_read_only_contract: bool = False,
 ) -> PolicyE2ESmokeRunConfig:
     """Read and validate a complete smoke TOML without launching anything."""
 
+    if type(allow_external_agent_loop_config) is not bool:
+        raise ValueError("allow_external_agent_loop_config must be a bool")
+    if type(allow_historical_reward_contract) is not bool:
+        raise ValueError("allow_historical_reward_contract must be a bool")
+    if type(allow_historical_read_only_contract) is not bool:
+        raise ValueError("allow_historical_read_only_contract must be a bool")
     source_path = _existing_file(path, name="config path")
     if source_path.is_symlink():
         raise ValueError("config path must not be a symlink")
@@ -549,24 +603,50 @@ def load_policy_e2e_smoke_run_config(
         payload = tomllib.loads(decoded)
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise ValueError("policy E2E smoke config is not strict UTF-8 TOML") from error
-    if not isinstance(payload, Mapping) or set(payload) != _TOP_LEVEL_FIELDS:
+    if not isinstance(payload, Mapping):
         raise ValueError("policy E2E smoke top-level fields differ")
-    schema_version = payload["schema_version"]
+    schema_version = payload.get("schema_version")
     if schema_version not in {
         POLICY_E2E_SMOKE_CONFIG_SCHEMA,
         POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
         POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA,
         POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
         POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA,
     }:
         raise ValueError("policy E2E run config schema mismatch")
+    deepeyes_strict_control_run = (
+        schema_version == POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA
+    )
+    expected_top_level_fields = (
+        _TOP_LEVEL_FIELDS | {"deepeyes_control"}
+        if deepeyes_strict_control_run
+        else _TOP_LEVEL_FIELDS
+    )
+    if set(payload) != expected_top_level_fields:
+        raise ValueError("policy E2E smoke top-level fields differ")
+    if deepeyes_strict_control_run and not allow_historical_read_only_contract:
+        raise ValueError(
+            "historical PRL12 strict-control v1 is read-only; explicit historical "
+            "contract loading is required"
+        )
     formal_pilot = schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
     if payload["formal_pilot"] is not formal_pilot:
         raise ValueError("policy E2E run formal_pilot mode differs from schema")
     mixed_run = schema_version != POLICY_E2E_SMOKE_CONFIG_SCHEMA
     stage3_shaped_run = schema_version == POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA
-    deepeyes_scaled_crop_run = (
-        schema_version == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
+    deepeyes_scaled_crop_run = schema_version in {
+        POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA,
+    }
+    deepeyes_control = (
+        DeepEyesStrictControlBinding.from_mapping(payload["deepeyes_control"])
+        if deepeyes_strict_control_run
+        else None
+    )
+    explicit_observation_run = (
+        schema_version == POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA
     )
     run_id = _safe_run_id(payload["run_id"])
 
@@ -878,17 +958,21 @@ def load_policy_e2e_smoke_run_config(
         conditioning=conditioning,
     )
 
+    protocol_fields = {
+        "prompt_sha256",
+        "cap_error_sha256",
+        "tool_profile",
+        "tool_schema_sha256",
+        "enabled_tool_names",
+        "maximum_tool_calls",
+    }
+    if explicit_observation_run:
+        protocol_fields.add("success_observation_protocol_id")
+        protocol_fields.add("action_boundary_protocol_id")
     protocol_table = _table(
         payload,
         "protocol",
-        {
-            "prompt_sha256",
-            "cap_error_sha256",
-            "tool_profile",
-            "tool_schema_sha256",
-            "enabled_tool_names",
-            "maximum_tool_calls",
-        },
+        protocol_fields,
     )
     enabled_tools = _text_tuple(
         protocol_table["enabled_tool_names"], name="protocol.enabled_tool_names"
@@ -925,6 +1009,22 @@ def load_policy_e2e_smoke_run_config(
         ),
         "protocol.cap_error_sha256",
     )
+    success_observation_protocol_id: NativeSuccessObservationProtocolId | None = None
+    action_boundary_protocol_id: NativeActionBoundaryProtocolId | None = None
+    if explicit_observation_run:
+        success_observation_protocol_id = validate_success_observation_protocol(
+            protocol_table["success_observation_protocol_id"],
+            tool_profile=tool_profile,
+            assistant_dialect=assistant_dialect,
+        )
+        try:
+            action_boundary_protocol_id = NativeActionBoundaryProtocolId(
+                protocol_table["action_boundary_protocol_id"]
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "protocol.action_boundary_protocol_id is invalid"
+            ) from error
     protocol = SmokeProtocolBinding(
         prompt_sha256=_sha256(
             protocol_table["prompt_sha256"], name="protocol.prompt_sha256"
@@ -934,8 +1034,16 @@ def load_policy_e2e_smoke_run_config(
         tool_schema_sha256=protocol_table["tool_schema_sha256"],
         enabled_tool_names=enabled_tools,
         maximum_tool_calls=protocol_table["maximum_tool_calls"],
+        success_observation_protocol_id=success_observation_protocol_id,
+        action_boundary_protocol_id=action_boundary_protocol_id,
     )
-    if mixed_run:
+    if deepeyes_control is not None:
+        _require_exact(
+            protocol.prompt_sha256,
+            deepeyes_control.prompt_bundle_sha256(assistant_dialect),
+            "protocol.prompt_sha256",
+        )
+    elif mixed_run:
         accepted_prompt_hashes = {
             visual_tool_prompt_identity(
                 tool_profile,
@@ -1097,14 +1205,23 @@ def load_policy_e2e_smoke_run_config(
     expected_task = (
         POLICY_E2E_MIXED_REWARD_TASK if mixed_run else POLICY_E2E_SMOKE_REWARD_TASK
     )
-    expected_verifier = (
-        POLICY_E2E_MIXED_ANSWER_VERIFIER
-        if mixed_run
-        else POLICY_E2E_SMOKE_ANSWER_VERIFIER
+    visual_always_judge = (
+        deepeyes_control is not None
+        and deepeyes_control.visual_answer_verifier
+        is DeepEyesVisualAnswerVerifierMode.ALWAYS_QWEN25_72B
     )
-    expected_judge_mode = (
-        POLICY_E2E_MIXED_JUDGE_MODE if mixed_run else POLICY_E2E_SMOKE_JUDGE_MODE
-    )
+    if visual_always_judge:
+        expected_verifier = POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER
+        expected_judge_mode = POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_JUDGE_MODE
+    else:
+        expected_verifier = (
+            POLICY_E2E_MIXED_ANSWER_VERIFIER
+            if mixed_run
+            else POLICY_E2E_SMOKE_ANSWER_VERIFIER
+        )
+        expected_judge_mode = (
+            POLICY_E2E_MIXED_JUDGE_MODE if mixed_run else POLICY_E2E_SMOKE_JUDGE_MODE
+        )
     _require_exact(reward_table["task_kind"], expected_task, "reward.task_kind")
     _require_exact(
         reward_table["answer_verifier"],
@@ -1116,15 +1233,33 @@ def load_policy_e2e_smoke_run_config(
         reward_table["answer_verifier_sha256"],
         name="reward.answer_verifier_sha256",
     )
-    _require_exact(
-        answer_verifier_sha256,
-        (
+    if visual_always_judge:
+        current_answer_verifier_sha256 = (
+            POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER_SHA256
+        )
+    else:
+        current_answer_verifier_sha256 = (
             POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256
             if mixed_run
             else POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256
-        ),
-        "reward.answer_verifier_sha256",
+        )
+    historical_answer_verifier_sha256 = (
+        POLICY_E2E_MIXED_ANSWER_VERIFIER_V1_SHA256
+        if mixed_run
+        else POLICY_E2E_SMOKE_ANSWER_VERIFIER_V2_SHA256
     )
+    accepted_answer_verifier_sha256s = {current_answer_verifier_sha256}
+    if allow_historical_reward_contract and deepeyes_control is None:
+        accepted_answer_verifier_sha256s.add(historical_answer_verifier_sha256)
+    if answer_verifier_sha256 not in accepted_answer_verifier_sha256s:
+        raise ValueError(
+            "reward.answer_verifier_sha256 differs from the current contract"
+            + (
+                " and the named historical evaluation contract"
+                if allow_historical_reward_contract
+                else ""
+            )
+        )
     if mixed_run:
         judge_config_path = _existing_file(
             reward_table["judge_config_path"], name="reward.judge_config_path"
@@ -1137,12 +1272,19 @@ def load_policy_e2e_smoke_run_config(
         )
         if _sha256_file(judge_config_path) != judge_config_sha256:
             raise ValueError("reward judge config SHA256 mismatch")
-        bound_judge = load_openai_compatible_judge(
-            judge_config_path,
-            expected_file_sha256=judge_config_sha256,
-        )
-        if formal_pilot and not bound_judge.formal_pilot_accepted:
-            raise ValueError("reward judge is not accepted for the formal Pilot")
+        if deepeyes_control is not None:
+            _validate_deepeyes_strict_judge(
+                judge_config_path,
+                judge_config_sha256=judge_config_sha256,
+                visual_always=visual_always_judge,
+            )
+        else:
+            bound_judge = load_openai_compatible_judge(
+                judge_config_path,
+                expected_file_sha256=judge_config_sha256,
+            )
+            if formal_pilot and not bound_judge.formal_pilot_accepted:
+                raise ValueError("reward judge is not accepted for the formal Pilot")
     else:
         judge_config_path = None
         judge_config_sha256 = None
@@ -1498,7 +1640,10 @@ def load_policy_e2e_smoke_run_config(
         framework_table["agent_loop_config_path"],
         name="framework.agent_loop_config_path",
     )
-    if agent_loop_config_path != POLICY_E2E_AGENT_LOOP_CONFIG_PATH:
+    if (
+        not allow_external_agent_loop_config
+        and agent_loop_config_path != POLICY_E2E_AGENT_LOOP_CONFIG_PATH
+    ):
         raise ValueError(
             "framework.agent_loop_config_path differs from the checked-in "
             "Policy Pilot composition"
@@ -1787,6 +1932,7 @@ def load_policy_e2e_smoke_run_config(
         source_path=source_path,
         source_sha256=hashlib.sha256(raw).hexdigest(),
         canonical_json=canonical_json,
+        deepeyes_control=deepeyes_control,
         formal_pilot=payload["formal_pilot"],
         schema_version=schema_version,
     )
@@ -2176,6 +2322,52 @@ def _logprob_measurement(value: object) -> LogProbMeasurement:
         raise ValueError("sampling.logprob_measurement is invalid") from error
 
 
+def _validate_deepeyes_strict_judge(
+    path: Path,
+    *,
+    judge_config_sha256: str,
+    visual_always: bool,
+) -> None:
+    """Validate the two immutable PRL12 judge identities without enabling them."""
+
+    try:
+        payload = json.loads(path.read_bytes())
+    except json.JSONDecodeError as error:
+        raise ValueError("PRL12 judge config is invalid JSON") from error
+    if not isinstance(payload, Mapping):
+        raise ValueError("PRL12 judge config schema differs")
+    scope = payload.get("scope")
+    if not isinstance(scope, Mapping):
+        raise ValueError("PRL12 judge scope differs")
+    if scope.get("allows_mcq_judge_calls") is not visual_always:
+        raise ValueError("PRL12 judge MCQ scope differs from strict-control arm")
+    expected_scope = {
+        "allows_policy_rl_reward": True,
+        "allows_mcq_judge_calls": visual_always,
+        "allows_reference_policy": False,
+        "allows_sdpo_teacher": False,
+        "allows_gpt_fallback": False,
+        "formal_pilot_accepted": not visual_always,
+    }
+    if dict(scope) != expected_scope:
+        raise ValueError("PRL12 judge scope differs from strict-control arm")
+    _require_exact(
+        payload.get("role"),
+        "policy_rl_answer_judge_only",
+        "PRL12 judge role",
+    )
+    expected_sha256 = (
+        POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_JUDGE_CONFIG_SHA256
+        if visual_always
+        else POLICY_E2E_DEEPEYES_RULE_FIRST_JUDGE_CONFIG_SHA256
+    )
+    _require_exact(
+        judge_config_sha256,
+        expected_sha256,
+        "PRL12 judge config SHA256",
+    )
+
+
 def _existing_file(value: object, *, name: str) -> Path:
     unresolved = Path(value) if isinstance(value, (str, Path)) else None
     if unresolved is not None and unresolved.is_symlink():
@@ -2256,16 +2448,20 @@ def _normalize_json(value: object) -> object:
 __all__ = [
     "POLICY_E2E_AGENT_LOOP_CONFIG_PATH",
     "POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA",
     "POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256",
     "POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256",
+    "POLICY_E2E_MIXED_ANSWER_VERIFIER_V1_SHA256",
     "POLICY_E2E_MIXED_JUDGE_MODE",
     "POLICY_E2E_MIXED_REWARD_TASK",
     "POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256",
+    "POLICY_E2E_SMOKE_ANSWER_VERIFIER_V2_SHA256",
     "POLICY_E2E_SMOKE_CAP_ERROR_SHA256",
     "POLICY_E2E_SMOKE_CODE_REPOSITORY",
     "POLICY_E2E_SMOKE_CONFIG_SCHEMA",

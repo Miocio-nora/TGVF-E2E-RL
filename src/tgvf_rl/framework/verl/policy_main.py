@@ -3,9 +3,26 @@
 from __future__ import annotations
 
 from importlib.util import find_spec
+import os
 from pathlib import Path
 import sys
 from typing import Sequence
+
+from tgvf_rl.ops.cli_authorization import (
+    CLIExecutionAuthorizationIdentity,
+    assert_canonical_runtime_launch_enabled,
+    bind_current_python_executable,
+    verify_cli_worker_authorization_from_environment,
+)
+
+from .compile_prerequisites import (
+    POLICY_COMPILE_PREREQUISITE_CLOSURE_POLICY,
+    verify_policy_compile_prerequisites_from_environment,
+)
+
+
+_POLICY_PHASE = "policy_training"
+_POLICY_COMMAND_ID = "tgvf-rl:run-policy:v3"
 
 
 def compose_pinned_verl_config(overrides: Sequence[str]) -> object:
@@ -27,6 +44,19 @@ def compose_pinned_verl_config(overrides: Sequence[str]) -> object:
 def main(argv: Sequence[str] | None = None) -> None:
     """Run upstream orchestration with the project lifecycle TaskRunner class."""
 
+    # This must be the first runtime action.  A compile receipt by itself is not
+    # launch authority: require the consumed one-time CLI authorization and its
+    # live parent before touching Hydra, veRL, Ray, or lazy compilation.
+    launch_identity = verify_cli_worker_authorization_from_environment(
+        expected_phase=_POLICY_PHASE,
+        expected_command_id=_POLICY_COMMAND_ID,
+    )
+    assert_canonical_runtime_launch_enabled()
+    _verify_launch_identity_against_current_process(launch_identity)
+    verify_policy_compile_prerequisites_from_environment(
+        required=True,
+        require_closure_complete=True,
+    )
     arguments = tuple(sys.argv[1:] if argv is None else argv)
     config = compose_pinned_verl_config(arguments)
     from verl.trainer.main_ppo import run_ppo
@@ -46,6 +76,41 @@ def main(argv: Sequence[str] | None = None) -> None:
         use_critic=need_critic(config),
     )
     run_ppo(config, task_runner_class=create_policy_pilot_task_runner_class())
+
+
+def _verify_launch_identity_against_current_process(
+    identity: CLIExecutionAuthorizationIdentity,
+) -> None:
+    parameters = dict(identity.parameters)
+    python_identity = bind_current_python_executable(sys.executable)
+    for name, expected in python_identity.authorization_parameters().items():
+        if parameters.get(name) != expected:
+            raise RuntimeError(
+                f"Policy worker Python identity differs from launcher parameter {name}"
+            )
+    compile_environment_parameters = {
+        "compile_prerequisite_receipt_sha256": (
+            "TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_SHA256"
+        ),
+        "compile_prerequisite_binding_sha256": (
+            "TGVF_POLICY_COMPILE_PREREQUISITE_BINDING_SHA256"
+        ),
+        "compile_prerequisite_manifest_sha256": (
+            "TGVF_POLICY_COMPILE_PREREQUISITE_MANIFEST_SHA256"
+        ),
+    }
+    for parameter_name, environment_name in compile_environment_parameters.items():
+        if parameters.get(parameter_name) != os.environ.get(environment_name):
+            raise RuntimeError(
+                "Policy compile receipt environment differs from consumed launch identity"
+            )
+    if (
+        parameters.get("compile_prerequisite_closure_policy")
+        != POLICY_COMPILE_PREREQUISITE_CLOSURE_POLICY
+    ):
+        raise RuntimeError(
+            "Policy compile closure policy differs from consumed launch identity"
+        )
 
 
 if __name__ == "__main__":

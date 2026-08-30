@@ -67,8 +67,34 @@ def test_launchable_contract_binds_enabled_judge_bytes() -> None:
     )
 
 
-def test_historical_snapshot_contract_loads_while_new_templates_are_clean() -> None:
-    historical = load_deepeyes_native_run_contract(_LAUNCHABLE, allow_template=False)
+def test_historical_snapshot_contract_loads_while_new_templates_are_clean(
+    tmp_path: Path,
+) -> None:
+    historical_path = tmp_path / "historical-prl13-snapshot.toml"
+    historical_path.write_text(
+        _LAUNCHABLE.read_text(encoding="utf-8")
+        .replace(
+            VISUAL_PROMPT_IDENTITY.bundle_sha256,
+            "b91cfa2e228f496f745a6e0b368cff836e6786ad104e312cd776a12e0784b2ef",
+            1,
+        )
+        .replace(
+            THINKLITE_PROMPT_IDENTITY.bundle_sha256,
+            "bd3226c36dea66cc57a9b30fad5c846ce3d3a23a008781425c70214580aba545",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="visual_prompt_bundle_sha256"):
+        load_deepeyes_native_run_contract(
+            historical_path,
+            allow_template=False,
+        )
+    historical = load_deepeyes_native_run_contract(
+        historical_path,
+        allow_template=False,
+        allow_historical_prompt_contract=True,
+    )
     assert historical.payload["protocol"]["visual_prompt_bundle_sha256"] == (
         "b91cfa2e228f496f745a6e0b368cff836e6786ad104e312cd776a12e0784b2ef"
     )

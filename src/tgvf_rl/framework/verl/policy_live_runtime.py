@@ -46,6 +46,9 @@ from tgvf_rl.environment.focus_tool import (
     ToolExecutionResult,
 )
 from tgvf_rl.environment.qwen3_crop_materializer import preprocess_qwen3_rgb
+from tgvf_rl.environment.native_appender import (
+    NativeSuccessObservationContract,
+)
 from tgvf_rl.protocol.state_machine import CapErrorBehavior
 from tgvf_rl.observations.finalizer import (
     MaterializedTrajectoryReplayTensors,
@@ -60,7 +63,14 @@ from tgvf_rl.observations.store import (
     tensor_checksum,
 )
 from tgvf_rl.protocol.parser import StrictToolCallParser
-from tgvf_rl.protocol.native import native_assistant_dialect_for_model
+from tgvf_rl.protocol.native import (
+    NativeAssistantDialect,
+    native_assistant_dialect_for_model,
+)
+from tgvf_rl.protocol.observation_contract import (
+    NativeSuccessObservationProtocolId,
+)
+from tgvf_rl.protocol.action_boundary import NativeActionBoundaryProtocolId
 from tgvf_rl.protocol.schema import (
     NativeToolCapabilityProfile,
     ParsedImageZoomInCall,
@@ -139,6 +149,63 @@ QWEN3_POLICY_E2E_LIVE_RUNTIME_SCHEMA = "tgvf-qwen3-policy-e2e-live-runtime-v1"
 _BRANCH_LAYERS = (8, 16, 24)
 
 
+def _success_observation_contract(
+    *,
+    protocol_id: NativeSuccessObservationProtocolId,
+    tool_profile: NativeToolCapabilityProfile,
+    assistant_dialect: NativeAssistantDialect,
+) -> NativeSuccessObservationContract:
+    """Bind a caller-selected success-observation protocol to a live run."""
+
+    return NativeSuccessObservationContract(
+        protocol_id=protocol_id,
+        tool_profile=tool_profile,
+        assistant_dialect=assistant_dialect,
+    )
+
+
+def _required_success_observation_protocol_id(
+    protocol: object,
+) -> NativeSuccessObservationProtocolId:
+    """Read a run-identity-owned protocol ID without a runtime default."""
+
+    value = getattr(protocol, "success_observation_protocol_id", None)
+    if value is None:
+        raise ValueError(
+            "live visual-tool runtime requires protocol.success_observation_protocol_id"
+        )
+    try:
+        return NativeSuccessObservationProtocolId(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "protocol.success_observation_protocol_id is invalid"
+        ) from error
+
+
+def _required_action_boundary_protocol_id(
+    protocol: object,
+) -> NativeActionBoundaryProtocolId:
+    """Require the strict action semantics implemented by this live loop."""
+
+    value = getattr(protocol, "action_boundary_protocol_id", None)
+    if value is None:
+        raise ValueError(
+            "live visual-tool runtime requires protocol.action_boundary_protocol_id"
+        )
+    try:
+        selected = NativeActionBoundaryProtocolId(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("protocol.action_boundary_protocol_id is invalid") from error
+    if (
+        selected
+        is not NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+    ):
+        raise ValueError(
+            "framework-neutral live runtime requires strict terminal action boundary v2"
+        )
+    return selected
+
+
 class Qwen3PolicyE2ELiveRuntimeBuilder:
     """Build CPU AgentLoop state bound to the existing vLLM rollout client."""
 
@@ -169,6 +236,18 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
         config = context.config
         if config.model.family != "qwen3_vl":
             raise ValueError("Policy Pilot live runtime requires qwen3_vl")
+        assistant_dialect = native_assistant_dialect_for_model(config.model.model_name)
+        selected_protocol_id = _required_success_observation_protocol_id(
+            config.protocol
+        )
+        action_boundary_protocol_id = _required_action_boundary_protocol_id(
+            config.protocol
+        )
+        observation_contract = _success_observation_contract(
+            protocol_id=selected_protocol_id,
+            tool_profile=config.protocol.tool_profile,
+            assistant_dialect=assistant_dialect,
+        )
         server_client = context.server_manager
         required_methods = ["materialize_source", "generate"]
         if config.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
@@ -281,6 +360,8 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
             metrics_factory=self.metrics_factory,
             agent_loop_output_cls=self.agent_loop_output_cls,
             sample_index=_load_bound_sample_index(config),
+            observation_contract=observation_contract,
+            action_boundary_protocol_id=action_boundary_protocol_id,
         )
         return PolicyE2ERuntimeProduct(
             trajectory_components=components,
@@ -309,6 +390,8 @@ class _Qwen3PolicyTrajectoryComponents:
         ],
         agent_loop_output_cls: type[Any] | None,
         sample_index: Mapping[str, Mapping[str, object]],
+        observation_contract: NativeSuccessObservationContract,
+        action_boundary_protocol_id: NativeActionBoundaryProtocolId,
     ) -> None:
         self.context = context
         self.config = context.config
@@ -323,6 +406,17 @@ class _Qwen3PolicyTrajectoryComponents:
         self.metrics_factory = metrics_factory
         self.agent_loop_output_cls = agent_loop_output_cls
         self.sample_index = sample_index
+        if not isinstance(observation_contract, NativeSuccessObservationContract):
+            raise TypeError(
+                "trajectory components require NativeSuccessObservationContract"
+            )
+        self.observation_contract = observation_contract
+        if (
+            action_boundary_protocol_id
+            is not NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+        ):
+            raise ValueError("trajectory components require strict action boundary v2")
+        self.action_boundary_protocol_id = action_boundary_protocol_id
         if self.config.reward.profile == "pilot-v1":
             self.reward_pipeline = _build_reward_pipeline(self.config)
             self.stage3_reward_runtime = None
@@ -399,11 +493,16 @@ class _Qwen3PolicyTrajectoryComponents:
         assistant_dialect = native_assistant_dialect_for_model(
             self.config.model.model_name
         )
+        observation_contract = self.observation_contract
+        if observation_contract.assistant_dialect is not assistant_dialect:
+            raise IdentityMismatchError(
+                "success-observation contract assistant dialect changed"
+            )
         appender = QwenNativeToolObservationAppender(
             tokenizer=self.layout_builder.tokenizer,
             registrar=registry,
+            observation_contract=observation_contract,
             visual_token_count_resolver=_VisualTokenCountResolver(self.store),
-            assistant_dialect=assistant_dialect,
         )
         parser = StrictToolCallParser(
             enabled_tool_names=self.config.protocol.enabled_tool_names
@@ -419,6 +518,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 execution_ledger=self.focus_execution_ledger,
                 contextual_forward_identity=self.contextual_forward_identity,
                 branch_merger_identities=self.branch_merger_identities,
+                observation_contract=observation_contract,
             )
         elif self.config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_ONLY:
             crop_processor_identity = _artifact_identity(
@@ -434,7 +534,13 @@ class _Qwen3PolicyTrajectoryComponents:
                 "policy-runtime",
                 "qwen3-native-crop-layout",
                 QWEN3_POLICY_E2E_LIVE_RUNTIME_SCHEMA,
-                {"model": self.config.model.revision_or_path},
+                {
+                    "model": self.config.model.revision_or_path,
+                    "success_observation_protocol": (
+                        observation_contract.protocol_id.value
+                    ),
+                    "action_boundary_protocol": self.action_boundary_protocol_id.value,
+                },
             )
             crop_materializer = _RemoteCropVisualMaterializer(
                 event_loop=asyncio.get_running_loop(),
@@ -454,6 +560,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 crop_layout_identity=crop_layout_identity,
                 execution_ledger=self.crop_execution_ledger,
                 coordinate_mapper=Qwen3VLAdapter(),
+                observation_contract=observation_contract,
             )
         else:  # guarded by the builder
             raise RuntimeError("unsupported live visual-tool profile")
@@ -557,7 +664,24 @@ class _RemoteTGVFFocusToolRuntime:
         execution_ledger: FocusExecutionLedger,
         contextual_forward_identity: ArtifactIdentity | None,
         branch_merger_identities: tuple[ArtifactIdentity, ...],
+        observation_contract: NativeSuccessObservationContract,
     ) -> None:
+        if not isinstance(observation_contract, NativeSuccessObservationContract):
+            raise TypeError(
+                "remote focus runtime requires NativeSuccessObservationContract"
+            )
+        if (
+            observation_contract.tool_profile
+            is not NativeToolCapabilityProfile.TGVF_ONLY
+        ):
+            raise ValueError("remote focus runtime requires a tgvf_only contract")
+        expected_dialect = native_assistant_dialect_for_model(
+            config.model.model_name
+        )
+        if observation_contract.assistant_dialect is not expected_dialect:
+            raise IdentityMismatchError(
+                "remote focus success-observation dialect differs from model edition"
+            )
         self.event_loop = event_loop
         self.server_client = server_client
         self.config = config
@@ -567,6 +691,7 @@ class _RemoteTGVFFocusToolRuntime:
         self.execution_ledger = execution_ledger
         self.contextual_forward_identity = contextual_forward_identity
         self.branch_merger_identities = tuple(branch_merger_identities)
+        self.observation_contract = observation_contract
 
     def execute(self, parsed_call: object, context: object) -> ObservationHandle:
         from tgvf_rl.environment.agent_loop import ToolExecutionContext
@@ -583,7 +708,7 @@ class _RemoteTGVFFocusToolRuntime:
         ):
             raise ReplayMismatchError("parsed TGVF call differs from sampled turn")
         conditioning = self.config.representation.conditioning
-        fingerprint = _call_fingerprint(
+        focus_call_fingerprint = _call_fingerprint(
             parsed_call=parsed_call,
             context=context,
             provider_name=conditioning.provider.value,
@@ -592,6 +717,25 @@ class _RemoteTGVFFocusToolRuntime:
             representation=self.config.representation.artifact,
             branch_mergers=self.branch_merger_identities,
         )
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "schema": "remote-tgvf-focus-runtime-call-v2",
+                    "focus_call_fingerprint": focus_call_fingerprint,
+                    "success_observation_protocol_id": (
+                        self.observation_contract.protocol_id.value
+                    ),
+                    "success_observation_tool_profile": (
+                        self.observation_contract.tool_profile.value
+                    ),
+                    "success_observation_assistant_dialect": (
+                        self.observation_contract.assistant_dialect.value
+                    ),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
         return self.execution_ledger.execute_once(
             key=(context.trajectory_identity.canonical_id, context.call_index),
             fingerprint=fingerprint,
@@ -604,6 +748,7 @@ class _RemoteTGVFFocusToolRuntime:
         from tgvf_rl.environment.agent_loop import ToolExecutionContext
 
         assert isinstance(context, ToolExecutionContext)
+        environment_success_text = self.observation_contract.render(parsed_call)
         trajectory_id = context.trajectory_identity.canonical_id
         target = parsed_call.target_span
         future = asyncio.run_coroutine_threadsafe(
@@ -644,6 +789,7 @@ class _RemoteTGVFFocusToolRuntime:
             trajectory_source_visual=context.trajectory_source_visual,
             prior_observation_handles=context.prior_observation_handles,
             source_visual=self.source_visual,
+            environment_success_text=environment_success_text,
         )
         result = self.focus_tool.record_precomputed(
             ToolExecutionRequest(

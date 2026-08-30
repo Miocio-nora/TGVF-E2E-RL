@@ -600,8 +600,13 @@ class DeepEyesNativeRunContract:
 
 
 def load_deepeyes_native_run_contract(
-    path: str | Path, *, allow_template: bool = True
+    path: str | Path,
+    *,
+    allow_template: bool = True,
+    allow_historical_prompt_contract: bool = False,
 ) -> DeepEyesNativeRunContract:
+    if type(allow_historical_prompt_contract) is not bool:
+        raise TypeError("allow_historical_prompt_contract must be bool")
     source = Path(path)
     if source.is_symlink() or not source.is_file():
         raise ValueError("PRL13 config must be a regular non-symlink file")
@@ -646,7 +651,11 @@ def load_deepeyes_native_run_contract(
         raise ValueError("PRL13 schedule arm source-count contract differs")
     for path_name, expected in _EXACT_VALUES.items():
         observed = _nested(payload, path_name)
-        accepted_historical = _HISTORICAL_PROMPT_BUNDLE_SHA256S.get(path_name, ())
+        accepted_historical = (
+            _HISTORICAL_PROMPT_BUNDLE_SHA256S.get(path_name, ())
+            if allow_historical_prompt_contract and payload["launch_enabled"]
+            else ()
+        )
         if observed != expected and observed not in accepted_historical:
             raise ValueError(f"PRL13 fixed field differs: {path_name}")
     judge_service_sha256 = _nested(payload, "reward.judge_service_config_sha256")

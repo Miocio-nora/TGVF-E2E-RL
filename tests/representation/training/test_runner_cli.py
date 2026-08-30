@@ -159,9 +159,7 @@ def test_global_matrix_count_uses_optimizer_step_group_identity(
     )
 
     assert (
-        runner_module._optimizer_step_global_matrix_count(
-            config, world_size=world_size
-        )
+        runner_module._optimizer_step_global_matrix_count(config, world_size=world_size)
         == expected
     )
 
@@ -986,6 +984,7 @@ def test_cli_run_command_lazily_dispatches_and_prints_rank_zero_payload(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     calls: list[tuple[Path, int | None]] = []
+    events: list[str] = []
     fake_runner = ModuleType("tgvf_rl.representation.training.runner")
 
     def fake_run(
@@ -1002,6 +1001,74 @@ def test_cli_run_command_lazily_dispatches_and_prints_rank_zero_payload(
         "tgvf_rl.representation.training.runner",
         fake_runner,
     )
+    config_path = Path("/unused/representation.toml")
+    binding = SimpleNamespace(
+        source_path=config_path,
+        authorization_parameters=lambda: {"canonical_config_sha256": "b" * 64},
+    )
+    python_identity = SimpleNamespace(
+        authorization_parameters=lambda: {"python_executable_sha256": "d" * 64}
+    )
+    config = SimpleNamespace(
+        run_id="REPRESENTATION-CLI-TEST",
+        canonical_config_sha256="a" * 64,
+        source_toml_sha256="b" * 64,
+        source_path=config_path,
+        fsdp2=SimpleNamespace(world_size=2),
+    )
+    identity = cli.CLIExecutionAuthorizationIdentity.create(
+        run_id=config.run_id,
+        phase=cli.REPRESENTATION_TRAINING_PHASE,
+        command_id=cli._REPRESENTATION_COMMAND_ID,
+        run_identity_sha256=config.canonical_config_sha256,
+    )
+    monkeypatch.setenv("TGVF_CLI_GATE_DIRECTORY", "/gate")
+    monkeypatch.setenv(
+        "TGVF_CLI_CONSUMPTION_RECEIPT_PATH",
+        "/gate/consumptions/token.json",
+    )
+    monkeypatch.setenv("TGVF_CLI_CONSUMPTION_RECEIPT_SHA256", "c" * 64)
+    monkeypatch.setenv(
+        "TGVF_CLI_LAUNCHER_LIVENESS_RECEIPT_PATH",
+        "/gate/cli-launches/token/launcher-liveness.json",
+    )
+    monkeypatch.setattr(
+        cli,
+        "verify_cli_worker_authorization_from_environment",
+        lambda **_kwargs: events.append("authorize") or identity,
+    )
+    monkeypatch.setattr(
+        cli,
+        "assert_canonical_runtime_launch_enabled",
+        lambda: events.append("runtime-closure"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "bind_canonical_config_path",
+        lambda *_args, **_kwargs: binding,
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_representation_training_config",
+        lambda _path: config,
+    )
+    monkeypatch.setattr(
+        cli,
+        "assert_loaded_config_matches_binding",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "bind_current_python_executable",
+        lambda _path: python_identity,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_assert_worker_identity_parameters",
+        lambda observed, _expected: (
+            events.append("identity") if observed is identity else None
+        ),
+    )
 
     assert (
         cli.main(
@@ -1010,11 +1077,22 @@ def test_cli_run_command_lazily_dispatches_and_prints_rank_zero_payload(
                 "/unused/representation.toml",
                 "--stop-after-global-step",
                 "7",
+                "--launcher-python-executable",
+                "/audited/python",
+                "--gate-directory",
+                "/gate",
+                "--launch-consumption-receipt",
+                "/gate/consumptions/token.json",
+                "--launch-consumption-sha256",
+                "c" * 64,
+                "--launcher-liveness-receipt",
+                "/gate/cli-launches/token/launcher-liveness.json",
             ]
         )
         == 0
     )
     assert calls == [(Path("/unused/representation.toml"), 7)]
+    assert events == ["authorize", "runtime-closure", "identity"]
     assert json.loads(capsys.readouterr().out) == {
         "gpu_work_launched": False,
         "status": "synthetic",

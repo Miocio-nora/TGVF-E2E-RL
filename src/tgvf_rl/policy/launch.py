@@ -3,16 +3,36 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 from typing import NoReturn
 
+from tgvf_rl.framework.verl.compile_prerequisites import (
+    POLICY_COMPILE_PREREQUISITE_CLOSURE_POLICY,
+    PolicyCompilePrerequisiteBinding,
+    PolicyCompilePrerequisiteReceipt,
+    load_policy_compile_prerequisite_manifest,
+    materialize_policy_compile_prerequisite_receipt,
+)
 from tgvf_rl.framework.verl.launcher import (
     UpstreamVerlLaunchPlan,
     build_policy_e2e_smoke_verl_plan,
+)
+from tgvf_rl.ops.cli_authorization import (
+    CLIExecutionAuthorizationIdentity,
+    CLIWorkerAuthorization,
+    PythonExecutableIdentity,
+    assert_canonical_runtime_launch_enabled,
+    bind_current_python_executable,
+    cli_worker_authorization_environment,
+    environment_sanitization_parameters,
+    sanitized_child_environment,
+    verify_python_executable_identity,
 )
 
 from .horizon_extension import (
@@ -26,16 +46,110 @@ POLICY_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _EXPERIMENT_LEDGER_PATH = "docs/EXPERIMENT_LEDGER.md"
 
 
+@dataclass(frozen=True, slots=True)
+class PolicyCompileAuthorizationProof:
+    """Content identities verified before a one-time launch token is consumed."""
+
+    manifest_source_path: Path
+    manifest_source_sha256: str
+    binding_sha256: str
+    receipt_sha256: str
+    closure_policy: str = POLICY_COMPILE_PREREQUISITE_CLOSURE_POLICY
+
+    def __post_init__(self) -> None:
+        path = Path(self.manifest_source_path)
+        if not path.is_absolute() or ".." in path.parts:
+            raise ValueError(
+                "compile-prerequisite proof manifest path must be absolute"
+            )
+        object.__setattr__(self, "manifest_source_path", path)
+        for field_name in (
+            "manifest_source_sha256",
+            "binding_sha256",
+            "receipt_sha256",
+        ):
+            value = getattr(self, field_name)
+            if len(value) != 64 or any(
+                character not in "0123456789abcdef" for character in value
+            ):
+                raise ValueError(f"{field_name} must be a lowercase SHA256")
+        if self.closure_policy != POLICY_COMPILE_PREREQUISITE_CLOSURE_POLICY:
+            raise ValueError("compile-prerequisite proof closure policy differs")
+
+    def authorization_parameters(self) -> dict[str, str]:
+        return {
+            "compile_prerequisite_manifest_path": str(self.manifest_source_path),
+            "compile_prerequisite_manifest_sha256": self.manifest_source_sha256,
+            "compile_prerequisite_binding_sha256": self.binding_sha256,
+            "compile_prerequisite_receipt_sha256": self.receipt_sha256,
+            "compile_prerequisite_closure_policy": self.closure_policy,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedPolicyLaunch:
+    """Complete immutable result of every deterministic pre-consumption check."""
+
+    config: PolicyE2ESmokeRunConfig
+    plan: UpstreamVerlLaunchPlan
+    compile_prerequisites: PolicyCompilePrerequisiteBinding
+    compile_receipt: PolicyCompilePrerequisiteReceipt
+    compile_authorization: PolicyCompileAuthorizationProof
+    python_identity: PythonExecutableIdentity
+    command: tuple[str, ...]
+    child_environment: tuple[tuple[str, str], ...]
+    stripped_environment_names: tuple[str, ...]
+    repository_root: Path
+    horizon_extension: PolicyHorizonExtension | None = None
+
+    @property
+    def prepared_identity_sha256(self) -> str:
+        record = {
+            "schema_version": "tgvf-prepared-policy-launch-v1",
+            "run_identity_sha256": self.config.identity_sha256,
+            "config_source_sha256": self.config.source_sha256,
+            "horizon_extension_sha256": (
+                None
+                if self.horizon_extension is None
+                else self.horizon_extension.source_sha256
+            ),
+            "plan": self.plan.as_record(),
+            "compile": self.compile_authorization.authorization_parameters(),
+            "python": self.python_identity.authorization_parameters(),
+            "command": list(self.command),
+            "child_environment_sha256": _canonical_json_sha256(
+                dict(self.child_environment)
+            ),
+            "stripped_environment_names": list(self.stripped_environment_names),
+            "repository_root": str(self.repository_root),
+        }
+        return _canonical_json_sha256(record)
+
+    def authorization_parameters(self) -> dict[str, str]:
+        return {
+            **self.compile_authorization.authorization_parameters(),
+            **self.python_identity.authorization_parameters(),
+            **environment_sanitization_parameters(self.stripped_environment_names),
+            "prepared_policy_launch_sha256": self.prepared_identity_sha256,
+        }
+
+
 def build_policy_launch_record(
     config: PolicyE2ESmokeRunConfig,
     *,
     python_executable: str | Path | None = None,
     horizon_extension: PolicyHorizonExtension | None = None,
+    compile_prerequisite_manifest_path: str | Path | None = None,
 ) -> dict[str, object]:
     """Build a JSON-safe plan; blocked plans deliberately omit executable argv."""
 
+    compile_prerequisites = _load_compile_prerequisites(
+        compile_prerequisite_manifest_path
+    )
     plan = build_policy_e2e_smoke_verl_plan(
-        config, horizon_extension=horizon_extension
+        config,
+        horizon_extension=horizon_extension,
+        compile_prerequisites=compile_prerequisites,
     )
     executable = Path(python_executable or sys.executable).absolute()
     record = plan.as_record()
@@ -47,17 +161,86 @@ def build_policy_launch_record(
     return record
 
 
+def preflight_policy_launch_for_authorization(
+    config: PolicyE2ESmokeRunConfig,
+    *,
+    compile_prerequisite_manifest_path: str | Path | None,
+    python_executable: str | Path | None = None,
+    repository_root: str | Path = POLICY_REPOSITORY_ROOT,
+    horizon_extension: PolicyHorizonExtension | None = None,
+) -> PreparedPolicyLaunch:
+    """Reject every static/live blocker before consuming launch authorization.
+
+    Plan construction remains pure.  When a manifest is present, its minimum
+    declarations are content-verified before plan readiness is asserted.  The
+    current v1 manifest then still fails on its explicit recursive-header and
+    system-toolchain residual, so no authorization token can be burned for a
+    launch that is already known to be incomplete.
+    """
+
+    assert_canonical_runtime_launch_enabled()
+    compile_prerequisites = _load_compile_prerequisites(
+        compile_prerequisite_manifest_path
+    )
+    plan = build_policy_e2e_smoke_verl_plan(
+        config,
+        horizon_extension=horizon_extension,
+        compile_prerequisites=compile_prerequisites,
+    )
+    if compile_prerequisites is None:
+        plan.assert_launch_ready()
+        raise AssertionError("missing compile manifest unexpectedly became ready")
+    prerequisite_receipt = plan.preflight_live_prerequisites()
+    plan.assert_launch_ready()
+    assert_policy_execution_identity(
+        config,
+        repository_root=repository_root,
+        horizon_extension=horizon_extension,
+    )
+    python_identity = bind_current_python_executable(
+        python_executable or sys.executable
+    )
+    command = plan.command(python_identity.declared_path)
+    child_environment, stripped_environment_names = policy_child_environment(
+        plan,
+        include_sanitization_record=True,
+    )
+    compile_authorization = PolicyCompileAuthorizationProof(
+        manifest_source_path=compile_prerequisites.manifest_source_path,
+        manifest_source_sha256=compile_prerequisites.manifest_source_sha256,
+        binding_sha256=compile_prerequisites.identity_sha256,
+        receipt_sha256=prerequisite_receipt.receipt_sha256,
+        closure_policy=compile_prerequisites.closure_policy,
+    )
+    return PreparedPolicyLaunch(
+        config=config,
+        plan=plan,
+        compile_prerequisites=compile_prerequisites,
+        compile_receipt=prerequisite_receipt,
+        compile_authorization=compile_authorization,
+        python_identity=python_identity,
+        command=command,
+        child_environment=tuple(sorted(child_environment.items())),
+        stripped_environment_names=stripped_environment_names,
+        repository_root=Path(repository_root).resolve(),
+        horizon_extension=horizon_extension,
+    )
+
+
 def policy_child_environment(
     plan: UpstreamVerlLaunchPlan,
     *,
     base: Mapping[str, str] | None = None,
-) -> dict[str, str]:
+    include_sanitization_record: bool = False,
+) -> dict[str, str] | tuple[dict[str, str], tuple[str, ...]]:
     """Apply the exact launch environment, overriding inherited launch values."""
 
     if not isinstance(plan, UpstreamVerlLaunchPlan):
         raise TypeError("plan must be UpstreamVerlLaunchPlan")
-    result = dict(os.environ if base is None else base)
+    result, stripped = sanitized_child_environment(base)
     result.update(plan.environment)
+    if include_sanitization_record:
+        return result, stripped
     return result
 
 
@@ -106,8 +289,7 @@ def assert_policy_execution_identity(
         )
         if completed.returncode not in (0, 1):
             raise RuntimeError(
-                "could not inspect policy launch worktree: "
-                + completed.stderr.strip()
+                "could not inspect policy launch worktree: " + completed.stderr.strip()
             )
         if completed.returncode == 1:
             raise RuntimeError("policy launch requires no tracked Git changes")
@@ -141,28 +323,90 @@ def assert_policy_execution_identity(
 
 
 def execute_policy_e2e_smoke(
-    config: PolicyE2ESmokeRunConfig,
+    prepared: PreparedPolicyLaunch,
     *,
-    python_executable: str | Path | None = None,
-    base_environment: Mapping[str, str] | None = None,
-    repository_root: str | Path = POLICY_REPOSITORY_ROOT,
-    horizon_extension: PolicyHorizonExtension | None = None,
+    launch_identity: CLIExecutionAuthorizationIdentity,
+    worker_authorization: CLIWorkerAuthorization,
+    gate_directory: str | Path,
 ) -> NoReturn:
-    """Replace the CLI process with upstream veRL after every local preflight."""
+    """Execute only the immutable plan proven before token consumption.
 
-    plan = build_policy_e2e_smoke_verl_plan(
-        config, horizon_extension=horizon_extension
-    )
-    plan.assert_launch_ready()
+    In particular this boundary accepts no manifest or config path from which a
+    second, potentially different launch identity could be constructed.
+    """
+
+    if not isinstance(prepared, PreparedPolicyLaunch):
+        raise TypeError("prepared must be PreparedPolicyLaunch")
+    if not isinstance(launch_identity, CLIExecutionAuthorizationIdentity):
+        raise TypeError("launch_identity must be CLIExecutionAuthorizationIdentity")
+    expected_parameters = prepared.authorization_parameters()
+    observed_parameters = dict(launch_identity.parameters)
+    for name, expected in expected_parameters.items():
+        if observed_parameters.get(name) != expected:
+            raise RuntimeError(
+                f"consumed Policy authorization differs from prepared launch: {name}"
+            )
+    if (
+        launch_identity.run_id != prepared.config.run_id
+        or launch_identity.run_identity_sha256 != prepared.config.identity_sha256
+    ):
+        raise RuntimeError("consumed Policy authorization has a different run identity")
+    prepared.plan.assert_launch_ready()
     assert_policy_execution_identity(
-        config,
-        repository_root=repository_root,
-        horizon_extension=horizon_extension,
+        prepared.config,
+        repository_root=prepared.repository_root,
+        horizon_extension=prepared.horizon_extension,
     )
-    executable = Path(python_executable or sys.executable).absolute()
-    command = plan.command(executable)
-    environment = policy_child_environment(plan, base=base_environment)
-    os.execve(str(executable), command, environment)
+    verify_python_executable_identity(prepared.python_identity)
+    prerequisite_receipt = prepared.plan.preflight_live_prerequisites()
+    if prerequisite_receipt != prepared.compile_receipt:
+        raise RuntimeError(
+            "Policy compile prerequisites changed after authorization preflight"
+        )
+    if (
+        prepared.plan.command(prepared.python_identity.declared_path)
+        != prepared.command
+    ):
+        raise RuntimeError("prepared Policy command changed after authorization")
+    prerequisite_receipt_path = materialize_policy_compile_prerequisite_receipt(
+        prerequisite_receipt,
+        state_directory=prepared.config.output.root
+        / "runtime-policy-state"
+        / "compile-prerequisite-attestations",
+    )
+    environment = dict(prepared.child_environment)
+    environment["TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_SHA256"] = (
+        prerequisite_receipt.receipt_sha256
+    )
+    environment["TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_PATH"] = str(
+        prerequisite_receipt_path
+    )
+    environment["TGVF_POLICY_COMPILE_PREREQUISITE_BINDING_SHA256"] = (
+        prepared.compile_prerequisites.identity_sha256
+    )
+    environment["TGVF_POLICY_COMPILE_PREREQUISITE_MANIFEST_SHA256"] = (
+        prepared.compile_prerequisites.manifest_source_sha256
+    )
+    environment.update(
+        cli_worker_authorization_environment(
+            launch_identity,
+            worker_authorization,
+            gate_directory=gate_directory,
+        )
+    )
+    os.execve(
+        str(prepared.python_identity.declared_path),
+        prepared.command,
+        environment,
+    )
+
+
+def _load_compile_prerequisites(
+    manifest_path: str | Path | None,
+) -> PolicyCompilePrerequisiteBinding | None:
+    if manifest_path is None:
+        return None
+    return load_policy_compile_prerequisite_manifest(manifest_path)
 
 
 def _git_output(root: Path, *args: str) -> str:
@@ -278,10 +522,24 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical_json_sha256(value: object) -> str:
+    raw = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 __all__ = [
     "POLICY_REPOSITORY_ROOT",
+    "PreparedPolicyLaunch",
+    "PolicyCompileAuthorizationProof",
     "assert_policy_execution_identity",
     "build_policy_launch_record",
     "execute_policy_e2e_smoke",
     "policy_child_environment",
+    "preflight_policy_launch_for_authorization",
 ]

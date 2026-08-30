@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tgvf-policy-compile-prerequisite-manifest-v1",
+  "title": "TGVF Policy minimum compile-prerequisite manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "closure_policy",
+    "files"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "tgvf-policy-compile-prerequisite-manifest-v1"
+    },
+    "closure_policy": {
+      "const": "minimum-declared-prerequisites-v1"
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "c_compiler",
+        "cxx_compiler",
+        "python_h",
+        "pyconfig_h"
+      ],
+      "properties": {
+        "c_compiler": {
+          "$ref": "#/$defs/executable_file"
+        },
+        "cxx_compiler": {
+          "$ref": "#/$defs/executable_file"
+        },
+        "python_h": {
+          "$ref": "#/$defs/non_executable_file"
+        },
+        "pyconfig_h": {
+          "$ref": "#/$defs/non_executable_file"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "base_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "byte_length",
+        "executable_required"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute lexical path supplied only by the deployment manifest."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "executable_required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "executable_file": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base_file"
+        },
+        {
+          "properties": {
+            "executable_required": {
+              "const": true
+            }
+          }
+        }
+      ]
+    },
+    "non_executable_file": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base_file"
+        },
+        {
+          "properties": {
+            "executable_required": {
+              "const": false
+            }
+          }
+        }
+      ]
+    }
+  },
+  "description": "This v1 schema binds only minimum declared files and is not a complete recursive compiler/header closure. No machine-specific manifest instance is stored in the repository."
+}

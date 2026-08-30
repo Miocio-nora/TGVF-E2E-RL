@@ -43,9 +43,11 @@ from tgvf_rl.policy.config import (
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_AGENT_LOOP_CONFIG_PATH,
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA,
     POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA,
     POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN,
     POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256,
+    POLICY_E2E_SMOKE_ANSWER_VERIFIER_V2_SHA256,
     POLICY_E2E_SMOKE_CAP_ERROR_SHA256,
     POLICY_E2E_SMOKE_CONFIG_SCHEMA,
     POLICY_E2E_SMOKE_SEED_DERIVATION_NAME,
@@ -53,11 +55,20 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256,
     POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256,
+    POLICY_E2E_MIXED_ANSWER_VERIFIER_V1_SHA256,
     POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
     formal_deepeyes47k_iteration_identity_sha256,
     load_policy_e2e_smoke_run_config,
 )
+from tgvf_rl.protocol.action_boundary import NativeActionBoundaryProtocolId
 from tests.rewards.test_tgvf_visual_quality_judge import _config_document
+from tgvf_rl.framework.verl.compile_prerequisites import (
+    POLICY_COMPILE_PREREQUISITE_CLOSURE_POLICY,
+    POLICY_COMPILE_PREREQUISITE_MANIFEST_SCHEMA,
+    POLICY_COMPILE_PREREQUISITE_MISSING_BLOCKER,
+    POLICY_COMPILE_PREREQUISITE_RESIDUAL_BLOCKER,
+    load_policy_compile_prerequisite_manifest,
+)
 from tgvf_rl.framework.verl.launcher import (
     DEEPEYES47K_DATASET_CLASS_NAME,
     DEEPEYES47K_DATASET_MODULE_PATH,
@@ -67,6 +78,7 @@ from tgvf_rl.framework.verl.launcher import (
     POLICY_T1_MIXED_DATASET_MODULE_PATH,
     NATIVE_INVOCATION_FACTORY_FQN,
     POLICY_CHECKPOINT_ENGINE_MANAGER_FQN,
+    PolicyCompilePrerequisiteBinding,
     SELECTED_SAMPLE_DATASET_MODULE_PATH,
     UPSTREAM_VERL_V0_RUNNER_FQN,
     build_policy_e2e_smoke_verl_plan,
@@ -76,11 +88,16 @@ from tgvf_rl.framework.verl.smoke_dataset import (
     TGVFSelectedSampleDataset,
     VerlSelectedSampleDatasetBinding,
 )
-from tgvf_rl.policy.launch import policy_child_environment
+from tgvf_rl.policy.launch import (
+    build_policy_launch_record,
+    policy_child_environment,
+    preflight_policy_launch_for_authorization,
+)
 from tgvf_rl.policy.horizon_extension import PolicyHorizonExtension
 from tgvf_rl.protocol import (
     IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256,
     TGVF_FOCUS_TOOL_SCHEMA_SHA256,
+    NativeSuccessObservationProtocolId,
     NativeToolCapabilityProfile,
     native_assistant_dialect_for_model,
     visual_tool_prompt_identity,
@@ -103,6 +120,52 @@ def _canonical(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def _write_compile_prerequisites(
+    tmp_path: Path,
+) -> PolicyCompilePrerequisiteBinding:
+    root = (tmp_path / "compile-prerequisites").resolve()
+    include_root = root / "include"
+    python_include = include_root / "python3.12"
+    python_include.mkdir(parents=True)
+    c_compiler = root / "gcc"
+    cxx_compiler = root / "g++"
+    c_compiler.write_bytes(b"fixture-c-compiler\n")
+    cxx_compiler.write_bytes(b"fixture-cxx-compiler\n")
+    c_compiler.chmod(0o755)
+    cxx_compiler.chmod(0o755)
+    (python_include / "Python.h").write_bytes(b"/* fixture Python.h */\n")
+    (python_include / "pyconfig.h").write_bytes(b"/* fixture pyconfig.h */\n")
+    paths = {
+        "c_compiler": (c_compiler, True),
+        "cxx_compiler": (cxx_compiler, True),
+        "python_h": (python_include / "Python.h", False),
+        "pyconfig_h": (python_include / "pyconfig.h", False),
+    }
+    manifest = {
+        "schema_version": POLICY_COMPILE_PREREQUISITE_MANIFEST_SCHEMA,
+        "closure_policy": POLICY_COMPILE_PREREQUISITE_CLOSURE_POLICY,
+        "files": {
+            name: {
+                "path": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "byte_length": path.stat().st_size,
+                "executable_required": executable,
+            }
+            for name, (path, executable) in paths.items()
+        },
+    }
+    manifest_path = root / "manifest.json"
+    manifest_path.write_bytes(_canonical(manifest) + b"\n")
+    return load_policy_compile_prerequisite_manifest(manifest_path)
+
+
+def _write_minimal_upstream_config_directory(tmp_path: Path) -> Path:
+    config_directory = tmp_path / "upstream-verl-config"
+    config_directory.mkdir()
+    (config_directory / "ppo_trainer.yaml").write_text("{}\n", encoding="utf-8")
+    return config_directory
+
+
 def test_answer_verifier_contracts_bind_terminal_mcq_decision_v2() -> None:
     assert POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256 == (
         "cbe766241c737b8f0e5edc83ac9fc867aa51c2590205a46d6ffae2c5e512ceb5"
@@ -110,6 +173,63 @@ def test_answer_verifier_contracts_bind_terminal_mcq_decision_v2() -> None:
     assert POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256 == (
         "2d7b4da3add10fd6ca8f45aa146731634163a1b39bb4e7952a74b8e649248b97"
     )
+    assert POLICY_E2E_SMOKE_ANSWER_VERIFIER_V2_SHA256 == (
+        "2a3d5fa4b7e594939aabb2d1b1192499deea86040d980374f7bc8af3e9082e1c"
+    )
+    assert POLICY_E2E_MIXED_ANSWER_VERIFIER_V1_SHA256 == (
+        "661133336fc1db8b4a14a360efa84fc4180f040b7f1be4992f83b4d5cdda8e17"
+    )
+
+
+def test_historical_reward_identity_is_readable_only_when_explicit(
+    tmp_path: Path,
+) -> None:
+    path, text, _ = _write_config(tmp_path)
+    path.write_text(
+        text.replace(
+            POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256,
+            POLICY_E2E_SMOKE_ANSWER_VERIFIER_V2_SHA256,
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="current contract"):
+        load_policy_e2e_smoke_run_config(path)
+
+    historical = load_policy_e2e_smoke_run_config(
+        path,
+        allow_historical_reward_contract=True,
+    )
+    assert (
+        historical.reward.answer_verifier_sha256
+        == POLICY_E2E_SMOKE_ANSWER_VERIFIER_V2_SHA256
+    )
+
+
+def test_external_agent_loop_path_is_readable_only_when_explicit(
+    tmp_path: Path,
+) -> None:
+    path, text, _ = _write_config(tmp_path)
+    external_loop = tmp_path / "historical-agent-loop.yaml"
+    external_loop.write_bytes(POLICY_E2E_AGENT_LOOP_CONFIG_PATH.read_bytes())
+    path.write_text(
+        text.replace(
+            _q(POLICY_E2E_AGENT_LOOP_CONFIG_PATH),
+            _q(external_loop),
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="checked-in Policy Pilot composition"):
+        load_policy_e2e_smoke_run_config(path)
+
+    historical = load_policy_e2e_smoke_run_config(
+        path,
+        allow_external_agent_loop_config=True,
+    )
+    assert historical.framework.agent_loop_config_path == external_loop
 
 
 def _prepare_external_inputs(root: Path) -> dict[str, object]:
@@ -442,6 +562,8 @@ def test_loads_complete_nonformal_smoke_and_has_stable_digest(tmp_path: Path) ->
     )
     assert config.reward.judge_mode == "not_applicable"
     assert config.protocol.tool_profile.value == "tgvf_only"
+    assert config.protocol.success_observation_protocol_id is None
+    assert config.protocol.action_boundary_protocol_id is None
     assert config.distributed.physical_gpu_ids == (0, 1, 2, 3)
     assert config.distributed.logical_gpu_ids == (0, 1, 2, 3)
     assert config.distributed.fsdp_strategy == "fsdp2"
@@ -533,6 +655,74 @@ def test_rejects_run_longer_than_bound_scheduler_horizon(tmp_path: Path) -> None
     )
 
     with pytest.raises(ValueError, match="smaller than maximum_optimizer_steps"):
+        load_policy_e2e_smoke_run_config(path)
+
+
+def _explicit_observation_config_text(tmp_path: Path) -> tuple[Path, str]:
+    path, text, _ = _write_config(tmp_path)
+    judge_path = (
+        Path(__file__).parents[2]
+        / "configs/policy/judges/qwen25_72b_rl_answer_judge_v1.json"
+    ).resolve()
+    judge_sha = hashlib.sha256(judge_path.read_bytes()).hexdigest()
+    prompt_sha = visual_tool_prompt_identity(
+        NativeToolCapabilityProfile.TGVF_ONLY,
+        assistant_dialect=native_assistant_dialect_for_model(
+            POLICY_PILOT_V1_MODEL_NAME
+        ),
+    ).bundle_sha256
+    text = text.replace(
+        POLICY_E2E_SMOKE_CONFIG_SCHEMA,
+        POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA,
+    )
+    text = text.replace(f'sample_id = "{SAMPLE_ID}"\ncursor = 0\n', "")
+    text = text.replace(f'prompt_sha256 = "{SHA_A}"', f'prompt_sha256 = "{prompt_sha}"')
+    text = text.replace(
+        "maximum_tool_calls = 4\n",
+        "maximum_tool_calls = 4\n"
+        f'success_observation_protocol_id = "{NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1.value}"\n'
+        f'action_boundary_protocol_id = "{NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2.value}"\n',
+    )
+    text = text.replace(
+        'task_kind = "multiple_choice"\n'
+        'answer_verifier = "exact_match"\n'
+        f'answer_verifier_sha256 = "{POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256}"\n'
+        'judge_mode = "not_applicable"\n'
+        'judge_reason = "bounded non-formal MCQ smoke"',
+        'task_kind = "mixed"\n'
+        'answer_verifier = "rule_first_qwen25_72b"\n'
+        f'answer_verifier_sha256 = "{POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256}"\n'
+        'judge_mode = "qwen25_72b_semantic_fallback"\n'
+        'judge_reason = "mixed integration"\n'
+        f"judge_config_path = {_q(judge_path)}\n"
+        f'judge_config_sha256 = "{judge_sha}"',
+    )
+    return path, text
+
+
+def test_explicit_observation_schema_binds_protocol_id(tmp_path: Path) -> None:
+    path, text = _explicit_observation_config_text(tmp_path)
+    path.write_text(text, encoding="utf-8")
+
+    config = load_policy_e2e_smoke_run_config(path)
+
+    assert config.schema_version == POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA
+    assert (
+        config.protocol.success_observation_protocol_id
+        is NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1
+    )
+    assert config.protocol.action_boundary_protocol_id is (
+        NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+    )
+
+    path.write_text(
+        text.replace(
+            f'success_observation_protocol_id = "{NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1.value}"\n',
+            "",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"\[protocol\] fields differ"):
         load_policy_e2e_smoke_run_config(path)
 
 
@@ -1320,7 +1510,11 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     path, _, _ = _write_config(tmp_path)
     config = load_policy_e2e_smoke_run_config(path)
     output_root = config.output.root
-    plan = build_policy_e2e_smoke_verl_plan(config)
+    compile_prerequisites = _write_compile_prerequisites(tmp_path)
+    plan = build_policy_e2e_smoke_verl_plan(
+        config,
+        compile_prerequisites=compile_prerequisites,
+    )
 
     assert plan.runner_fqn == UPSTREAM_VERL_V0_RUNNER_FQN
     assert plan.overrides["trainer.use_v1"] is False
@@ -1359,14 +1553,22 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     assert plan.environment["TGVF_POLICY_STATE_DIR"] == str(
         config.output.root / "runtime-policy-state"
     )
-    repository_root = Path(__file__).resolve().parents[2]
-    python_include_root = repository_root / ".deps/python312-dev/root/usr/include"
-    assert plan.environment["CC"] == "/usr/bin/gcc"
-    assert plan.environment["CXX"] == "/usr/bin/g++"
-    assert plan.environment["CPATH"] == (
-        f"{python_include_root}:{python_include_root / 'python3.12'}"
+    assert plan.environment["CC"] == str(compile_prerequisites.c_compiler)
+    assert plan.environment["CXX"] == str(compile_prerequisites.cxx_compiler)
+    assert plan.environment["CPATH"] == compile_prerequisites.cpath
+    assert (
+        plan.environment["TGVF_POLICY_COMPILE_PREREQUISITE_BINDING_SHA256"]
+        == compile_prerequisites.identity_sha256
     )
-    assert (python_include_root / "python3.12/Python.h").is_file()
+    record = plan.as_record()
+    assert record["compile_prerequisites"] == compile_prerequisites.as_record()
+    assert (
+        record["compile_prerequisites_sha256"] == compile_prerequisites.identity_sha256
+    )
+    receipt = plan.preflight_live_prerequisites()
+    assert receipt.binding == compile_prerequisites
+    assert receipt.as_record()["receipt_sha256"] == receipt.receipt_sha256
+    assert len(receipt.receipt_sha256) == 64
     assert plan.overrides["actor_rollout_ref.rollout.max_model_len"] == 32768
     assert plan.overrides["actor_rollout_ref.rollout.max_num_seqs"] == 8
     assert plan.overrides["data.max_prompt_length"] == 4096
@@ -1390,9 +1592,14 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     assert plan.overrides["trainer.default_local_dir"] == str(
         config.output.checkpoint_directory
     )
-    assert plan.launch_ready is True
-    assert plan.launch_blockers == ()
-    plan.assert_launch_ready()
+    assert plan.launch_ready is False
+    assert plan.launch_blockers == (POLICY_COMPILE_PREREQUISITE_RESIDUAL_BLOCKER,)
+    with pytest.raises(RuntimeError, match="system-toolchain remain unbound"):
+        plan.assert_launch_ready()
+    pytest.importorskip(
+        "verl.utils.import_utils",
+        reason="custom class resolution requires optional pinned veRL",
+    )
     from verl.utils.import_utils import load_extern_object
 
     assert (
@@ -1411,6 +1618,96 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
         "observation_source": "rollout_materialized_exact_bundle",
     }
     assert not output_root.exists()
+
+
+def test_compile_prerequisite_live_preflight_is_content_bound_and_fail_closed(
+    tmp_path: Path,
+) -> None:
+    binding = _write_compile_prerequisites(tmp_path)
+    config_path, _, _ = _write_config(tmp_path)
+    plan = build_policy_e2e_smoke_verl_plan(
+        load_policy_e2e_smoke_run_config(config_path),
+        compile_prerequisites=binding,
+    )
+
+    first = binding.identity_sha256
+    first_receipt = plan.preflight_live_prerequisites()
+    assert first_receipt.binding.identity_sha256 == first
+
+    binding.python_h.path.write_bytes(b"/* changed fixture Python.h */\n")
+    assert binding.identity_sha256 == first
+    with pytest.raises(RuntimeError, match="size differs|SHA256 differs"):
+        plan.preflight_live_prerequisites()
+
+    binding.python_h.path.write_bytes(b"/* fixture Python.h */\n")
+    binding.pyconfig_h.path.unlink()
+    with pytest.raises(RuntimeError, match="missing, unreadable, or a symlink"):
+        plan.preflight_live_prerequisites()
+
+
+def test_plan_without_explicit_compile_manifest_is_pure_and_blocked(
+    tmp_path: Path,
+) -> None:
+    config_path, _, _ = _write_config(tmp_path)
+
+    plan = build_policy_e2e_smoke_verl_plan(
+        load_policy_e2e_smoke_run_config(config_path)
+    )
+
+    assert plan.launch_ready is False
+    assert plan.launch_blockers == (POLICY_COMPILE_PREREQUISITE_MISSING_BLOCKER,)
+    assert plan.compile_prerequisites is None
+    assert plan.as_record()["compile_prerequisites"] is None
+    assert "CC" not in plan.environment
+    assert "CXX" not in plan.environment
+    assert "CPATH" not in plan.environment
+    with pytest.raises(RuntimeError, match="explicit Policy compile"):
+        plan.preflight_live_prerequisites()
+
+
+def test_policy_launch_record_and_pre_authorization_preflight_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Runtime closure is tested independently at the public launch boundary.
+    # Isolate this unit so it can still characterize both compile-manifest
+    # blockers that follow the non-overridable repository gate.
+    monkeypatch.setattr(
+        "tgvf_rl.policy.launch.assert_canonical_runtime_launch_enabled",
+        lambda: None,
+    )
+    config_path, _, _ = _write_config(tmp_path)
+    config = load_policy_e2e_smoke_run_config(config_path)
+
+    missing_record = build_policy_launch_record(config)
+    assert missing_record["launch_ready"] is False
+    assert missing_record["command"] is None
+    assert missing_record["compile_prerequisites"] is None
+    assert missing_record["launch_blockers"] == [
+        POLICY_COMPILE_PREREQUISITE_MISSING_BLOCKER
+    ]
+    with pytest.raises(RuntimeError, match="explicit Policy compile"):
+        preflight_policy_launch_for_authorization(
+            config,
+            compile_prerequisite_manifest_path=None,
+        )
+
+    binding = _write_compile_prerequisites(tmp_path)
+    explicit_record = build_policy_launch_record(
+        config,
+        compile_prerequisite_manifest_path=binding.manifest_source_path,
+    )
+    assert explicit_record["launch_ready"] is False
+    assert explicit_record["command"] is None
+    assert explicit_record["compile_prerequisites_sha256"] == binding.identity_sha256
+    assert explicit_record["launch_blockers"] == [
+        POLICY_COMPILE_PREREQUISITE_RESIDUAL_BLOCKER
+    ]
+    with pytest.raises(RuntimeError, match="system-toolchain remain unbound"):
+        preflight_policy_launch_for_authorization(
+            config,
+            compile_prerequisite_manifest_path=binding.manifest_source_path,
+        )
 
 
 def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
@@ -1437,14 +1734,7 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
     assert environment["UNRELATED"] == "preserved"
     assert not config.output.root.exists()
 
-    upstream_config_dir = (
-        Path(__file__).resolve().parents[2]
-        / ".deps"
-        / "verl"
-        / "verl"
-        / "trainer"
-        / "config"
-    )
+    upstream_config_dir = _write_minimal_upstream_config_directory(tmp_path)
     composed = compose_upstream_verl_config(plan, config_directory=upstream_config_dir)
     assert composed.trainer.use_v1 is False
     assert composed.actor_rollout_ref.rollout.n == 8
@@ -1550,14 +1840,7 @@ def test_composed_selected_sample_binding_preserves_multiline_text(
     path, _, _ = _write_config(tmp_path)
     config = load_policy_e2e_smoke_run_config(path)
     plan = build_policy_e2e_smoke_verl_plan(config)
-    upstream_config_dir = (
-        Path(__file__).resolve().parents[2]
-        / ".deps"
-        / "verl"
-        / "verl"
-        / "trainer"
-        / "config"
-    )
+    upstream_config_dir = _write_minimal_upstream_config_directory(tmp_path)
     composed = compose_upstream_verl_config(plan, config_directory=upstream_config_dir)
 
     restored = VerlSelectedSampleDatasetBinding.from_config(
