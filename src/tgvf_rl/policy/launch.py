@@ -41,7 +41,11 @@ from tgvf_rl.ops.cli_authorization import (
     cli_worker_authorization_environment,
     verify_python_executable_binding,
 )
-from tgvf_rl.ops.runtime_locator import VerifiedRuntimeLocatorScaffoldEvidence
+from tgvf_rl.ops.runtime_locator import (
+    VerifiedRuntimeLocatorScaffoldEvidence,
+    load_runtime_locator_manifest,
+    verify_runtime_locator_manifest_scaffold,
+)
 from tgvf_rl.ops.worker_startup import (
     POLICY_DRIVER_ROLE,
     WorkerStartupEnvelope,
@@ -53,10 +57,14 @@ from .horizon_extension import (
     validate_policy_horizon_extension_resume,
 )
 from .run_config import PolicyE2ESmokeRunConfig
+from .runtime_locator_authorization import (
+    POLICY_DRIVER_STARTUP_TARGET,
+    POLICY_RUNTIME_LOCATOR_AUTHORIZATION_KEYS,
+    PolicyRuntimeLocatorAuthorizationProof,
+)
 
 
 POLICY_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-POLICY_DRIVER_STARTUP_TARGET = "tgvf_rl.framework.verl.policy_main:main"
 _POLICY_DRIVER_MAIN_MODULE = POLICY_DRIVER_STARTUP_TARGET.partition(":")[0]
 _EXPERIMENT_LEDGER_PATH = "docs/EXPERIMENT_LEDGER.md"
 _WORKER_STARTUP_ENVELOPE_AUTHORIZATION_KEYS = frozenset(
@@ -124,6 +132,10 @@ class PreparedPolicyLaunch:
     runtime_locator_evidence: InitVar[VerifiedRuntimeLocatorScaffoldEvidence]
     horizon_extension: PolicyHorizonExtension | None = None
     python_binding: PythonExecutableBinding | None = None
+    runtime_locator_authorization: PolicyRuntimeLocatorAuthorizationProof = field(
+        init=False
+    )
+    _runtime_locator_authorization_sha256: str = field(init=False, repr=False)
     worker_startup_envelope: WorkerStartupEnvelope = field(init=False)
     _worker_startup_envelope_sha256: str = field(init=False, repr=False)
 
@@ -152,6 +164,27 @@ class PreparedPolicyLaunch:
             python_identity=self.python_identity,
             runtime_locator_evidence=runtime_locator_evidence,
         )
+        manifest = runtime_locator_evidence.manifest
+        runtime_locator_authorization = PolicyRuntimeLocatorAuthorizationProof(
+            manifest_source_path=manifest.manifest_source_path,
+            manifest_source_sha256=manifest.manifest_source_sha256,
+            manifest_source_byte_length=manifest.manifest_source_byte_length,
+            manifest_identity_sha256=manifest.identity_sha256,
+            cache_tag=manifest.cache_tag,
+            target_coordinates=manifest.target_coordinates,
+        )
+        object.__setattr__(
+            self,
+            "runtime_locator_authorization",
+            runtime_locator_authorization,
+        )
+        object.__setattr__(
+            self,
+            "_runtime_locator_authorization_sha256",
+            _canonical_json_sha256(
+                runtime_locator_authorization.authorization_parameters()
+            ),
+        )
         object.__setattr__(self, "worker_startup_envelope", envelope)
         object.__setattr__(
             self,
@@ -168,8 +201,11 @@ class PreparedPolicyLaunch:
     @property
     def prepared_identity_sha256(self) -> str:
         startup_envelope = self._validated_worker_startup_envelope()
+        runtime_locator_parameters = (
+            self._validated_runtime_locator_authorization_parameters()
+        )
         record = {
-            "schema_version": "tgvf-prepared-policy-launch-v3",
+            "schema_version": "tgvf-prepared-policy-launch-v4",
             "run_identity_sha256": self.config.identity_sha256,
             "config_source_sha256": self.config.source_sha256,
             "horizon_extension_sha256": (
@@ -179,6 +215,7 @@ class PreparedPolicyLaunch:
             ),
             "plan": self.plan.as_record(),
             "compile": self.compile_authorization.authorization_parameters(),
+            "runtime_locator": runtime_locator_parameters,
             "python": self.python_identity.authorization_parameters(),
             "command": list(self.command),
             "worker_startup_envelope": startup_envelope.as_record(),
@@ -191,6 +228,9 @@ class PreparedPolicyLaunch:
 
     def authorization_parameters(self) -> dict[str, str]:
         startup_envelope = self._validated_worker_startup_envelope()
+        runtime_locator_parameters = (
+            self._validated_runtime_locator_authorization_parameters()
+        )
         startup_parameters = startup_envelope.authorization_parameters()
         if (
             type(startup_parameters) is not dict
@@ -204,6 +244,7 @@ class PreparedPolicyLaunch:
                 "compile prerequisites",
                 self.compile_authorization.authorization_parameters(),
             ),
+            ("runtime locator", runtime_locator_parameters),
             ("Python executable", self.python_identity.authorization_parameters()),
             (
                 "child environment",
@@ -215,6 +256,13 @@ class PreparedPolicyLaunch:
                 {"prepared_policy_launch_sha256": self.prepared_identity_sha256},
             ),
         )
+        runtime_locator_names = {
+            name for name in merged if name.startswith("runtime_locator_")
+        }
+        if runtime_locator_names != POLICY_RUNTIME_LOCATOR_AUTHORIZATION_KEYS:
+            raise RuntimeError(
+                "Policy runtime-locator authorization namespace differs"
+            )
         try:
             reconstructed = WorkerStartupEnvelope.from_authorization_parameters(
                 merged,
@@ -227,6 +275,33 @@ class PreparedPolicyLaunch:
         if reconstructed != startup_envelope:
             raise RuntimeError("Policy worker startup authorization envelope differs")
         return merged
+
+    def _validated_runtime_locator_authorization_parameters(
+        self,
+    ) -> dict[str, str]:
+        proof = self.runtime_locator_authorization
+        if type(proof) is not PolicyRuntimeLocatorAuthorizationProof:
+            raise RuntimeError(
+                "prepared Policy runtime-locator authorization type differs"
+            )
+        parameters = proof.authorization_parameters()
+        if (
+            type(parameters) is not dict
+            or set(parameters) != POLICY_RUNTIME_LOCATOR_AUTHORIZATION_KEYS
+            or any(type(key) is not str for key in parameters)
+            or any(type(value) is not str for value in parameters.values())
+        ):
+            raise RuntimeError(
+                "Policy runtime-locator authorization parameter group differs"
+            )
+        if (
+            _canonical_json_sha256(parameters)
+            != self._runtime_locator_authorization_sha256
+        ):
+            raise RuntimeError(
+                "prepared Policy runtime-locator authorization changed"
+            )
+        return parameters
 
     def _validated_worker_startup_envelope(self) -> WorkerStartupEnvelope:
         envelope = self.worker_startup_envelope
@@ -275,7 +350,9 @@ def preflight_policy_launch_for_authorization(
     config: PolicyE2ESmokeRunConfig,
     *,
     compile_prerequisite_manifest_path: str | Path | None,
-    runtime_locator_evidence: VerifiedRuntimeLocatorScaffoldEvidence | None = None,
+    runtime_locator_manifest_path: str | Path,
+    runtime_locator_manifest_source_sha256: str,
+    runtime_locator_manifest_source_byte_length: int,
     python_executable: str | Path | None = None,
     repository_root: str | Path = POLICY_REPOSITORY_ROOT,
     horizon_extension: PolicyHorizonExtension | None = None,
@@ -308,10 +385,55 @@ def preflight_policy_launch_for_authorization(
         repository_root=repository_root,
         horizon_extension=horizon_extension,
     )
-    if runtime_locator_evidence is None:
-        raise RuntimeError(
-            "verified Policy runtime locator scaffold evidence is required"
+    manifest = load_runtime_locator_manifest(
+        runtime_locator_manifest_path,
+        expected_source_sha256=runtime_locator_manifest_source_sha256,
+        expected_source_byte_length=runtime_locator_manifest_source_byte_length,
+    )
+    cache_tag = sys.implementation.cache_tag
+    if type(cache_tag) is not str:
+        raise RuntimeError("current Python cache tag must be exactly str")
+    runtime_locator_evidence = verify_runtime_locator_manifest_scaffold(
+        manifest,
+        expected_cache_tag=cache_tag,
+        expected_target_coordinates=(POLICY_DRIVER_STARTUP_TARGET,),
+    )
+    try:
+        prepared = _prepare_policy_launch_with_runtime_locator_evidence(
+            config=config,
+            plan=plan,
+            compile_prerequisites=compile_prerequisites,
+            prerequisite_receipt=prerequisite_receipt,
+            runtime_locator_evidence=runtime_locator_evidence,
+            python_executable=python_executable,
+            repository_root=repository_root,
+            horizon_extension=horizon_extension,
         )
+    except BaseException as error:
+        _close_runtime_locator_evidence_after_failure(
+            runtime_locator_evidence,
+            error,
+        )
+        raise
+    try:
+        runtime_locator_evidence.close()
+    except BaseException as error:
+        _close_prepared_python_binding_after_failure(prepared, error)
+        raise
+    return prepared
+
+
+def _prepare_policy_launch_with_runtime_locator_evidence(
+    *,
+    config: PolicyE2ESmokeRunConfig,
+    plan: UpstreamVerlLaunchPlan,
+    compile_prerequisites: PolicyCompilePrerequisiteBinding,
+    prerequisite_receipt: PolicyCompilePrerequisiteReceipt,
+    runtime_locator_evidence: VerifiedRuntimeLocatorScaffoldEvidence,
+    python_executable: str | Path | None,
+    repository_root: str | Path,
+    horizon_extension: PolicyHorizonExtension | None,
+) -> PreparedPolicyLaunch:
     python_binding = bind_current_python_executable_for_exec(
         python_executable or sys.executable
     )
@@ -340,9 +462,41 @@ def preflight_policy_launch_for_authorization(
             horizon_extension=horizon_extension,
             python_binding=python_binding,
         )
-    except BaseException:
-        python_binding.close()
+    except BaseException as error:
+        try:
+            python_binding.close()
+        except BaseException as close_error:
+            error.add_note(
+                "closing Policy Python binding after preflight failure also failed: "
+                f"{close_error!r}"
+            )
         raise
+
+
+def _close_runtime_locator_evidence_after_failure(
+    evidence: VerifiedRuntimeLocatorScaffoldEvidence,
+    primary_error: BaseException,
+) -> None:
+    try:
+        evidence.close()
+    except BaseException as close_error:
+        primary_error.add_note(
+            "closing Policy runtime-locator evidence after preflight failure also "
+            f"failed: {close_error!r}"
+        )
+
+
+def _close_prepared_python_binding_after_failure(
+    prepared: PreparedPolicyLaunch,
+    primary_error: BaseException,
+) -> None:
+    try:
+        prepared.close_python_binding()
+    except BaseException as close_error:
+        primary_error.add_note(
+            "closing prepared Policy Python binding after locator close failure "
+            f"also failed: {close_error!r}"
+        )
 
 
 def _build_policy_worker_startup_envelope(
@@ -572,6 +726,18 @@ def execute_policy_e2e_smoke(
             )
         expected_parameters = prepared.authorization_parameters()
         observed_parameters = dict(launch_identity.parameters)
+        observed_runtime_locator_names = {
+            name
+            for name in observed_parameters
+            if name.startswith("runtime_locator_")
+        }
+        if (
+            observed_runtime_locator_names
+            != POLICY_RUNTIME_LOCATOR_AUTHORIZATION_KEYS
+        ):
+            raise RuntimeError(
+                "consumed Policy runtime-locator authorization namespace differs"
+            )
         try:
             observed_startup_envelope = (
                 WorkerStartupEnvelope.from_authorization_parameters(
@@ -792,6 +958,7 @@ __all__ = [
     "POLICY_REPOSITORY_ROOT",
     "PreparedPolicyLaunch",
     "PolicyCompileAuthorizationProof",
+    "PolicyRuntimeLocatorAuthorizationProof",
     "assert_policy_execution_identity",
     "build_policy_launch_record",
     "execute_policy_e2e_smoke",

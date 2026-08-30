@@ -1146,7 +1146,7 @@ def test_execution_surface_manifest_is_exact_and_content_bound() -> None:
         )
     )
     assert policy["schema_version"] == "tgvf-execution-surface-policy-v2"
-    assert policy["revision"] == 7
+    assert policy["revision"] == 8
     completed = subprocess.run(
         [
             sys.executable,

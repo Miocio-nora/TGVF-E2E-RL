@@ -25,7 +25,7 @@ from tgvf_rl.ops.policy_compile_prerequisites import (
 
 
 _POLICY_PHASE = "policy_training"
-_POLICY_COMMAND_ID = "tgvf-rl:run-policy:v3"
+_POLICY_COMMAND_ID = "tgvf-rl:run-policy:v4"
 
 
 def compose_pinned_verl_config(overrides: Sequence[str]) -> object:

@@ -53,6 +53,7 @@ from tgvf_rl.ops.cli_launch import (
     _representation_command_prefix,
     _representation_torchrun_command as _representation_torchrun_command,
 )
+import tgvf_rl.ops.runtime_locator_cli as runtime_locator_cli
 from tgvf_rl.ops.child_environment import (
     scrub_representation_worker_authorization_environment,
     verify_representation_torchrun_child_environment,
@@ -75,7 +76,7 @@ PUBLIC_MUTATING_COMMANDS = frozenset(
 )
 INTERNAL_MUTATING_COMMANDS = frozenset({"run-representation"})
 _REPRESENTATION_COMMAND_ID = "tgvf-rl:launch-representation:v2"
-_POLICY_COMMAND_ID = "tgvf-rl:run-policy:v3"
+_POLICY_COMMAND_ID = "tgvf-rl:run-policy:v4"
 
 
 def _require(mapping: Mapping[str, Any], key: str, expected: object) -> None:
@@ -528,6 +529,9 @@ def _preflight_policy_run(
     python_executable: Path,
     horizon_extension: Any | None,
     compile_prerequisite_manifest_path: Path,
+    runtime_locator_manifest_path: Path,
+    runtime_locator_manifest_source_sha256: str,
+    runtime_locator_manifest_source_byte_length: int,
 ) -> Any:
     assert_canonical_runtime_launch_enabled()
 
@@ -538,6 +542,9 @@ def _preflight_policy_run(
         python_executable=python_executable,
         horizon_extension=horizon_extension,
         compile_prerequisite_manifest_path=compile_prerequisite_manifest_path,
+        runtime_locator_manifest_path=runtime_locator_manifest_path,
+        runtime_locator_manifest_source_sha256=runtime_locator_manifest_source_sha256,
+        runtime_locator_manifest_source_byte_length=runtime_locator_manifest_source_byte_length,
     )
 
 
@@ -703,6 +710,24 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="strict content-bound compile-prerequisite JSON manifest",
+    )
+    run_policy.add_argument(
+        "--runtime-locator-manifest",
+        type=runtime_locator_cli.absolute_runtime_locator_manifest_path,
+        required=True,
+        help="absolute strict content-bound runtime-locator JSON manifest",
+    )
+    run_policy.add_argument(
+        "--runtime-locator-manifest-sha256",
+        type=runtime_locator_cli.lowercase_runtime_locator_manifest_sha256,
+        required=True,
+        help="externally authorized lowercase SHA256 of the runtime-locator manifest",
+    )
+    run_policy.add_argument(
+        "--runtime-locator-manifest-byte-length",
+        type=runtime_locator_cli.positive_runtime_locator_manifest_byte_length,
+        required=True,
+        help="externally authorized positive byte length of the runtime manifest",
     )
     _add_execution_authorization_arguments(run_policy)
     return parser
@@ -925,6 +950,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 python_executable=args.python,
                 horizon_extension=extension,
                 compile_prerequisite_manifest_path=(args.compile_prerequisite_manifest),
+                runtime_locator_manifest_path=args.runtime_locator_manifest,
+                runtime_locator_manifest_source_sha256=args.runtime_locator_manifest_sha256,
+                runtime_locator_manifest_source_byte_length=args.runtime_locator_manifest_byte_length,
             )
             try:
                 _assert_installed_stack_identity(

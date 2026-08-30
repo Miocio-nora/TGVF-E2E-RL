@@ -34,6 +34,18 @@ POLICY_COMPILE_ARGUMENTS = [
     "--compile-prerequisite-manifest",
     "/compile-prerequisites.json",
 ]
+POLICY_RUNTIME_LOCATOR_ARGUMENTS = [
+    "--runtime-locator-manifest",
+    "/runtime-locator.json",
+    "--runtime-locator-manifest-sha256",
+    "d" * 64,
+    "--runtime-locator-manifest-byte-length",
+    "4096",
+]
+POLICY_LAUNCH_ARGUMENTS = [
+    *POLICY_COMPILE_ARGUMENTS,
+    *POLICY_RUNTIME_LOCATOR_ARGUMENTS,
+]
 
 
 def _binding(path: str, digest: str = "b" * 64) -> CanonicalConfigBinding:
@@ -104,12 +116,12 @@ def test_legacy_config_is_blocked_before_load_or_token_consumption(
         lambda *_args, **_kwargs: events.append("consume"),
     )
 
-    compile_arguments = POLICY_COMPILE_ARGUMENTS if command == "run-policy" else []
+    launch_arguments = POLICY_LAUNCH_ARGUMENTS if command == "run-policy" else []
     result = cli.main(
         [
             command,
             f"/legacy/{command}.toml",
-            *compile_arguments,
+            *launch_arguments,
             *AUTHORIZATION_ARGUMENTS,
         ]
     )
@@ -153,7 +165,7 @@ def test_policy_compile_refusal_precedes_token_consumption(
         [
             "run-policy",
             str(binding.source_path),
-            *POLICY_COMPILE_ARGUMENTS,
+            *POLICY_LAUNCH_ARGUMENTS,
             *AUTHORIZATION_ARGUMENTS,
         ]
     )
@@ -237,11 +249,11 @@ def test_policy_uses_one_prepared_identity_after_consumption(
     monkeypatch.setattr(
         cli, "assert_loaded_config_matches_binding", lambda *_a, **_k: None
     )
-    monkeypatch.setattr(
-        cli,
-        "_preflight_policy_run",
-        lambda *_a, **_k: events.append("preflight") or prepared,
-    )
+    def preflight(*_args: object, **kwargs: object) -> object:
+        events.append(("preflight", kwargs))
+        return prepared
+
+    monkeypatch.setattr(cli, "_preflight_policy_run", preflight)
     monkeypatch.setattr(
         cli, "_assert_installed_stack_identity", lambda *_a: events.append("stack")
     )
@@ -274,7 +286,7 @@ def test_policy_uses_one_prepared_identity_after_consumption(
             [
                 "run-policy",
                 str(binding.source_path),
-                *POLICY_COMPILE_ARGUMENTS,
+                *POLICY_LAUNCH_ARGUMENTS,
                 *AUTHORIZATION_ARGUMENTS,
             ]
         )
@@ -290,6 +302,14 @@ def test_policy_uses_one_prepared_identity_after_consumption(
         "reverify",
         "execute",
     ]
+    preflight_arguments = events[0][1]
+    assert preflight_arguments["runtime_locator_manifest_path"] == Path(
+        "/runtime-locator.json"
+    )
+    assert preflight_arguments["runtime_locator_manifest_source_sha256"] == (
+        "d" * 64
+    )
+    assert preflight_arguments["runtime_locator_manifest_source_byte_length"] == 4096
     consumed_identity = events[3][1]
     executed = events[-1]
     assert executed[1] is prepared
@@ -566,6 +586,87 @@ def test_read_only_commands_keep_legacy_config_access_without_auth_arguments() -
         assert not hasattr(parsed, "gate_directory")
         assert not hasattr(parsed, "authorization_token")
         assert not hasattr(parsed, "freeze_override")
+        if arguments[0] == "plan-policy":
+            assert not hasattr(parsed, "runtime_locator_manifest")
+            assert not hasattr(parsed, "runtime_locator_manifest_sha256")
+            assert not hasattr(parsed, "runtime_locator_manifest_byte_length")
+
+
+@pytest.mark.parametrize(
+    "omitted_arguments",
+    [
+        ["--runtime-locator-manifest", "/runtime-locator.json"],
+        ["--runtime-locator-manifest-sha256", "d" * 64],
+        ["--runtime-locator-manifest-byte-length", "4096"],
+    ],
+)
+def test_run_policy_requires_complete_runtime_locator_authority(
+    omitted_arguments: list[str],
+) -> None:
+    runtime_arguments = list(POLICY_RUNTIME_LOCATOR_ARGUMENTS)
+    index = runtime_arguments.index(omitted_arguments[0])
+    del runtime_arguments[index : index + 2]
+    with pytest.raises(SystemExit):
+        cli._parser().parse_args(  # noqa: SLF001
+            [
+                "run-policy",
+                "/canonical/policy.toml",
+                *POLICY_COMPILE_ARGUMENTS,
+                *runtime_arguments,
+                *AUTHORIZATION_ARGUMENTS,
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("argument", "malformed_value"),
+    [
+        ("--runtime-locator-manifest", "relative/runtime.json"),
+        ("--runtime-locator-manifest", "/runtime/../runtime.json"),
+        ("--runtime-locator-manifest-sha256", "D" * 64),
+        ("--runtime-locator-manifest-sha256", "d" * 63),
+        ("--runtime-locator-manifest-sha256", "g" * 64),
+        ("--runtime-locator-manifest-byte-length", "0"),
+        ("--runtime-locator-manifest-byte-length", "-1"),
+        ("--runtime-locator-manifest-byte-length", "1.0"),
+    ],
+)
+def test_run_policy_rejects_malformed_runtime_locator_authority_during_parse(
+    argument: str,
+    malformed_value: str,
+) -> None:
+    launch_arguments = list(POLICY_LAUNCH_ARGUMENTS)
+    launch_arguments[launch_arguments.index(argument) + 1] = malformed_value
+    with pytest.raises(SystemExit):
+        cli._parser().parse_args(  # noqa: SLF001
+            [
+                "run-policy",
+                "/canonical/policy.toml",
+                *launch_arguments,
+                *AUTHORIZATION_ARGUMENTS,
+            ]
+        )
+
+
+def test_run_policy_parses_exact_runtime_locator_authority_types() -> None:
+    parsed = cli._parser().parse_args(  # noqa: SLF001
+        [
+            "run-policy",
+            "/canonical/policy.toml",
+            *POLICY_LAUNCH_ARGUMENTS,
+            *AUTHORIZATION_ARGUMENTS,
+        ]
+    )
+    assert parsed.runtime_locator_manifest == Path("/runtime-locator.json")
+    assert parsed.runtime_locator_manifest_sha256 == "d" * 64
+    assert parsed.runtime_locator_manifest_byte_length == 4096
+
+
+def test_policy_launcher_and_worker_share_v4_command_identity() -> None:
+    from tgvf_rl.framework.verl import policy_main
+
+    assert cli._POLICY_COMMAND_ID == "tgvf-rl:run-policy:v4"  # noqa: SLF001
+    assert policy_main._POLICY_COMMAND_ID == cli._POLICY_COMMAND_ID  # noqa: SLF001
 
 
 def test_freeze_override_argument_is_policy_conditional() -> None:
