@@ -136,8 +136,8 @@ commands (`ready`, `authorize`, `override-freeze`, `consume`, `wait`, `status`,
 `quarantine-legacy`, and `audit-control-plane`) and to its exact conservative
 capability map. Parser-mode or policy drift blocks the audit.
 
-The v2 stabilization inventory contains 82 rows: two canonical entries, two
-control-audit utilities, 36 permanently quarantined Python entries, four
+The v2 stabilization inventory contains 79 rows: two canonical entries, two
+control-audit utilities, 36 permanently quarantined Python entries, one
 permanently quarantined shell entries, 13 mixed entries whose explicitly
 read-only modes remain available, 21 bounded offline artifact materializers,
 three read-only utilities, and one strictly import-only support module. A
@@ -174,7 +174,7 @@ direct statement immediately after that parse, and end in a direct module
 dispatch. Calls on an unrelated object named `parse_args`, caught guards, and
 nested business dispatch do not satisfy this contract.
 
-The four permanent shell entries are exact byte-bound wrappers. They start
+The remaining permanent shell entry is an exact byte-bound wrapper. It starts
 with `/bin/bash -p`, derive their location using only Bash parameter expansion
 and builtins, and `exec` absolute `/usr/bin/python3 -I` into the quarantine
 controller. A symlink used as the final script path is rejected before path

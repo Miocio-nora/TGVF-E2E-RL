@@ -53,10 +53,7 @@ LEGACY_QUARANTINED_CONTROLLERS = (
     "tools/watch_representation_wandb.py",
 )
 LEGACY_QUARANTINED_SHELL_CONTROLLERS = (
-    "tools/launch_policy_data_selection_t1_rank.sh",
-    "tools/launch_policy_data_selection_t1_single_gpu.sh",
     "tools/launch_policy_data_selection_t1_subshard.sh",
-    "tools/supervise_prl14_cleanfinal16_eval.sh",
 )
 EXECUTABLE_LEGACY_PYTHON_CONTROLLERS = (
     "tools/launch_prl13_native_deepeyes.py",
@@ -158,12 +155,12 @@ def test_stabilization_policy_v2_is_frozen_and_runtime_closed() -> None:
     }
 
 
-def test_canonical_shell_supervisor_has_valid_syntax() -> None:
+def test_remaining_quarantined_shell_has_valid_syntax() -> None:
     subprocess.run(
         [
             "bash",
             "-n",
-            str(REPOSITORY_ROOT / "tools/supervise_prl14_cleanfinal16_eval.sh"),
+            str(REPOSITORY_ROOT / "tools/launch_policy_data_selection_t1_subshard.sh"),
         ],
         cwd=REPOSITORY_ROOT,
         check=True,
@@ -665,7 +662,7 @@ def test_control_plane_audit_rejects_non_executable_shell_markers_after_hash_ref
     tmp_path: Path,
     marker_kind: str,
 ) -> None:
-    relative = "tools/launch_policy_data_selection_t1_rank.sh"
+    relative = "tools/launch_policy_data_selection_t1_subshard.sh"
     repository = _minimal_audit_repository(tmp_path)
     tool_path = repository / relative
     marker = (
@@ -1076,7 +1073,7 @@ def test_execution_surface_manifest_is_exact_and_content_bound() -> None:
         )
     )
     assert policy["schema_version"] == "tgvf-execution-surface-policy-v2"
-    assert policy["revision"] == 2
+    assert policy["revision"] == 3
     completed = subprocess.run(
         [
             sys.executable,
@@ -1094,7 +1091,7 @@ def test_execution_surface_manifest_is_exact_and_content_bound() -> None:
     assert completed.returncode == 0, completed.stderr or completed.stdout
     report = json.loads(completed.stdout)
     inventory = report["execution_surface_inventory"]
-    assert len(inventory) == 82
+    assert len(inventory) == 79
     assert all(row["status"] == "content_bound" for row in inventory)
     assert [row["path"] for row in inventory] == sorted(
         row["path"] for row in inventory

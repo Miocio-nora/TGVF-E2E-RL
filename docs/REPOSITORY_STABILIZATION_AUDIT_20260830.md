@@ -23,8 +23,8 @@ not closed merely because the affected experiment has stopped running.
 
 | Area | State | Required closure |
 |---|---|---|
-| Repository ownership | partial | The boundary audit passes with zero new violations and content-binds frozen legacy config roots; 45 exact historical debts remain registered after deleting five stale shell-path entries, and neutral-path semantic RP/PRL debt still needs a second policy layer. |
-| Execution-surface inventory | verified | The v2 recursive exact-set manifest binds 82 entries and their file bytes: every Python file below `tools`/`spikes`, every shell file there, and every `src` main/module-main, Python-shebang, executable-bit, or console-entry target. Missing, extra, duplicate, moved, reclassified, or content-drifted entries fail closed. |
+| Repository ownership | partial | The boundary audit passes with zero new violations and content-binds frozen legacy config roots; 44 exact historical debts remain registered after deleting stale shell-path entries, and neutral-path semantic RP/PRL debt still needs a second policy layer. |
+| Execution-surface inventory | verified | The v2 recursive exact-set manifest binds 79 entries and their file bytes: every Python file below `tools`/`spikes`, every shell file there, and every `src` main/module-main, Python-shebang, executable-bit, or console-entry target. Missing, extra, duplicate, moved, reclassified, or content-drifted entries fail closed. |
 | Public and historical launch surfaces | contained, not closed | Legacy/spike surfaces are inventoried and guarded. Independent review found unresolved worker-envelope, executable-FD, environment, member-claim, authorization-transaction and runtime-package gaps. Policy v2 therefore sets the non-overridable canonical runtime closure to disabled. |
 | Crop observation/action contracts | verified for the stabilization runtime | Matched60, legacy generic86 and strict/legacy action semantics are explicit identities with focused tests. No historical PRL/PRL config binds the new strict loop, so this does not retroactively certify old artifacts. |
 | TGVF/Atomic observation layout | verified | Live append and immutable replay/layout consume the same once-rendered protocol/dialect-bound bytes; the layout has no implicit Thinking renderer. |
@@ -194,7 +194,7 @@ but is not score provenance.
 - Credentials must be passed to the target session/process only. Global tmux
   environment mutation is forbidden.
 - Direct entry-point coverage is recursive and exact, not marker-based. The
-  v2 inventory contains 82 content-bound rows. It covers every Python file in
+  v2 inventory contains 79 content-bound rows. It covers every Python file in
   `tools`/`spikes`, all shell files there, and `src` modules exposed by a main
   guard, `__main__.py`, a Python shebang, executable mode, or a
   `project.scripts` console entry. The one non-entry support module is admitted
@@ -205,7 +205,7 @@ but is not score provenance.
   script-level guarantee starts after caller-interpreter startup: direct
   executable files have fixed isolated shebangs, while an explicit ordinary
   `python script.py` caller remains an external trust boundary because its
-  `sitecustomize` can run before repository code. Four shell entries use exact
+  `sitecustomize` can run before repository code. The remaining shell entry uses exact
   `/bin/bash -p` wrappers containing no PATH-resolved pre-guard command, reject
   a final script symlink, resolve ancestor symlinks physically, and execute
   `/usr/bin/python3 -I` directly. Hostile `PATH`, `BASH_ENV`, and `PYTHONPATH`,
@@ -264,7 +264,7 @@ The control work makes the present repository auditable; it does not pretend
 that the source tree is already small or easy to extend. The measured cleanup
 backlog includes 31 production modules above 1,000 lines, four multi-module
 import cycles, repeated local hashing/publication helpers across more than 100
-files, 82 inventoried execution/support surfaces, and no portable runnable canonical model
+files, 79 inventoried execution/support surfaces, and no portable runnable canonical model
 config yet. `policy_coredev.py`, representation internal evaluation, and the
 policy run-config union are the first decomposition targets.
 

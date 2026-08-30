@@ -165,7 +165,7 @@
     }
   ],
   "policy_id": "TGVF-REPOSITORY-BOUNDARIES-V2",
-  "revision": 2,
+  "revision": 3,
   "run_specific_code_allowlist": [
     "src/tgvf_rl/framework/verl/prl13_main.py",
     "src/tgvf_rl/policy/prl13_group_signal.py",
@@ -179,7 +179,6 @@
     "tools/run_rp68_post_training_evaluations.py",
     "tools/run_rp69_post_training_evaluations.py",
     "tools/smoke_prl13_qwen3_full_model_grad.py",
-    "tools/supervise_prl14_cleanfinal16_eval.sh",
     "tools/supervise_rp67_t1_schedule.py",
     "tools/watchdog_rp67_step2000_acc_pipeline.py"
   ],

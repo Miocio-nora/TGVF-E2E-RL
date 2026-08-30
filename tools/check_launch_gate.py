@@ -42,7 +42,7 @@ DEFAULT_EXECUTION_SURFACE_POLICY = (
     REPOSITORY_ROOT / "configs/ops/execution_surface_policy.json"
 )
 EXECUTION_SURFACE_POLICY_SCHEMA = "tgvf-execution-surface-policy-v2"
-EXECUTION_SURFACE_POLICY_REVISION = 2
+EXECUTION_SURFACE_POLICY_REVISION = 3
 EXECUTION_SURFACE_CONTENT_BINDING = "sha256-file-bytes-v1"
 EXECUTION_SURFACE_ROOTS = ("src", "tools", "spikes")
 EXECUTION_SHELL_ROOTS = ("tools", "spikes")
@@ -121,10 +121,7 @@ LEGACY_QUARANTINED_CONTROLLERS = (
     "tools/watch_representation_wandb.py",
 )
 LEGACY_QUARANTINED_SHELL_CONTROLLERS = (
-    "tools/launch_policy_data_selection_t1_rank.sh",
-    "tools/launch_policy_data_selection_t1_single_gpu.sh",
     "tools/launch_policy_data_selection_t1_subshard.sh",
-    "tools/supervise_prl14_cleanfinal16_eval.sh",
 )
 MIXED_MODE_STANDALONE_CONTROLLERS = {
     "spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py": (

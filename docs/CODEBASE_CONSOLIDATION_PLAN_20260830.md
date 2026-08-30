@@ -9,7 +9,7 @@ experiment, delete a historical worktree, or rewrite historical evidence.
 The problem is not only the number of branches. A static inventory of the
 stabilization line found:
 
-- 245 Python modules below `src/tgvf_rl` and 82 inventoried execution/support
+- 245 Python modules below `src/tgvf_rl` and 79 inventoried execution/support
   surfaces across `src`, `tools`, and `spikes`;
 - 31 production modules above 1,000 lines, led by
   `evaluation/policy_coredev.py` (3,414 lines at this audit point),
@@ -61,7 +61,7 @@ with broad moves would make review and provenance harder.
 
 ### C1 — collapse executable entry points
 
-For every one of the 82 inventoried surfaces, choose exactly one disposition:
+For every one of the 79 inventoried surfaces, choose exactly one disposition:
 
 1. canonical CLI subcommand;
 2. read-only inspection utility;

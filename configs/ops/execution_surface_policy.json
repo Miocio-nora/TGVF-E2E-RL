@@ -1,6 +1,6 @@
 {
   "schema_version": "tgvf-execution-surface-policy-v2",
-  "revision": 2,
+  "revision": 3,
   "content_binding": "sha256-file-bytes-v1",
   "python_roots": [
     "src",
@@ -343,7 +343,7 @@
       "workload_kinds": [
         "control"
       ],
-      "content_sha256": "afea3652bdddad815c84d6e5c75202ae2460d40a4e6fdcb2377e901cd9f0c8ce"
+      "content_sha256": "80fa890159bd95ccc96c7d38f035f15d807c557be8eb2cc52a87e659f5f0f927"
     },
     {
       "path": "tools/check_policy_mcq_terminal_reward.py",
@@ -479,48 +479,6 @@
         "external_judge"
       ],
       "content_sha256": "cf6ed1d2bc0e632764b8137b327011425d49bb9d3e5a5b912a8a772548591746"
-    },
-    {
-      "path": "tools/launch_policy_data_selection_t1_rank.sh",
-      "kind": "shell",
-      "classification": "permanent_quarantine",
-      "allowed_modes": [],
-      "blocked_modes": [
-        "*"
-      ],
-      "authorization_kind": "permanent_quarantine",
-      "capabilities": {
-        "gpu": true,
-        "network": false,
-        "subprocess": true,
-        "arbitrary_exec": false,
-        "destructive_fs": false
-      },
-      "workload_kinds": [
-        "training"
-      ],
-      "content_sha256": "269692e41116f81bd39f2919caf42714589126f76271c40cb141cb36f1f76d01"
-    },
-    {
-      "path": "tools/launch_policy_data_selection_t1_single_gpu.sh",
-      "kind": "shell",
-      "classification": "permanent_quarantine",
-      "allowed_modes": [],
-      "blocked_modes": [
-        "*"
-      ],
-      "authorization_kind": "permanent_quarantine",
-      "capabilities": {
-        "gpu": true,
-        "network": false,
-        "subprocess": true,
-        "arbitrary_exec": false,
-        "destructive_fs": false
-      },
-      "workload_kinds": [
-        "training"
-      ],
-      "content_sha256": "0f58974d74f75bfc8dccb18bb4d862266a4fe19d1a91ed996fdb69cf4576377b"
     },
     {
       "path": "tools/launch_policy_data_selection_t1_subshard.sh",
@@ -1656,27 +1614,6 @@
         "offline_materialization"
       ],
       "content_sha256": "fd45626bfca8f8759bcd9b117e44aebfbcbc09d72aea124a9de2f4044ac17005"
-    },
-    {
-      "path": "tools/supervise_prl14_cleanfinal16_eval.sh",
-      "kind": "shell",
-      "classification": "permanent_quarantine",
-      "allowed_modes": [],
-      "blocked_modes": [
-        "*"
-      ],
-      "authorization_kind": "permanent_quarantine",
-      "capabilities": {
-        "gpu": true,
-        "network": false,
-        "subprocess": true,
-        "arbitrary_exec": false,
-        "destructive_fs": false
-      },
-      "workload_kinds": [
-        "evaluation"
-      ],
-      "content_sha256": "2f91a28059f92956f0f9ad0ee798306210e0c7fcdb25db990fdab3270dcddf3f"
     },
     {
       "path": "tools/supervise_rp67_t1_schedule.py",
