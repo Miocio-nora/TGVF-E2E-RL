@@ -11,10 +11,12 @@ import pytest
 import tgvf_rl.secure_file_read as secure_file_read
 from tgvf_rl.secure_file_read import (
     SecureFileReadError,
+    create_regular_file_exclusive_beneath_nofollow,
     probe_regular_file_absolute_nofollow,
     read_regular_file_absolute_nofollow,
     read_regular_file_beneath_nofollow,
     read_regular_file_leaf_nofollow,
+    retain_directory_absolute_nofollow,
 )
 
 
@@ -216,3 +218,85 @@ def test_missing_nofollow_support_fails_closed(
 
     with pytest.raises(SecureFileReadError, match="O_NOFOLLOW"):
         read_regular_file_leaf_nofollow(source)
+
+
+def test_retained_directory_exclusive_create_burns_name_without_overwrite(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    with retain_directory_absolute_nofollow(root) as binding:
+        creation = create_regular_file_exclusive_beneath_nofollow(
+            binding,
+            "rank-0.json",
+            b'{"status":"consumed"}\n',
+            mode=0o600,
+        )
+        with pytest.raises(FileExistsError):
+            create_regular_file_exclusive_beneath_nofollow(
+                binding,
+                "rank-0.json",
+                b"replacement",
+                mode=0o600,
+            )
+
+    assert (root / "rank-0.json").read_bytes() == b'{"status":"consumed"}\n'
+    assert creation.metadata.st_ino == (root / "rank-0.json").stat().st_ino
+    assert creation.payload_sha256
+
+
+def test_exclusive_create_keeps_tombstone_after_write_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+
+    def _fail_after_reservation(_descriptor: int, _payload: bytes) -> None:
+        raise OSError("injected write failure")
+
+    monkeypatch.setattr(secure_file_read, "_write_all", _fail_after_reservation)
+    with retain_directory_absolute_nofollow(root) as binding:
+        with pytest.raises(OSError, match="injected write failure"):
+            create_regular_file_exclusive_beneath_nofollow(
+                binding,
+                "rank-1.json",
+                b"receipt",
+                mode=0o600,
+            )
+
+    tombstone = root / "rank-1.json"
+    assert tombstone.exists()
+    assert tombstone.read_bytes() == b""
+
+
+@pytest.mark.parametrize("kind", ["leaf", "ancestor"])
+def test_retained_directory_rejects_symlink_components(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    actual = tmp_path / "actual"
+    actual.mkdir()
+    if kind == "leaf":
+        requested = tmp_path / "alias"
+        requested.symlink_to(actual, target_is_directory=True)
+    else:
+        ancestor = tmp_path / "ancestor"
+        ancestor.symlink_to(actual, target_is_directory=True)
+        requested = ancestor / "nested"
+        (actual / "nested").mkdir()
+
+    with pytest.raises(SecureFileReadError, match="symlink"):
+        retain_directory_absolute_nofollow(requested)
+
+
+def test_retained_directory_detects_absolute_path_inode_replacement(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir()
+    with retain_directory_absolute_nofollow(root) as binding:
+        root.rename(tmp_path / "old-private")
+        root.mkdir()
+        with pytest.raises(SecureFileReadError, match="identity changed"):
+            binding.assert_path_binding()

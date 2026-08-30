@@ -8,6 +8,7 @@ every descendant below an already-bound directory descriptor is trusted.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 import os
 from pathlib import PurePosixPath
 import stat
@@ -44,6 +45,21 @@ class RegularFileSnapshot:
 class RegularFileProbe:
     """Metadata for a regular file opened under the absolute nofollow contract."""
 
+    metadata: os.stat_result
+
+
+@dataclass(frozen=True, slots=True)
+class ExclusiveRegularFileCreation:
+    """Identity of bytes durably created beneath a retained directory.
+
+    The final path is never removed by this module after ``O_EXCL`` succeeds.
+    Consequently, any later error leaves the name reserved as a fail-closed
+    tombstone rather than reopening a one-use slot.
+    """
+
+    relative_path: str
+    payload_sha256: str
+    byte_length: int
     metadata: os.stat_result
 
 
@@ -115,6 +131,113 @@ class RetainedRegularFileDescriptor:
     def __reduce__(self) -> object:
         raise TypeError(
             "RetainedRegularFileDescriptor is process-local and not serializable"
+        )
+
+
+class RetainedDirectoryDescriptor:
+    """Process-local directory descriptor bound to one absolute path inode."""
+
+    __slots__ = (
+        "__weakref__",
+        "_descriptor",
+        "_finalizer",
+        "_metadata",
+        "_owner_pid",
+        "_path",
+    )
+
+    def __init__(
+        self,
+        descriptor: int,
+        *,
+        path: str,
+        metadata: os.stat_result,
+    ) -> None:
+        if isinstance(descriptor, bool) or not isinstance(descriptor, int):
+            raise TypeError("descriptor must be an integer")
+        if descriptor < 0:
+            raise ValueError("descriptor must be non-negative")
+        if type(path) is not str:
+            raise TypeError("retained directory path must be exactly str")
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise SecureFileReadError("retained descriptor is not a directory")
+        self._descriptor: int | None = descriptor
+        self._path = path
+        self._metadata = metadata
+        self._owner_pid = os.getpid()
+        self._finalizer = finalize(
+            self,
+            _close_descriptor_best_effort,
+            descriptor,
+        )
+
+    @property
+    def path(self) -> str:
+        return self._path
+
+    @property
+    def metadata(self) -> os.stat_result:
+        return self._metadata
+
+    @property
+    def closed(self) -> bool:
+        return self._descriptor is None
+
+    def _assert_owner_process(self) -> None:
+        if os.getpid() != self._owner_pid:
+            raise SecureFileReadError(
+                "retained directory descriptor cannot be used after fork"
+            )
+
+    def fileno(self) -> int:
+        self._assert_owner_process()
+        descriptor = self._descriptor
+        if descriptor is None:
+            raise SecureFileReadError("retained directory descriptor is closed")
+        return descriptor
+
+    def assert_path_binding(self) -> os.stat_result:
+        """Require the descriptor and current absolute path to name one inode."""
+
+        descriptor_metadata = os.fstat(self.fileno())
+        _assert_same_directory_identity(
+            self._metadata,
+            descriptor_metadata,
+            label="retained directory descriptor",
+        )
+        components = _absolute_components(
+            self._path,
+            owner="retained directory path",
+        )
+        reopened = _open_absolute_directory_components(components)
+        try:
+            path_metadata = os.fstat(reopened)
+        finally:
+            os.close(reopened)
+        _assert_same_directory_identity(
+            self._metadata,
+            path_metadata,
+            label="retained directory path",
+        )
+        return descriptor_metadata
+
+    def close(self) -> None:
+        descriptor = self._descriptor
+        if descriptor is None:
+            return
+        self._descriptor = None
+        self._finalizer.detach()
+        os.close(descriptor)
+
+    def __enter__(self) -> RetainedDirectoryDescriptor:
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
+
+    def __reduce__(self) -> object:
+        raise TypeError(
+            "RetainedDirectoryDescriptor is process-local and not serializable"
         )
 
 
@@ -196,6 +319,148 @@ def retain_regular_file_absolute_nofollow(
     finally:
         if descriptor is not None:
             os.close(descriptor)
+        os.close(parent_descriptor)
+
+
+def retain_directory_absolute_nofollow(
+    path: str | os.PathLike[str],
+) -> RetainedDirectoryDescriptor:
+    """Open and retain an absolute directory without following any symlink."""
+
+    raw = os.fspath(path)
+    components = _absolute_components(raw, owner="directory path")
+    try:
+        descriptor = _open_absolute_directory_components(components)
+    except OSError as error:
+        raise SecureFileReadError(
+            "directory path is missing, unreadable, or contains a symlink"
+        ) from error
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISDIR(metadata.st_mode):  # pragma: no cover - O_DIRECTORY
+            raise SecureFileReadError("opened object is not a directory")
+        retained = RetainedDirectoryDescriptor(
+            descriptor,
+            path=raw,
+            metadata=metadata,
+        )
+        descriptor = -1
+        return retained
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def create_regular_file_exclusive_beneath_nofollow(
+    root: RetainedDirectoryDescriptor,
+    relative_path: str | os.PathLike[str],
+    payload: bytes,
+    *,
+    mode: int,
+) -> ExclusiveRegularFileCreation:
+    """Durably create one regular file below a retained directory.
+
+    Every descendant is opened relative to a retained directory descriptor.
+    The leaf uses required ``O_NOFOLLOW`` and ``O_EXCL`` flags.  Once the leaf
+    exists, no failure path unlinks it; callers therefore get fail-closed
+    one-use semantics, including crashes or partial writes.
+    """
+
+    if type(root) is not RetainedDirectoryDescriptor:
+        raise TypeError("root must be exactly RetainedDirectoryDescriptor")
+    if type(payload) is not bytes:
+        raise TypeError("exclusive file payload must be exactly bytes")
+    if isinstance(mode, bool) or not isinstance(mode, int):
+        raise TypeError("exclusive file mode must be an integer")
+    if mode < 0 or mode > 0o777:
+        raise ValueError("exclusive file mode must contain only permission bits")
+    components = _relative_components(relative_path)
+    root.assert_path_binding()
+    parent_descriptor = os.dup(root.fileno())
+    leaf_descriptor: int | None = None
+    try:
+        for component in components[:-1]:
+            next_descriptor = _open_path(
+                component,
+                _directory_flags(),
+                dir_fd=parent_descriptor,
+            )
+            os.close(parent_descriptor)
+            parent_descriptor = next_descriptor
+        parent_metadata = os.fstat(parent_descriptor)
+        if not stat.S_ISDIR(parent_metadata.st_mode):  # pragma: no cover
+            raise SecureFileReadError("exclusive file parent is not a directory")
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | _required_flag("O_CLOEXEC")
+            | _required_flag("O_NOFOLLOW")
+            | _required_flag("O_NONBLOCK")
+        )
+        leaf_descriptor = _open_path(
+            components[-1],
+            flags,
+            dir_fd=parent_descriptor,
+        )
+        os.fchmod(leaf_descriptor, mode)
+        reserved = os.fstat(leaf_descriptor)
+        if not stat.S_ISREG(reserved.st_mode):  # pragma: no cover - O_EXCL create
+            raise SecureFileReadError("exclusive file leaf is not a regular file")
+
+        # Persist the directory entry before writing content.  Any subsequent
+        # exception deliberately leaves this name burned.
+        os.fsync(parent_descriptor)
+        _write_all(leaf_descriptor, payload)
+        os.fsync(leaf_descriptor)
+        written = os.fstat(leaf_descriptor)
+        if (
+            written.st_dev != reserved.st_dev
+            or written.st_ino != reserved.st_ino
+            or not stat.S_ISREG(written.st_mode)
+            or stat.S_IMODE(written.st_mode) != mode
+            or written.st_size != len(payload)
+        ):
+            raise SecureFileReadError(
+                "exclusive file descriptor identity or content length changed"
+            )
+
+        verifier = _open_path(
+            components[-1],
+            _file_flags(),
+            dir_fd=parent_descriptor,
+        )
+        try:
+            snapshot = _read_regular_descriptor(verifier)
+        finally:
+            os.close(verifier)
+        if (
+            snapshot.before.st_dev != written.st_dev
+            or snapshot.before.st_ino != written.st_ino
+            or snapshot.after.st_dev != written.st_dev
+            or snapshot.after.st_ino != written.st_ino
+            or snapshot.payload != payload
+        ):
+            raise SecureFileReadError(
+                "exclusive file path no longer binds the created inode and bytes"
+            )
+        after_parent = os.fstat(parent_descriptor)
+        _assert_same_directory_identity(
+            parent_metadata,
+            after_parent,
+            label="exclusive file parent",
+        )
+        os.fsync(parent_descriptor)
+        root.assert_path_binding()
+        return ExclusiveRegularFileCreation(
+            relative_path=PurePosixPath(*components).as_posix(),
+            payload_sha256=sha256(payload).hexdigest(),
+            byte_length=len(payload),
+            metadata=written,
+        )
+    finally:
+        if leaf_descriptor is not None:
+            os.close(leaf_descriptor)
         os.close(parent_descriptor)
 
 
@@ -325,7 +590,10 @@ def _absolute_components(
     if pure.root != "/":
         raise SecureFileReadError(f"{owner} must use the POSIX filesystem root")
     components = pure.parts[1:]
-    if any(component in {"", ".", ".."} for component in components):
+    if (
+        any(component in {"", ".", ".."} for component in components)
+        or pure.as_posix() != raw
+    ):
         raise SecureFileReadError(f"{owner} is not lexically normalized")
     return components
 
@@ -392,15 +660,48 @@ def _probe_regular_descriptor(descriptor: int) -> RegularFileProbe:
     return RegularFileProbe(metadata=metadata)
 
 
+def _write_all(descriptor: int, payload: bytes) -> None:
+    offset = 0
+    while offset < len(payload):
+        try:
+            written = os.write(descriptor, payload[offset:])
+        except InterruptedError:
+            continue
+        if written <= 0:  # pragma: no cover - regular-file write contract
+            raise SecureFileReadError("exclusive regular-file write made no progress")
+        offset += written
+
+
+def _assert_same_directory_identity(
+    expected: os.stat_result,
+    observed: os.stat_result,
+    *,
+    label: str,
+) -> None:
+    if (
+        not stat.S_ISDIR(observed.st_mode)
+        or observed.st_dev != expected.st_dev
+        or observed.st_ino != expected.st_ino
+        or observed.st_uid != expected.st_uid
+        or observed.st_gid != expected.st_gid
+        or stat.S_IMODE(observed.st_mode) != stat.S_IMODE(expected.st_mode)
+    ):
+        raise SecureFileReadError(f"{label} identity changed")
+
+
 __all__ = [
+    "ExclusiveRegularFileCreation",
     "RegularFileProbe",
     "RegularFileSnapshot",
+    "RetainedDirectoryDescriptor",
     "RetainedRegularFileDescriptor",
     "SecureFileReadError",
+    "create_regular_file_exclusive_beneath_nofollow",
     "probe_regular_file_absolute_nofollow",
     "read_regular_file_absolute_nofollow",
     "read_regular_file_beneath_absolute_directory_nofollow",
     "read_regular_file_beneath_nofollow",
     "read_regular_file_leaf_nofollow",
+    "retain_directory_absolute_nofollow",
     "retain_regular_file_absolute_nofollow",
 ]
