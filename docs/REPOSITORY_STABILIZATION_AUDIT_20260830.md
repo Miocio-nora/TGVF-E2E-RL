@@ -319,6 +319,67 @@ and 82 ahead of `origin/main`, with no opposite-side commits. Physical `main`
 remains unmodified by this work and still has 38 tracked plus 55 untracked
 status entries; no promotion or cleanup is authorized here.
 
+## 2026-08-31 Representation member one-use consumption audit
+
+Commit `0af4b41` adds a deliberately unwired cooperative receipt consumer for
+the selection-only checkpoint. It re-verifies outer CLI token consumption and
+launcher liveness, retains exact token/receipt directory descriptors, and
+burns one fixed rank leaf with no-follow `openat` and `O_EXCL`. The receipt
+binds the complete gate, plan, envelope, claim, environment, TorchElastic,
+rank/GPU, process, directory-inode, and outer-receipt identities. Partial
+writes and all later failures leave a permanent tombstone for that token.
+
+Independent adversarial review found one blocking defect after the initial 35
+focused passes: a forked child could use `object.__setattr__` to replace the
+consumed object's cached PID/start ticks because those cached values were not
+cross-checked with the durable receipt. The repaired object stores no caller
+selection reference, reconstructs its selection on every use, and requires
+exact process identity agreement among current `/proc`, internal snapshot, and
+receipt. The original exploit now fails with `receipt worker process identity
+differs`. Final focused validation has 36 passes, related fixed-runtime tests
+have 181, the complete `tests/ops` run has 564 passes, and success/failure FD
+probes remain 4-to-4.
+
+The scope remains honest: `cooperative-same-uid-v1`, not hostile-peer
+protection, runtime provenance, cohort atomicity, or verified startup. The
+launcher still has to pre-create and wire the private directory. Commit
+`6506a02` suppresses only the precisely matched Python 3.12 warning caused by
+the intentional fork regressions.
+
+## 2026-08-31 Policy runtime-locator CLI authority audit
+
+Commit `965acd9` gives public `run-policy` the previously missing explicit
+locator authority triple: absolute manifest path, lowercase source SHA-256,
+and positive byte length. After unchanged compile/live/code gates, production
+preflight calls the strict manifest loader and scaffold verifier for the
+current cache tag and exact Policy driver target. A deterministic typed proof
+enters Prepared v4 and the one-time CLI gate identity; live evidence and the
+Python FD follow separately tested success/failure ownership paths. The Policy
+launcher and worker now share command ID v4, while `plan-policy` remains
+unchanged.
+
+Independent review found two blocking defects despite the first 95 targeted
+passes. First, changed execution-surface hashes had not incremented the policy
+revision. Second, execution compared expected locator values but did not reject
+an additional consumed `runtime_locator_legacy_*` field. The final code raises
+execution-surface revision 8, refreshes all affected content hashes, and
+requires the exact locator namespace at both preparation and execution. The
+final Policy-focused suite has 96 passes; the reviewer's post-fix hermetic
+focused/control suite has 266 passes and zero violations.
+
+The combined checkpoint `6506a02` passes Ruff, repository-boundary revision 7
+at 61 debts/zero violations, execution-surface revision 8 at 79 surfaces/zero
+violations, and the complete hermetic CPU suite at 2,710 passed, five skipped,
+and four warnings in 141.88 seconds. Complete remote run `33327158411` is green
+across install, lint, both audits, and the full CPU suite.
+
+No experiment blocker changed. Runtime locator v1 is still a non-atomic
+mutable-tree scaffold, and neither worker has a dependency-light stage-0 that
+re-verifies runtime origin and consumes its envelope before heavy imports. The
+same seven blockers and `launch_enabled=false` remain. The canonical line is
+128 commits ahead of local `main` and 86 ahead of `origin/main`; physical
+`main` is still untouched with 38 tracked and 55 untracked collapsed entries.
+
 ## Historical post-ratchet consolidation milestone (`fd8da97`)
 
 This section preserves the earlier `fd8da97` snapshot. Its counts are not those

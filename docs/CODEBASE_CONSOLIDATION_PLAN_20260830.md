@@ -376,6 +376,75 @@ of local `main` and 82 ahead of `origin/main`, with zero opposite-side commits
 in both comparisons. Physical `main` still has 38 tracked and 55 untracked
 status entries, so no promotion is authorized by this checkpoint.
 
+## 2026-08-31 Representation member one-use receipt scaffold
+
+Commit `0af4b41` adds a separate cooperative consumption boundary for the
+selection-only record. A retained, PID-bound directory descriptor and
+`openat(O_CLOEXEC|O_NOFOLLOW|O_NONBLOCK|O_CREAT|O_EXCL)` create primitive burn
+exactly one `representation-members/rank-<rank>.json` name beneath an already
+prepared outer-token directory. Once the exclusive create succeeds, no error
+path unlinks the leaf: a write, fsync, inode, path, or content failure leaves a
+tombstone and requires a new outer launch token.
+
+The receipt binds the verified outer token/liveness evidence, complete CLI
+gate identity, startup plan and envelope, member claim, full raw environment,
+TorchElastic identity, rank/GPU assignment, launcher and worker process
+identities, and token/receipt directory inodes. The returned object is
+immutable, non-copyable, non-serializable, and PID-bound; it reconstructs the
+selection from canonical snapshots on every validation. Independent review
+found a fork attack that could rewrite only the object's cached PID and start
+ticks. The final implementation requires exact agreement among current
+process, internal snapshot, and immutable receipt fields; the reproduced
+attack now fails closed.
+
+This remains explicitly `cooperative-same-uid-v1` and records
+`hostile_same_uid_protected=false`. The public launcher does not yet pre-create
+or wire the receipt directory, a same-UID hostile peer can still steal or
+remove a slot, and there is no all-rank atomic release or
+`VerifiedWorkerStartup`. Focused validation has 36 passes, the related fixed
+Python/Torch boundary selection has 181 passes, and the complete `tests/ops`
+set has 564 passes. Commit `6506a02` filters only the expected Python 3.12
+warning from these intentional fork tests.
+
+## 2026-08-31 Policy runtime-locator CLI authority binding
+
+Commit `965acd9` closes the earlier public-CLI reachability gap without claiming
+runtime immutability. `run-policy` now requires an explicit runtime-locator
+manifest path, externally authorized source SHA-256, and positive source byte
+length. Argparse validates their basic shape; compile/live/code blockers retain
+their earlier precedence. Only after those checks does Policy load and verify
+the exact manifest, current cache tag, fixed driver target, runtime trees, and
+Python executable identity.
+
+A deterministic `PolicyRuntimeLocatorAuthorizationProof` copies manifest
+path/SHA/length, semantic identity, cache tag, and target coordinates into
+Prepared schema v4 and the one-time gate identity. The process-local locator
+evidence is closed on every success/failure path; the fd-bound Python
+capability transfers only after successful preparation. `run-policy` and its
+worker share command identity `tgvf-rl:run-policy:v4`; `plan-policy` remains
+read-only and has no new authority arguments. Protected `runtime_locator_`
+keys are exact both during preparation and at the consumed execution boundary.
+
+Independent review found and closed two pre-commit defects: changed
+execution-surface bytes initially retained revision 7, and consumed authority
+initially admitted an extra `runtime_locator_legacy_*` key. Execution-surface
+policy is now revision 8 with all changed surface hashes refreshed, and the
+execution boundary rejects missing or extra locator keys. Policy-focused tests
+have 96 passes; the independent focused/control rerun has 266 passes. The
+combined hermetic CPU suite at `6506a02` has 2,710 passed, five skipped, and
+four warnings in 141.88 seconds. Complete remote run `33327158411` is green
+across install, lint, both audits, and the full CPU suite.
+
+Neither slice removes a runtime-closure blocker. Locator verification remains
+non-atomic and the Policy/Representation workers still lack a dependency-light
+stage-0 that consumes their startup envelopes before importing the training
+stack. Experiment policy revision 4 therefore remains
+`runtime_closure.launch_enabled=false` with the same seven blocker IDs. At code
+checkpoint `6506a02`, the canonical line is 128 commits ahead of local `main`
+and 86 ahead of `origin/main`, with no opposite-side commits. Physical `main`
+still has the same 38 tracked plus 55 untracked collapsed entries and remains
+untouched.
+
 ## Why the repository feels fragmented
 
 The problem is not only the number of branches. The C0 tag contained 245

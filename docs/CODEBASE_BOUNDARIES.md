@@ -403,6 +403,59 @@ code checkpoint `1141df1`, the canonical line is 124 commits ahead of local
 the same 93 collapsed status entries; this boundary does not authorize
 promotion.
 
+## 2026-08-31 Representation member consumption boundary
+
+Commit `0af4b41` adds a one-use filesystem boundary after member selection but
+before any future target dispatch. The outer-token directory and its
+`representation-members` child must already exist, be owned by the current
+EUID, and have exact mode `0700`; workers never create ancestors. Each rank
+uses a distinct `rank-<rank>.json` leaf with exact mode `0600`. Retained
+directory descriptors, no-follow traversal, exclusive create, fsync, and
+inode/path rechecks make duplicate cooperative consumption and crash retry fail
+closed. No post-create error path unlinks a burned name.
+
+The typed consumed object owns canonical serialized snapshots rather than the
+caller's mutable object reference. Every use reconstructs the exact CLI
+identity, startup plan, member claim, and full environment, then compares them
+with the durable receipt. PID and process-start ticks must agree among the live
+process, internal snapshot, and receipt; independent review first demonstrated
+and then verified the repair of a fork-and-rebind bypass. The final focused
+selection has 36 passes, related boundaries have 181, and the complete
+`tests/ops` run has 564 passes.
+
+This boundary is intentionally cooperative, not adversarial isolation. Its
+receipt states `hostile_same_uid_protected=false`; it does not prevent a
+hostile same-UID sibling from stealing/deleting a slot, provide cohort-atomic
+release, verify a runtime/target, or mint `VerifiedWorkerStartup`. The public
+launcher has not yet wired directory preparation or consumption.
+
+## 2026-08-31 Policy runtime-locator authority boundary
+
+Commit `965acd9` makes the locator manifest's absolute path, source SHA-256,
+source byte length, semantic identity, cache tag, and exact Policy target part
+of Prepared v4 and the consumed gate identity. `run-policy` alone requires the
+operator-supplied path/SHA/length triple. Existing compile and code checks run
+before locator I/O; `plan-policy` remains authority-free. Locator evidence is
+process-local and closed by preflight, while deterministic proof fields remain
+for authorization comparison. The fd-bound Python capability is closed on
+every failure and transfers to Prepared only on success.
+
+The `runtime_locator_` namespace is exact both while groups are merged and when
+consumed authority reaches `execute_policy_e2e_smoke`. Independent review
+forced execution-surface revision 8 and added consumed-side rejection of an
+extra legacy locator key. CLI/worker command identity is v4, changed surface
+hashes are content-bound, 96 Policy-focused tests pass, and the independent
+focused/control rerun has 266 passes.
+
+This serializable proof is not runtime evidence at the worker. No stage-0
+currently re-verifies the locator or consumes the startup envelope before
+heavy imports, and locator v1 still declares non-atomic mutable-tree residuals.
+The combined `6506a02` hermetic suite has 2,710 passed, five skipped, and four
+warnings; complete remote run `33327158411` is green. Execution remains
+disabled by the same seven blockers. The canonical line is 128/86 commits ahead of
+local/origin `main`; physical `main` remains untouched at 93 collapsed dirty
+entries.
+
 ## 2026-08-30 canonical line versus physical `main`
 
 At verified code checkpoint `4dd8267`, the graph is linear: the stabilization
