@@ -23,8 +23,7 @@ import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 from uuid import uuid4
 import re
 
@@ -60,22 +59,13 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _initial_vllm_inputs,
     _source_visual_positions,
 )
-from tgvf_rl.framework.verl.vllm_tool_runtime import (
-    TGVF_VLLM_WORKER_EXTENSION_FQN,
-    TGVFFocusMaterializationResult,
-    _focus_from_utility_wire,
-    _source_from_utility_wire,
-    _tensor_to_utility_wire,
-)
+from tgvf_rl.framework.verl.vllm_tool_runtime import TGVF_VLLM_WORKER_EXTENSION_FQN
 from tgvf_rl.framework.vllm import (
     ContentAddressedVLLMTurnRNG,
     FastTokenizerTokenByteSpanDecoder,
     LiveVLLMTurnContextRegistry,
     Qwen3VLLMObservationPayloadResolver,
-    VLLMOutputDecodingContract,
     VLLMPolicySampler,
-    VLLMTerminationOutcome,
-    VLLMTurnTerminationContract,
 )
 from tgvf_rl.framework.vllm.registration import (
     TGVF_QWEN3_VLLM_ARCHITECTURE,
@@ -92,10 +82,7 @@ from tgvf_rl.representation.training.distributed_checkpoint import (
 )
 from tgvf_rl.protocol import (
     native_assistant_dialect_for_model,
-    NativeActionBoundaryProtocolId,
-    NativeAssistantDialect,
     NativeProtocolRenderer,
-    NativeSuccessObservationProtocolId,
     NativeToolCapabilityProfile,
     StrictToolCallParser,
     build_native_tool_schemas,
@@ -115,7 +102,7 @@ from tgvf_rl.trajectories.schema import (
 from .policy_full_model_snapshot import (
     FULL_MODEL_EVALUATION_BACKEND,
     FullModelEvaluationSnapshot,
-    FullModelSourceKind,
+    _base_equivalent_step_zero_full_model,
     build_full_model_standalone_manager,
     full_model_snapshot_identity_record,
     load_full_model_evaluation_snapshot,
@@ -127,17 +114,36 @@ from .policy_evaluation_config import (
     POLICY_BENCHMARK_SCHEMA,
     POLICY_COREDEV_LEGACY_SCHEMA_V1,
     POLICY_COREDEV_SCHEMA,
-    POLICY_EVALUATION_PROTOCOLS,
     TRAINING_RUN_EVALUATION_PROTOCOL,
     PolicyCoreDevConfig,
     _LEGACY_COREDEV_TASK_COUNT,
     _require_sha256,
     load_policy_coredev_config,
 )
+from .policy_evaluation_identity import (
+    POLICY_EVAL_CONTRACT_SCHEMA,
+    POLICY_EVALUATION_IDENTITY_SCHEMA,
+    PolicyEvalContract,
+    _decoding_contract,
+    _termination_contract,
+    build_policy_eval_contract,
+    build_policy_evaluation_identity as _build_policy_evaluation_identity,
+    canonical_json_sha256 as _canonical_json_sha256,
+    effective_evaluation_image_max_pixels,
+    evaluation_protocol_identity as _shared_evaluation_protocol_identity,
+    policy_benchmark_task_path,
+    policy_eval_action_boundary_identity as _policy_eval_action_boundary_identity,  # noqa: F401
+    policy_eval_observation_identity as _policy_eval_observation_identity,  # noqa: F401
+    policy_eval_parser_identity as _policy_eval_parser_identity,  # noqa: F401
+)
+from .policy_vllm_manager import (
+    AdapterIntegrityVerifier,
+    StandaloneTGVFVLLMManager,
+    _single_collective as _single_collective,
+    _TurnRoute as _TurnRoute,
+)
 
 
-POLICY_EVALUATION_IDENTITY_SCHEMA = "tgvf-policy-evaluation-identity-v1"
-POLICY_EVAL_CONTRACT_SCHEMA = "tgvf-policy-eval-contract-v1"
 POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA = "tgvf-policy-coredev-trajectory-audit-v1"
 VLLM_LORA_ADAPTER_SCHEMA = "tgvf-policy-vllm-lora-adapter-v2"
 VLLM_LORA_ADAPTER_MODEL_FILENAME = "adapter_model.safetensors"
@@ -422,7 +428,7 @@ def load_frozen_policy_evaluation_snapshot(
 
 
 @dataclass(frozen=True, slots=True)
-class VLLMLoRAAdapterIntegrityVerifier:
+class VLLMLoRAAdapterIntegrityVerifier(AdapterIntegrityVerifier):
     """Re-read the exact private PEFT closure before vLLM can consume it.
 
     vLLM 0.12 does not expose a digest receipt for the adapter bytes loaded by
@@ -1402,15 +1408,6 @@ def load_coredev_tasks(path: str | Path) -> tuple[CoreDevTask, ...]:
     )
 
 
-def policy_benchmark_task_path(config: PolicyCoreDevConfig) -> Path:
-    filename = (
-        "coredev-official-tasks.jsonl"
-        if config.uses_legacy_coredev_manifest
-        else "policy-benchmark-tasks.jsonl"
-    )
-    return config.output_root / "runtime" / filename
-
-
 def prepare_policy_benchmark_tasks(config: PolicyCoreDevConfig) -> dict[str, int]:
     """Materialize the legacy suite or bind an immutable supplied task manifest."""
 
@@ -1495,350 +1492,6 @@ def load_bound_policy_benchmark_tasks(
     )
 
 
-def _canonical_json_sha256(payload: object) -> str:
-    encoded = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-@dataclass(frozen=True, slots=True)
-class PolicyEvalContract:
-    """Immutable identity for every behavior-relevant evaluation boundary."""
-
-    evaluation_protocol: str
-    training_image_max_pixels: int
-    declared_image_max_pixels: int
-    effective_image_max_pixels: int
-    prompt_protocol_id: str
-    prompt_identity_sha256: str
-    parser_protocol_id: str
-    parser_identity_sha256: str
-    success_observation_protocol_id: NativeSuccessObservationProtocolId
-    success_observation_identity_sha256: str
-    action_boundary_protocol_id: NativeActionBoundaryProtocolId
-    action_boundary_identity_sha256: str
-    schema_version: str = POLICY_EVAL_CONTRACT_SCHEMA
-
-    def __post_init__(self) -> None:
-        if self.evaluation_protocol not in POLICY_EVALUATION_PROTOCOLS:
-            raise ValueError("evaluation contract protocol differs")
-        for name in (
-            "training_image_max_pixels",
-            "declared_image_max_pixels",
-            "effective_image_max_pixels",
-        ):
-            value = getattr(self, name)
-            if type(value) is not int or value <= 0:
-                raise ValueError(f"{name} must be a positive integer")
-        for name in (
-            "prompt_protocol_id",
-            "parser_protocol_id",
-        ):
-            if not getattr(self, name):
-                raise ValueError(f"{name} must be non-empty")
-        for name in (
-            "prompt_identity_sha256",
-            "parser_identity_sha256",
-            "success_observation_identity_sha256",
-            "action_boundary_identity_sha256",
-        ):
-            _require_sha256(getattr(self, name), name=name)
-        if not isinstance(
-            self.success_observation_protocol_id,
-            NativeSuccessObservationProtocolId,
-        ):
-            raise TypeError(
-                "success_observation_protocol_id must be an explicit protocol ID"
-            )
-        if not isinstance(
-            self.action_boundary_protocol_id,
-            NativeActionBoundaryProtocolId,
-        ):
-            raise TypeError(
-                "action_boundary_protocol_id must be an explicit protocol ID"
-            )
-
-    @property
-    def canonical_payload(self) -> dict[str, object]:
-        return {
-            "schema_version": self.schema_version,
-            "evaluation_protocol": self.evaluation_protocol,
-            "pixels": {
-                "training_image_max_pixels": self.training_image_max_pixels,
-                "declared_image_max_pixels": self.declared_image_max_pixels,
-                "effective_image_max_pixels": self.effective_image_max_pixels,
-            },
-            "prompt": {
-                "protocol_id": self.prompt_protocol_id,
-                "identity_sha256": self.prompt_identity_sha256,
-            },
-            "parser": {
-                "protocol_id": self.parser_protocol_id,
-                "identity_sha256": self.parser_identity_sha256,
-            },
-            "success_observation": {
-                "protocol_id": self.success_observation_protocol_id.value,
-                "identity_sha256": self.success_observation_identity_sha256,
-            },
-            "action_boundary": {
-                "protocol_id": self.action_boundary_protocol_id.value,
-                "identity_sha256": self.action_boundary_identity_sha256,
-            },
-        }
-
-    @property
-    def identity_sha256(self) -> str:
-        return _canonical_json_sha256(self.canonical_payload)
-
-
-def _policy_eval_parser_identity(
-    *,
-    evaluation_protocol: str,
-    run: PolicyE2ESmokeRunConfig,
-) -> tuple[str, str]:
-    if evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
-        from tgvf_rl.policy.deepeyes_official_protocol import (
-            DEEPEYES_TOOL_NAME,
-            DEEPEYES_TOOL_PARSER,
-        )
-
-        protocol_id = "deepeyes-hermes-last-complete-crop-call-v1"
-        payload = {
-            "implementation": (
-                "tgvf_rl.policy.deepeyes_official_protocol.parse_hermes_crop_call"
-            ),
-            "upstream_parser": DEEPEYES_TOOL_PARSER,
-            "enabled_tool_names": [DEEPEYES_TOOL_NAME],
-            "multiple_complete_calls": "select_last",
-        }
-    else:
-        protocol_id = "strict-native-single-tool-call-v1"
-        payload = {
-            "implementation": "tgvf_rl.protocol.parser.StrictToolCallParser",
-            "enabled_tool_names": list(run.protocol.enabled_tool_names),
-            "tool_schema_sha256": run.protocol.tool_schema_sha256,
-            "complete_call_count": 1,
-            "trailing_assistant_text": "reject",
-        }
-    return protocol_id, _canonical_json_sha256(payload)
-
-
-def _policy_eval_action_boundary_identity(
-    *,
-    evaluation_protocol: str,
-    run: PolicyE2ESmokeRunConfig,
-    action_boundary_protocol_id: NativeActionBoundaryProtocolId,
-) -> tuple[NativeActionBoundaryProtocolId, str]:
-    sampling = run.policy.sampling
-    if evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
-        payload: dict[str, object] = {
-            "dispatcher": (
-                "tgvf_rl.evaluation.policy_official_visible."
-                "OfficialVisiblePolicyEvaluator"
-            ),
-            "boundary_classifier": (
-                "tgvf_rl.protocol.action_boundary.classify_assistant_action_boundary"
-            ),
-            "tool_marker": "<tool_call>...</tool_call>",
-            "required_request_stop_strings": list(
-                getattr(sampling, "stop_strings", ()) or ()
-            ),
-            "required_request_stop_token_ids": list(
-                getattr(sampling, "stop_token_ids", ()) or ()
-            ),
-            "include_stop_str_in_output": bool(
-                getattr(sampling, "include_stop_str_in_output", False)
-            ),
-        }
-        if (
-            action_boundary_protocol_id
-            is NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1
-        ):
-            payload.update(
-                {
-                    "trailing_final_answer_precedence": "final_answer",
-                    "multiple_complete_calls": "execute_last",
-                    "malformed_tool_call_tags": "reject",
-                }
-            )
-        elif (
-            action_boundary_protocol_id
-            is NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
-        ):
-            payload.update(
-                {
-                    "complete_call_count": 1,
-                    "terminal_tool_call_required": True,
-                    "trailing_assistant_text": "reject",
-                    "multiple_complete_calls": "reject",
-                    "malformed_tool_call_tags": "reject",
-                }
-            )
-        else:  # pragma: no cover - enum expansion requires an explicit contract
-            raise ValueError("official-visible action-boundary protocol is unsupported")
-    else:
-        if (
-            action_boundary_protocol_id
-            is not NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
-        ):
-            raise ValueError("training-run evaluator requires strict boundary v2")
-        payload = {
-            "dispatcher": "tgvf_rl.environment.agent_loop.FrameworkNeutralAgentLoop",
-            "tool_marker_precedence": "any_marker_routes_strict_parser",
-            "multiple_complete_calls": "reject",
-            "trailing_assistant_text": "reject",
-            "cap_error_behavior": CapErrorBehavior.ONE_FINAL_ANSWER_TURN.value,
-            "decoding": _decoding_contract().canonical_payload,
-            "termination": _termination_contract(run).canonical_payload,
-        }
-    payload["protocol_id"] = action_boundary_protocol_id.value
-    return action_boundary_protocol_id, _canonical_json_sha256(payload)
-
-
-def _policy_eval_observation_identity(
-    contract: NativeSuccessObservationContract,
-) -> str:
-    from tgvf_rl.environment.native_appender import (
-        QWEN_NATIVE_IMAGE_PLACEHOLDER,
-        QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT_SHA256,
-        QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256,
-        QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX,
-        qwen_native_response_suffix,
-    )
-    from tgvf_rl.protocol.tool_prompts import (
-        IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT_SHA256,
-        QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER_SHA256,
-        TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE_SHA256,
-        TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE_SHA256,
-    )
-
-    if (
-        contract.protocol_id
-        is NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1
-    ):
-        return QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256
-    if (
-        contract.protocol_id
-        is NativeSuccessObservationProtocolId.LEGACY_CROP_GENERIC86_V1
-    ):
-        return QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT_SHA256
-    response_template_sha256 = {
-        NativeToolCapabilityProfile.TGVF_ONLY: (
-            TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE_SHA256
-        ),
-        NativeToolCapabilityProfile.CROP_ONLY: (
-            IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT_SHA256
-        ),
-        NativeToolCapabilityProfile.CROP_TGVF: (
-            TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE_SHA256
-        ),
-    }[contract.tool_profile]
-    payload = {
-        "protocol_id": contract.protocol_id.value,
-        "tool_profile": contract.tool_profile.value,
-        "assistant_dialect": contract.assistant_dialect.value,
-        "prefix_sha256": hashlib.sha256(
-            QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX.encode("utf-8")
-        ).hexdigest(),
-        "response_template_sha256": response_template_sha256,
-        "image_placeholder_sha256": hashlib.sha256(
-            QWEN_NATIVE_IMAGE_PLACEHOLDER.encode("utf-8")
-        ).hexdigest(),
-        "reasoning_reminder_sha256": (
-            QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER_SHA256
-            if contract.assistant_dialect is NativeAssistantDialect.QWEN3_VL_INSTRUCT
-            else None
-        ),
-        "suffix_sha256": hashlib.sha256(
-            qwen_native_response_suffix(contract.assistant_dialect).encode("utf-8")
-        ).hexdigest(),
-    }
-    return _canonical_json_sha256(payload)
-
-
-def effective_evaluation_image_max_pixels(
-    config: PolicyCoreDevConfig,
-    snapshot: PolicyEvaluationSubject,
-) -> int:
-    """Return the pixel cap actually consumed by the selected evaluator."""
-
-    if config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
-        effective = snapshot.run.policy.image_max_pixels
-        if config.declared_image_max_pixels != effective:
-            raise ValueError(
-                "official-visible declared pixels differ from its effective runtime"
-            )
-        return effective
-    return config.declared_image_max_pixels
-
-
-def build_policy_eval_contract(
-    config: PolicyCoreDevConfig,
-    snapshot: PolicyEvaluationSubject,
-) -> PolicyEvalContract:
-    """Bind pixels, prompt, parser, observation bytes, and action boundary.
-
-    No observation renderer is inferred from a historical run schema.  The
-    evaluation config must name it, and validation against the actual tool
-    profile happens before any model or GPU runtime is constructed.
-    """
-
-    run = snapshot.run
-    dialect = native_assistant_dialect_for_model(run.model.model_name)
-    if config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
-        from tgvf_rl.policy.deepeyes_official_protocol import (
-            DEEPEYES_OFFICIAL_PROTOCOL_SCHEMA,
-            VISUAL_PROMPT_IDENTITY,
-        )
-
-        observation_profile = NativeToolCapabilityProfile.CROP_ONLY
-        prompt_protocol_id = (
-            f"{DEEPEYES_OFFICIAL_PROTOCOL_SCHEMA}:{VISUAL_PROMPT_IDENTITY.version}"
-        )
-        prompt_identity_sha256 = VISUAL_PROMPT_IDENTITY.bundle_sha256
-    else:
-        observation_profile = run.protocol.tool_profile
-        prompt_protocol_id = "tgvf-native-run-prompt-v1"
-        prompt_identity_sha256 = run.protocol.prompt_sha256
-
-    observation_contract = NativeSuccessObservationContract(
-        protocol_id=config.success_observation_protocol_id,
-        tool_profile=observation_profile,
-        assistant_dialect=dialect,
-    )
-    parser_protocol_id, parser_identity_sha256 = _policy_eval_parser_identity(
-        evaluation_protocol=config.evaluation_protocol,
-        run=run,
-    )
-    action_protocol_id, action_identity_sha256 = _policy_eval_action_boundary_identity(
-        evaluation_protocol=config.evaluation_protocol,
-        run=run,
-        action_boundary_protocol_id=config.action_boundary_protocol_id,
-    )
-    effective_image_max_pixels = effective_evaluation_image_max_pixels(config, snapshot)
-    return PolicyEvalContract(
-        evaluation_protocol=config.evaluation_protocol,
-        training_image_max_pixels=run.policy.image_max_pixels,
-        declared_image_max_pixels=config.declared_image_max_pixels,
-        effective_image_max_pixels=effective_image_max_pixels,
-        prompt_protocol_id=prompt_protocol_id,
-        prompt_identity_sha256=prompt_identity_sha256,
-        parser_protocol_id=parser_protocol_id,
-        parser_identity_sha256=parser_identity_sha256,
-        success_observation_protocol_id=observation_contract.protocol_id,
-        success_observation_identity_sha256=(
-            _policy_eval_observation_identity(observation_contract)
-        ),
-        action_boundary_protocol_id=action_protocol_id,
-        action_boundary_identity_sha256=action_identity_sha256,
-    )
-
-
 def _base_equivalent_step_zero_lora(
     snapshot: PolicyEvaluationSnapshot,
 ) -> dict[str, object]:
@@ -1889,111 +1542,25 @@ def _base_equivalent_step_zero_lora(
     }
 
 
-def _base_equivalent_step_zero_full_model(
-    snapshot: FullModelEvaluationSnapshot,
-) -> dict[str, object]:
-    """Bind step zero to the run contract's exact immutable base-HF tree."""
-
-    if (
-        snapshot.policy_version.optimizer_step != 0
-        or snapshot.manifest.source_kind is not FullModelSourceKind.BASE_HF
-    ):
-        raise ValueError("base-equivalent full-model proof requires base-HF step zero")
-    content = {
-        "schema_version": "tgvf-base-equivalent-step-zero-full-model-v1",
-        "optimizer_step": 0,
-        "source_kind": snapshot.manifest.source_kind.value,
-        "source_is_bound_run_base_model": True,
-        "snapshot_identity_sha256": snapshot.manifest.identity_sha256,
-        "checkpoint_sha256": snapshot.manifest.checkpoint_sha256,
-        "source_tree_sha256": snapshot.manifest.source_tree_sha256,
-        "weights_sha256": snapshot.policy_version.weights_sha256,
-        "materialized_model_tree_sha256": snapshot.receipt.model_tree_sha256,
-    }
-    return {**content, "proof_sha256": _canonical_json_sha256(content)}
-
-
 def _evaluation_protocol_identity(
     config: PolicyCoreDevConfig,
     snapshot: PolicyEvaluationSubject,
 ) -> dict[str, object]:
-    if config.evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL:
-        if not isinstance(snapshot, PolicyEvaluationSnapshot):
-            raise ValueError("training-run evaluation requires a LoRA snapshot")
-        protocol = snapshot.run.protocol
-        return {
-            "profile": TRAINING_RUN_EVALUATION_PROTOCOL,
-            "prompt_sha256": protocol.prompt_sha256,
-            "tool_schema_sha256": protocol.tool_schema_sha256,
-            "tool_profile": protocol.tool_profile.value,
-            "enabled_tool_names": list(protocol.enabled_tool_names),
-            "maximum_tool_calls": protocol.maximum_tool_calls,
-            "native_pixels": False,
-        }
-    if config.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
-        raise ValueError("unsupported policy evaluation protocol")
-    from tgvf_rl.policy.deepeyes_official_protocol import (
-        DEEPEYES_MAX_ACTIVE_PERCEPTION,
-        DEEPEYES_OFFICIAL_PROTOCOL_SCHEMA,
-        DEEPEYES_TOOL_NAME,
-        DEEPEYES_TOOL_PARSER,
-        SYSTEM_PROMPT_V2_SHA256,
-        USER_PROMPT_V2_SHA256,
-        VISUAL_PROMPT_IDENTITY,
-    )
-    from tgvf_rl.qwen.crop_coordinates import (
-        QWEN3_CROP_CONVERSION_VERSION,
-        QWEN3_CROP_COORDINATE_SPACE,
-    )
+    """Compatibility wrapper around the backend-neutral protocol identity."""
 
-    if snapshot.run.model.model_name != "Qwen3-VL-8B-Instruct":
-        raise ValueError(
-            "official-visible base evaluation requires Qwen3-VL-8B-Instruct"
-        )
-    identity: dict[str, object] = {
-        "profile": DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
-        "protocol_schema_version": DEEPEYES_OFFICIAL_PROTOCOL_SCHEMA,
-        "source_repository": "https://github.com/Visual-Agent/DeepEyes",
-        "source_commit": "11d20c6be32b2cf62c914e0c73a06db2f9a7e3a1",
-        "prompt_source_path": ("verl/workers/agent/envs/mm_process_engine/prompt.py"),
-        "prompt_source_file_sha256": (
-            "35ef1bae8da550827bc53e23751e64d4c8eecc76d9170ea5673aa2493628cc23"
-        ),
-        "crop_source_path": (
-            "verl/workers/agent/envs/mm_process_engine/visual_toolbox_v2.py"
-        ),
-        "crop_source_file_sha256": (
-            "0d56b2ff584fe56e68f20bbb4d25a9774ecbab605ad02cdaf1dac7cd6fa8bc60"
-        ),
-        "system_prompt_sha256": SYSTEM_PROMPT_V2_SHA256,
-        "user_prompt_sha256": USER_PROMPT_V2_SHA256,
-        "prompt_bundle_sha256": VISUAL_PROMPT_IDENTITY.bundle_sha256,
-        "visible_system_tool_schema": True,
-        "template_tools_argument": [],
-        "tool_parser": DEEPEYES_TOOL_PARSER,
-        "enabled_tool_names": [DEEPEYES_TOOL_NAME],
-        "maximum_tool_calls": DEEPEYES_MAX_ACTIVE_PERCEPTION,
-        "coordinate_mapper": "qwen_0_1000_to_source_v1",
-        "crop_coordinate_space": QWEN3_CROP_COORDINATE_SPACE,
-        "crop_coordinate_conversion_version": QWEN3_CROP_CONVERSION_VERSION,
-        "crop_coordinate_reference_size": [1000, 1000],
-        "crop_source": "immutable_original_image",
-        "native_pixels": True,
-        "precomputed_image_embeds": False,
-        "image_max_pixels": effective_evaluation_image_max_pixels(config, snapshot),
-        "native_image_limit_per_prompt": DEEPEYES_MAX_ACTIVE_PERCEPTION + 1,
-        "observation_role": "user",
-        "observation_envelope": (
-            "<tool_response><image>USER_PROMPT_V2</tool_response>"
-        ),
-    }
-    if snapshot.policy_version.optimizer_step == 0:
-        identity["base_equivalence"] = (
+    is_lora = isinstance(snapshot, PolicyEvaluationSnapshot)
+    if not is_lora and not isinstance(snapshot, FullModelEvaluationSnapshot):
+        raise TypeError("snapshot must be a policy evaluation snapshot")
+    return _shared_evaluation_protocol_identity(
+        config,
+        snapshot,
+        is_lora_snapshot=is_lora,
+        step_zero_equivalence=lambda: (
             _base_equivalent_step_zero_lora(snapshot)
-            if isinstance(snapshot, PolicyEvaluationSnapshot)
+            if is_lora
             else _base_equivalent_step_zero_full_model(snapshot)
-        )
-    return identity
+        ),
+    )
 
 
 def policy_evaluation_identity(
@@ -2002,13 +1569,9 @@ def policy_evaluation_identity(
 ) -> dict[str, object]:
     """Bind experiment, model, task population, and exact policy bytes."""
 
-    task_path = policy_benchmark_task_path(config).resolve()
-    task_sha256 = _sha256_file(task_path)
-    if (
-        config.task_manifest_sha256 is not None
-        and task_sha256 != config.task_manifest_sha256
-    ):
-        raise ValueError("bound policy benchmark task manifest SHA256 changed")
+    is_lora = isinstance(snapshot, PolicyEvaluationSnapshot)
+    if not is_lora and not isinstance(snapshot, FullModelEvaluationSnapshot):
+        raise TypeError("snapshot must be a policy evaluation snapshot")
     policy_snapshot = (
         {
             "run_id": snapshot.policy_version.run_id,
@@ -2020,46 +1583,27 @@ def policy_evaluation_identity(
             "tensor_file_sha256": snapshot.lora.tensor_file_sha256,
             "request_sha256": snapshot.lora.request_sha256,
         }
-        if isinstance(snapshot, PolicyEvaluationSnapshot)
+        if is_lora
         else full_model_snapshot_identity_record(snapshot)
     )
     policy_config_path = Path(
-        getattr(config, "policy_config_path", snapshot.contract.source_path)
-        if isinstance(snapshot, FullModelEvaluationSnapshot)
-        else config.policy_config_path
+        config.policy_config_path
+        if is_lora
+        else getattr(config, "policy_config_path", snapshot.contract.source_path)
     )
-    eval_contract = build_policy_eval_contract(config, snapshot)
-    content: dict[str, object] = {
-        "schema_version": POLICY_EVALUATION_IDENTITY_SCHEMA,
-        "evaluation_id": config.evaluation_id,
-        "evaluation_schema_version": config.schema_version,
-        "policy_config_path": str(policy_config_path.resolve()),
-        "policy_config_file_sha256": _sha256_file(policy_config_path),
-        "policy_run_config_identity_sha256": snapshot.run.identity_sha256,
-        "model_identity": asdict(snapshot.run.model),
-        "policy_snapshot": policy_snapshot,
-        "task_manifest": {
-            "path": str(task_path),
-            "sha256": task_sha256,
-            "task_count": config.expected_task_count,
-            "single_image_count": config.expected_single_image_count,
-        },
-        "eval_contract": {
-            **eval_contract.canonical_payload,
-            "identity_sha256": eval_contract.identity_sha256,
-        },
-        "execution": {
-            "world_size": len(config.gpu_ids),
-            "gpu_ids": list(config.gpu_ids),
-            "max_model_len": config.max_model_len,
-            "max_num_batched_tokens": config.max_num_batched_tokens,
-            "enable_chunked_prefill": config.enable_chunked_prefill,
-            "inference_concurrency_per_gpu": config.inference_concurrency_per_gpu,
-        },
-    }
-    if config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
-        content["protocol"] = _evaluation_protocol_identity(config, snapshot)
-    return {**content, "identity_sha256": _canonical_json_sha256(content)}
+    return _build_policy_evaluation_identity(
+        config,
+        snapshot,
+        is_lora_snapshot=is_lora,
+        policy_snapshot=policy_snapshot,
+        policy_config_path=policy_config_path,
+        step_zero_equivalence=lambda: (
+            _base_equivalent_step_zero_lora(snapshot)
+            if is_lora
+            else _base_equivalent_step_zero_full_model(snapshot)
+        ),
+        contract_type=PolicyEvalContract,
+    )
 
 
 def write_policy_evaluation_identity(
@@ -2091,249 +1635,6 @@ def write_policy_evaluation_identity(
     finally:
         temporary.unlink(missing_ok=True)
     return identity
-
-
-def _single_collective(value: object, *, operation: str) -> Mapping[str, object]:
-    if (
-        not isinstance(value, Sequence)
-        or isinstance(value, (str, bytes))
-        or len(value) != 1
-    ):
-        raise RuntimeError(f"{operation} requires one vLLM worker result")
-    result = value[0]
-    if not isinstance(result, Mapping):
-        raise TypeError(f"{operation} returned a non-mapping utility result")
-    return result
-
-
-@dataclass(frozen=True, slots=True)
-class _TurnRoute:
-    backend_request_id: str
-    output_ids: tuple[int, ...]
-    optimizer_step: int
-
-
-class StandaloneTGVFVLLMManager:
-    """Small AsyncLLM adapter matching the already-audited training client ABI."""
-
-    def __init__(
-        self,
-        engine: object,
-        lora_request: object,
-        *,
-        capture_hidden: bool,
-        native_pixels: bool = False,
-        adapter_integrity_verifier: VLLMLoRAAdapterIntegrityVerifier | None = None,
-    ) -> None:
-        if lora_request is None:
-            if adapter_integrity_verifier is not None:
-                raise ValueError(
-                    "full-model manager cannot receive a LoRA integrity verifier"
-                )
-        else:
-            if not isinstance(
-                adapter_integrity_verifier,
-                VLLMLoRAAdapterIntegrityVerifier,
-            ):
-                raise TypeError(
-                    "LoRA manager requires VLLMLoRAAdapterIntegrityVerifier"
-                )
-            adapter_integrity_verifier.assert_lora_request_binding(lora_request)
-            adapter_integrity_verifier.verify(phase="manager construction")
-        self.engine = engine
-        self.lora_request = lora_request
-        self.adapter_integrity_verifier = adapter_integrity_verifier
-        self.capture_hidden = capture_hidden
-        self.native_pixels = native_pixels
-        self.turns: dict[str, _TurnRoute] = {}
-        self.backend_ids: dict[str, list[str]] = {}
-
-    async def materialize_source(
-        self,
-        *,
-        request_id: str,
-        expected_step: int,
-        pixel_values: torch.Tensor,
-        image_grid_thw: torch.Tensor,
-        image_sha256: str,
-    ) -> object:
-        del expected_step
-        result = await self.engine.collective_rpc(
-            "tgvf_materialize_source",
-            kwargs={
-                "trajectory_id": request_id,
-                "pixel_values_wire": _tensor_to_utility_wire(pixel_values),
-                "image_grid_thw": tuple(int(v) for v in image_grid_thw[0].tolist()),
-                "image_sha256": image_sha256,
-            },
-        )
-        return _source_from_utility_wire(
-            _single_collective(result, operation="source materialization")
-        )
-
-    async def generate(
-        self,
-        request_id: str,
-        *,
-        prompt_ids: list[int],
-        sampling_params: dict[str, Any],
-        image_data: list[Any] | None = None,
-        video_data: list[Any] | None = None,
-        audio_data: list[Any] | None = None,
-        mm_processor_kwargs: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> object:
-        del video_data, audio_data
-        from vllm import SamplingParams
-
-        step = int(kwargs.pop("tgvf_expected_step"))
-        if kwargs:
-            raise TypeError(f"unsupported standalone vLLM arguments: {sorted(kwargs)}")
-        if self.adapter_integrity_verifier is not None:
-            self.adapter_integrity_verifier.assert_lora_request_binding(
-                self.lora_request
-            )
-            self.adapter_integrity_verifier.verify(phase="before engine.generate")
-        backend_id = f"eval-{uuid4().hex}"
-        maximum = sampling_params.get("max_tokens")
-        if type(maximum) is not int or maximum <= 0:
-            raise ValueError("generation requires positive max_tokens")
-        if self.capture_hidden:
-            await self.engine.collective_rpc(
-                "tgvf_register_behavior_trace",
-                kwargs={
-                    "request_id": backend_id,
-                    "prompt_length": len(prompt_ids),
-                    "maximum_output_tokens": maximum,
-                },
-            )
-            self.backend_ids.setdefault(request_id, []).append(backend_id)
-        prompt = {
-            "prompt_token_ids": prompt_ids,
-            "multi_modal_data": {"image": image_data},
-            "mm_processor_kwargs": mm_processor_kwargs,
-        }
-        parameters = dict(sampling_params)
-        if parameters.get("logprobs") is True:
-            parameters["logprobs"] = 0
-        final = None
-        adapter_arguments = (
-            {} if self.lora_request is None else {"lora_request": self.lora_request}
-        )
-        async for output in self.engine.generate(
-            prompt,
-            SamplingParams(**parameters),
-            backend_id,
-            **adapter_arguments,
-        ):
-            final = output
-        if self.adapter_integrity_verifier is not None:
-            self.adapter_integrity_verifier.verify(phase="after engine.generate")
-        if final is None or not final.finished or len(final.outputs) != 1:
-            raise RuntimeError("standalone vLLM generation did not finish exactly once")
-        completion = final.outputs[0]
-        token_ids = tuple(int(value) for value in completion.token_ids)
-        logprobs = []
-        for token_id, position in zip(token_ids, completion.logprobs, strict=True):
-            entry = position.get(token_id)
-            if entry is None:
-                raise RuntimeError("sampled token is absent from vLLM logprobs")
-            logprobs.append(float(entry.logprob))
-        self.turns[request_id] = _TurnRoute(backend_id, token_ids, step)
-        return SimpleNamespace(
-            token_ids=list(token_ids),
-            log_probs=logprobs,
-            stop_reason="completed",
-            extra_fields={
-                "global_steps": step,
-                "min_global_steps": step,
-                "max_global_steps": step,
-                "logprobs_mode": "processed_logprobs",
-                "tgvf_vllm_finish_reason": completion.finish_reason,
-                "tgvf_vllm_stop_reason": completion.stop_reason,
-            },
-        )
-
-    async def materialize_focus(
-        self,
-        *,
-        request_id: str,
-        expected_step: int,
-        sampled_output_ids: tuple[int, ...],
-        target_start: int,
-        target_end: int,
-        expected_target_token_ids: tuple[int, ...],
-        provider: str,
-    ) -> tuple[torch.Tensor, object]:
-        turn = self._validated_turn(request_id, expected_step, sampled_output_ids)
-        if turn.output_ids[target_start:target_end] != expected_target_token_ids:
-            raise RuntimeError("focus target differs from sampled output")
-        result = await self.engine.collective_rpc(
-            "tgvf_materialize_focus",
-            kwargs={
-                "trajectory_id": request_id,
-                "backend_request_id": turn.backend_request_id,
-                "target_start": target_start,
-                "target_end": target_end,
-                "expected_target_token_ids": expected_target_token_ids,
-                "provider": provider,
-            },
-        )
-        typed = _focus_from_utility_wire(
-            _single_collective(result, operation="focus materialization")
-        )
-        if not isinstance(typed, TGVFFocusMaterializationResult):
-            raise TypeError("focus RPC returned an invalid result")
-        return typed.hq, typed.observation
-
-    async def materialize_crop(
-        self,
-        *,
-        request_id: str,
-        expected_step: int,
-        sampled_output_ids: tuple[int, ...],
-        call_index: int,
-        pixel_values: torch.Tensor,
-        image_grid_thw: torch.Tensor,
-        crop_sha256: str,
-    ) -> object:
-        self._validated_turn(request_id, expected_step, sampled_output_ids)
-        result = await self.engine.collective_rpc(
-            "tgvf_materialize_crop",
-            kwargs={
-                "trajectory_id": request_id,
-                "call_index": call_index,
-                "pixel_values_wire": _tensor_to_utility_wire(pixel_values),
-                "image_grid_thw": tuple(int(v) for v in image_grid_thw[0].tolist()),
-                "crop_sha256": crop_sha256,
-            },
-        )
-        return _source_from_utility_wire(
-            _single_collective(result, operation="crop materialization")
-        )
-
-    def _validated_turn(
-        self, request_id: str, expected_step: int, output_ids: tuple[int, ...]
-    ) -> _TurnRoute:
-        turn = self.turns.get(request_id)
-        if turn is None or turn.output_ids != tuple(output_ids):
-            raise RuntimeError("tool call differs from the last vLLM turn")
-        if turn.optimizer_step != expected_step:
-            raise RuntimeError("tool call policy step changed")
-        return turn
-
-    async def release_trajectory(self, request_id: str) -> None:
-        backend_ids = tuple(self.backend_ids.pop(request_id, ()))
-        self.turns.pop(request_id, None)
-        if self.native_pixels:
-            if backend_ids:
-                raise RuntimeError(
-                    "native-pixel evaluator unexpectedly registered hidden traces"
-                )
-            return
-        await self.engine.collective_rpc(
-            "tgvf_release_trajectory", args=(request_id, backend_ids)
-        )
 
 
 async def build_standalone_manager(
@@ -2424,36 +1725,6 @@ def _standalone_engine_kwargs(
         "mm_encoder_attn_backend": TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
         "hf_overrides": {"architectures": [TGVF_QWEN3_VLLM_ARCHITECTURE]},
     }
-
-
-def _decoding_contract() -> VLLMOutputDecodingContract:
-    return VLLMOutputDecodingContract(
-        detokenize=True,
-        skip_special_tokens=False,
-        spaces_between_special_tokens=False,
-        output_kind="final_only",
-    )
-
-
-def _termination_contract(run: PolicyE2ESmokeRunConfig) -> VLLMTurnTerminationContract:
-    sampling = run.policy.sampling
-    return VLLMTurnTerminationContract(
-        required_request_stop_strings=tuple(sampling.stop_strings or ()),
-        required_request_stop_token_ids=tuple(sampling.stop_token_ids or ()),
-        include_stop_str_in_output=bool(sampling.include_stop_str_in_output),
-        tool_call_terminal_suffixes=("",),
-        tool_call_outcomes=(VLLMTerminationOutcome("stop", "</tool_call>"),),
-        final_turn_outcomes=tuple(
-            VLLMTerminationOutcome("stop", token_id)
-            for token_id in tuple(sampling.stop_token_ids or ())
-        )
-        + (
-            # vLLM 0.12 reports native EOS as finish_reason="stop" with no
-            # separate stop_reason; this remains distinct from a length stop.
-            VLLMTerminationOutcome("stop", None),
-            VLLMTerminationOutcome("length", None),
-        ),
-    )
 
 
 class PolicyCoreDevEvaluator:

@@ -572,6 +572,10 @@ def test_official_visible_constructor_accepts_only_adapter_free_full_snapshot(
     strict_identity = full_model_policy_evaluation_identity(strict_config, snapshot)
 
     identity = full_model_policy_evaluation_identity(config, snapshot)
+    assert identity == policy_coredev.policy_evaluation_identity(config, snapshot)
+    assert strict_identity == policy_coredev.policy_evaluation_identity(
+        strict_config, snapshot
+    )
     assert identity["eval_contract"]["pixels"] == {
         "training_image_max_pixels": snapshot.run.policy.image_max_pixels,
         "declared_image_max_pixels": snapshot.run.policy.image_max_pixels,

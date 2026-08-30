@@ -34,6 +34,11 @@ from tgvf_rl.policy.deepeyes_native_contract import (
 )
 
 from .policy_evaluation_config import FULL_MODEL_EVALUATION_BACKEND
+from .policy_evaluation_identity import (
+    build_policy_evaluation_identity,
+    canonical_json_sha256,
+)
+from .policy_vllm_manager import StandaloneTGVFVLLMManager
 
 
 FULL_MODEL_SNAPSHOT_SCHEMA = "tgvf-prl13-full-model-snapshot-v1"
@@ -1364,6 +1369,33 @@ def full_model_snapshot_identity_record(
     }
 
 
+def _base_equivalent_step_zero_full_model(
+    snapshot: FullModelEvaluationSnapshot,
+) -> dict[str, object]:
+    """Bind step zero to the run contract's exact immutable base-HF tree."""
+
+    if (
+        snapshot.policy_version.optimizer_step != 0
+        or snapshot.manifest.source_kind is not FullModelSourceKind.BASE_HF
+    ):
+        raise ValueError("base-equivalent full-model proof requires base-HF step zero")
+    content = {
+        "schema_version": "tgvf-base-equivalent-step-zero-full-model-v1",
+        "optimizer_step": 0,
+        "source_kind": snapshot.manifest.source_kind.value,
+        "source_is_bound_run_base_model": True,
+        "snapshot_identity_sha256": snapshot.manifest.identity_sha256,
+        "checkpoint_sha256": snapshot.manifest.checkpoint_sha256,
+        "source_tree_sha256": snapshot.manifest.source_tree_sha256,
+        "weights_sha256": snapshot.policy_version.weights_sha256,
+        "materialized_model_tree_sha256": snapshot.receipt.model_tree_sha256,
+    }
+    return {**content, "proof_sha256": canonical_json_sha256(content)}
+
+
+_base_equivalent_step_zero_full_model.__module__ = "tgvf_rl.evaluation.policy_coredev"
+
+
 def full_model_policy_evaluation_identity(
     config: object,
     snapshot: FullModelEvaluationSnapshot,
@@ -1372,12 +1404,17 @@ def full_model_policy_evaluation_identity(
 
     if not isinstance(snapshot, FullModelEvaluationSnapshot):
         raise TypeError("snapshot must be a FullModelEvaluationSnapshot")
-    # Keep one protocol/coordinate identity implementation for both backends.
-    # The late import avoids a module cycle: policy_coredev owns the generic
-    # task/execution envelope while this module owns the full-model closure.
-    from .policy_coredev import policy_evaluation_identity
-
-    return policy_evaluation_identity(config, snapshot)
+    policy_config_path = Path(
+        getattr(config, "policy_config_path", snapshot.contract.source_path)
+    )
+    return build_policy_evaluation_identity(
+        config,
+        snapshot,
+        is_lora_snapshot=False,
+        policy_snapshot=full_model_snapshot_identity_record(snapshot),
+        policy_config_path=policy_config_path,
+        step_zero_equivalence=lambda: _base_equivalent_step_zero_full_model(snapshot),
+    )
 
 
 def full_model_vllm_engine_kwargs(
@@ -1455,8 +1492,6 @@ async def build_full_model_standalone_manager(
 
     from vllm import AsyncEngineArgs
     from vllm.v1.engine.async_llm import AsyncLLM
-
-    from .policy_coredev import StandaloneTGVFVLLMManager
 
     kwargs = full_model_vllm_engine_kwargs(
         snapshot,
