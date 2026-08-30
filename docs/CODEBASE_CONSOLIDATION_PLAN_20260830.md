@@ -554,8 +554,9 @@ transport, an outer-exec handoff, or procfs/dumpable/LSM portability. Final
 local evidence is 34 focused tests and 2,804 passed/five skipped/four warnings
 in the full hermetic CPU suite in 149.32 seconds; complete `tests/ops` has 660
 passes in 68.86 seconds. Full Ruff, both audits, hashes, and the diff check
-pass. No remote CI result is yet claimed. Experiment policy revision 4
-therefore keeps all seven blockers and `launch_enabled=false`.
+pass. Combined code/docs checkpoint `8e99c4c`, containing code checkpoint
+`50f5de7`, is green in complete remote run `33332561043`. Experiment policy
+revision 4 therefore keeps all seven blockers and `launch_enabled=false`.
 
 ## Why the repository feels fragmented
 

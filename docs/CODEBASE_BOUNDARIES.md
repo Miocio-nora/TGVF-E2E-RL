@@ -574,9 +574,10 @@ complete `tests/ops` result of 660 passed in 68.86 seconds. The full hermetic
 CPU result is 2,804 passed, five skipped, and four warnings in 149.32 seconds.
 Full Ruff, repository-boundary revision 7 at 61 debts/zero violations,
 execution-surface revision 10 at 80 surfaces/zero violations, content hashes,
-and `git diff --check` are green. No remote result is yet claimed. No blocker
-is removed: experiment policy revision 4 remains launch-disabled with all
-seven blocker IDs.
+and `git diff --check` are green. Combined code/docs checkpoint `8e99c4c`,
+which contains code checkpoint `50f5de7`, is green in complete remote run
+`33332561043`. No blocker is removed: experiment policy revision 4 remains
+launch-disabled with all seven blocker IDs.
 
 ## 2026-08-30 canonical line versus physical `main`
 
