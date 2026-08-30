@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from pathlib import Path
-import tempfile
 from typing import Any
 
+from tgvf_rl.immutable_publication import (
+    ImmutableDestinationTypeError,
+    ImmutablePublicationError,
+    publish_bytes_content_consistent,
+)
 from tgvf_rl.framework.verl.policy_weight_sync import (
     PolicyWeightSyncState,
     load_lora_snapshot_pointer,
@@ -42,28 +45,14 @@ def _sha256_file(path: Path) -> str:
 
 def _write_immutable(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() or path.is_symlink():
-        if path.is_symlink() or not path.is_file():
-            raise RuntimeError("policy benchmark config output is not a regular file")
-        if path.read_bytes() != payload:
-            raise RuntimeError("immutable policy benchmark config differs")
-        return
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=path.parent
-    )
-    temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(temporary, path)
-        except FileExistsError:
-            if path.is_symlink() or not path.is_file() or path.read_bytes() != payload:
-                raise RuntimeError("immutable policy benchmark config differs")
-    finally:
-        temporary.unlink(missing_ok=True)
+        publish_bytes_content_consistent(path, payload)
+    except ImmutableDestinationTypeError as error:
+        raise RuntimeError(
+            "policy benchmark config output is not a regular file"
+        ) from error
+    except ImmutablePublicationError as error:
+        raise RuntimeError("immutable policy benchmark config differs") from error
 
 
 def materialize_policy_benchmark_config(

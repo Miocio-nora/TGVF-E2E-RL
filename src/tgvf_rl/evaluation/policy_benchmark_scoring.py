@@ -8,11 +8,14 @@ import csv
 import hashlib
 import io
 import json
-import os
 from pathlib import Path
 import re
-import tempfile
 from typing import Any
+
+from tgvf_rl.immutable_publication import (
+    ImmutablePublicationError,
+    publish_bytes_content_consistent,
+)
 
 from .policy_coredev import (
     POLICY_EVALUATION_IDENTITY_SCHEMA,
@@ -126,22 +129,10 @@ def infer_mcq_option(
 
 def _write_immutable(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=path.parent
-    )
-    temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(temporary, path)
-        except FileExistsError:
-            if path.read_bytes() != payload:
-                raise RuntimeError(f"immutable scoring output differs: {path}")
-    finally:
-        temporary.unlink(missing_ok=True)
+        publish_bytes_content_consistent(path, payload)
+    except ImmutablePublicationError as error:
+        raise RuntimeError(f"immutable scoring output differs: {path}") from error
 
 
 def _tsv_bytes(rows: list[dict[str, object]]) -> bytes:

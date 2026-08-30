@@ -9,6 +9,7 @@ import pytest
 
 from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.evaluation import policy_benchmark_config as implementation
+from tgvf_rl.immutable_publication import ImmutablePublicationRaceError
 from tgvf_rl.protocol import (
     NativeActionBoundaryProtocolId,
     NativeSuccessObservationProtocolId,
@@ -115,6 +116,46 @@ def test_config_materializer_binds_exact_pointer_and_task_manifest(
                 NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
             ),
         )
+
+
+def test_immutable_config_writer_preserves_retry_and_collision_contract(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "nested/config.json"
+
+    implementation._write_immutable(destination, b"stable")  # noqa: SLF001
+    implementation._write_immutable(destination, b"stable")  # noqa: SLF001
+
+    with pytest.raises(RuntimeError, match="immutable policy benchmark config differs"):
+        implementation._write_immutable(destination, b"different")  # noqa: SLF001
+    assert destination.read_bytes() == b"stable"
+
+
+def test_immutable_config_writer_rejects_symlink_without_touching_target(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target.json"
+    target.write_bytes(b"protected")
+    destination = tmp_path / "config.json"
+    destination.symlink_to(target)
+
+    with pytest.raises(RuntimeError, match="output is not a regular file"):
+        implementation._write_immutable(destination, b"protected")  # noqa: SLF001
+
+    assert destination.is_symlink()
+    assert target.read_bytes() == b"protected"
+
+
+def test_immutable_config_writer_translates_publication_race(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def reject(_path: Path, _payload: bytes) -> None:
+        raise ImmutablePublicationRaceError("unstable destination")
+
+    monkeypatch.setattr(implementation, "publish_bytes_content_consistent", reject)
+
+    with pytest.raises(RuntimeError, match="immutable policy benchmark config differs"):
+        implementation._write_immutable(tmp_path / "config.json", b"payload")  # noqa: SLF001
 
 
 @pytest.mark.parametrize(

@@ -9,12 +9,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, is_dataclass
+import errno
 from enum import Enum
 from hashlib import sha256
 import json
-import os
 from pathlib import Path
-import tempfile
+
+from tgvf_rl.immutable_publication import (
+    ImmutablePublicationError,
+    publish_bytes_create_only,
+)
 
 
 REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION = (
@@ -50,22 +54,14 @@ def _publish_representation_internal_evaluation_report_atomic(
         ).encode("utf-8")
         + b"\n"
     )
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
-        dir=destination.parent,
-    )
     try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.link(temporary_name, destination)
-    finally:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
+        publish_bytes_create_only(destination, payload)
+    except (FileExistsError, ImmutablePublicationError) as error:
+        raise FileExistsError(
+            errno.EEXIST,
+            "File exists",
+            str(destination),
+        ) from error
     return RepresentationInternalEvaluationArtifact(
         path=str(destination),
         payload_sha256=sha256(payload).hexdigest(),
