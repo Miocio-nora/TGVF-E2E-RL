@@ -11,6 +11,7 @@ from types import FunctionType
 from typing import get_type_hints
 
 from tgvf_rl.evaluation import (
+    policy_benchmark_artifacts,
     policy_coredev,
     policy_evaluation_identity,
     policy_full_model_snapshot,
@@ -21,6 +22,7 @@ from tgvf_rl.evaluation import (
 
 _EVALUATION_PACKAGE = Path(__file__).parents[2] / "src" / "tgvf_rl" / "evaluation"
 _MODULES = (
+    "policy_benchmark_artifacts",
     "policy_coredev",
     "policy_evaluation_identity",
     "policy_full_model_snapshot",
@@ -76,7 +78,9 @@ def test_policy_snapshot_import_graph_has_no_nontrivial_scc() -> None:
     graph = {module: _relative_imports(module) for module in _MODULES}
 
     assert graph == {
+        "policy_benchmark_artifacts": {"policy_evaluation_identity"},
         "policy_coredev": {
+            "policy_benchmark_artifacts",
             "policy_evaluation_identity",
             "policy_full_model_snapshot",
             "policy_lora_snapshot",
@@ -141,6 +145,23 @@ def test_policy_coredev_facade_does_not_redefine_extracted_contracts() -> None:
         "policy_lora_request_name",
         "_base_equivalent_step_zero_lora",
         "_standalone_engine_kwargs",
+        "CoreDevTask",
+        "_read_regular_file_bytes",
+        "_read_bound_image_bytes",
+        "_decode_rgb_bytes",
+        "image_file_identity",
+        "load_verified_task_image",
+        "write_official_coredev_tasks",
+        "_tsv_image_paths",
+        "_option_lines",
+        "_official_prompt_text",
+        "load_benchmark_tasks",
+        "load_coredev_tasks",
+        "prepare_policy_benchmark_tasks",
+        "load_bound_policy_benchmark_tasks",
+        "trajectory_audit_payload",
+        "validate_policy_benchmark_result",
+        "load_policy_benchmark_results",
     }.isdisjoint(definitions)
 
 
@@ -215,6 +236,58 @@ def test_policy_coredev_preserves_identity_contract_imports_and_pickle_path() ->
         assert value.__module__ == policy_coredev.__name__
         assert pickle.loads(pickle.dumps(value)) is value
     _assert_legacy_class_member_modules(contract)
+
+
+def test_policy_coredev_preserves_benchmark_artifact_imports_and_pickle_path() -> None:
+    assert policy_coredev.POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA is (
+        policy_benchmark_artifacts.POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA
+    )
+    names = (
+        "CoreDevTask",
+        "_read_regular_file_bytes",
+        "_read_bound_image_bytes",
+        "_decode_rgb_bytes",
+        "image_file_identity",
+        "load_verified_task_image",
+        "write_official_coredev_tasks",
+        "_tsv_image_paths",
+        "_option_lines",
+        "_official_prompt_text",
+        "load_benchmark_tasks",
+        "load_coredev_tasks",
+        "prepare_policy_benchmark_tasks",
+        "load_bound_policy_benchmark_tasks",
+        "trajectory_audit_payload",
+        "validate_policy_benchmark_result",
+        "load_policy_benchmark_results",
+    )
+    for name in names:
+        facade_value = getattr(policy_coredev, name)
+        leaf_value = getattr(policy_benchmark_artifacts, name)
+        assert facade_value is leaf_value
+        assert facade_value.__module__ == policy_coredev.__name__
+        assert facade_value.__name__ == name
+        assert facade_value.__qualname__ == name
+        assert pickle.loads(pickle.dumps(facade_value)) is facade_value
+
+    task_type = policy_benchmark_artifacts.CoreDevTask
+    _assert_legacy_class_member_modules(task_type)
+    assert get_type_hints(task_type)["ordinal"] is int
+    assert get_type_hints(task_type)["image_paths"] == tuple[str, ...]
+    assert get_type_hints(policy_benchmark_artifacts.trajectory_audit_payload)[
+        "task"
+    ] is task_type
+    task = task_type(
+        ordinal=0,
+        dataset="fixture",
+        row_number=0,
+        index="sample-0",
+        question="fixture question",
+        image_paths=("/fixture/image.png",),
+    )
+    restored = pickle.loads(pickle.dumps(task))
+    assert type(restored) is task_type
+    assert restored == task
 
 
 def test_policy_coredev_preserves_lora_snapshot_imports_and_pickle_path() -> None:
@@ -302,7 +375,36 @@ assert 'tgvf_rl.evaluation.policy_full_model_snapshot' not in sys.modules
     )
 
 
+def test_benchmark_artifact_leaf_imports_without_loading_runtime_backends() -> None:
+    script = """
+import sys
+import tgvf_rl.evaluation.policy_benchmark_artifacts
+assert 'tgvf_rl.evaluation.policy_coredev' not in sys.modules
+assert 'tgvf_rl.evaluation.policy_full_model_snapshot' not in sys.modules
+assert 'tgvf_rl.evaluation.policy_lora_snapshot' not in sys.modules
+assert 'tgvf_rl.evaluation.policy_vllm_manager' not in sys.modules
+"""
+    repository_root = _EVALUATION_PACKAGE.parents[2]
+    environment = {
+        **os.environ,
+        "CUDA_VISIBLE_DEVICES": "",
+        "PYTHONPATH": os.pathsep.join(
+            (str(repository_root / "src"), str(repository_root))
+        ),
+    }
+    environment.pop("OPENROUTER_API_KEY", None)
+    subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        cwd=repository_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_shared_identity_leaf_does_not_depend_on_either_snapshot_backend() -> None:
+    artifact_imports = _relative_imports("policy_benchmark_artifacts")
     identity_imports = _relative_imports("policy_evaluation_identity")
     lora_imports = _relative_imports("policy_lora_snapshot")
     manager_imports = _relative_imports("policy_vllm_manager")
@@ -311,3 +413,7 @@ def test_shared_identity_leaf_does_not_depend_on_either_snapshot_backend() -> No
     assert "policy_full_model_snapshot" not in identity_imports | manager_imports
     assert "policy_coredev" not in lora_imports
     assert "policy_full_model_snapshot" not in lora_imports
+    assert "policy_coredev" not in artifact_imports
+    assert "policy_full_model_snapshot" not in artifact_imports
+    assert "policy_lora_snapshot" not in artifact_imports
+    assert "policy_vllm_manager" not in artifact_imports
