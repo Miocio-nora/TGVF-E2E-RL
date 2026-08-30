@@ -13,9 +13,18 @@ import pytest
 
 from tgvf_rl.ops.cli_authorization import (
     REPOSITORY_EXECUTION_POLICY_PATH,
+    bind_current_python_executable,
     cli_worker_authorization_environment,
     consume_cli_execution_authorization,
     materialize_cli_worker_authorization,
+)
+from tgvf_rl.ops.child_environment import (
+    CLI_WORKER_LATE_ENVIRONMENT_NAMES,
+    POLICY_COMPILE_RECEIPT_LATE_ENVIRONMENT_NAMES,
+    POLICY_VERL_DRIVER_PROFILE,
+    REPRESENTATION_TORCHRUN_PROFILE,
+    TORCHRUN_WORKER_LATE_ENVIRONMENT_NAMES,
+    build_child_environment,
 )
 from tgvf_rl.ops.cli_authorization_identity import (
     CLIExecutionAuthorizationIdentity,
@@ -137,6 +146,9 @@ def _envelope(mode: str) -> WorkerStartupEnvelope:
 def _execution_identity(
     mode: str,
     envelope: WorkerStartupEnvelope,
+    *,
+    parameter_updates: dict[str, str] | None = None,
+    parameter_removals: tuple[str, ...] = (),
 ) -> CLIExecutionAuthorizationIdentity:
     phase, command_id = (
         ("policy_training", "tgvf-rl:run-policy:v4")
@@ -146,12 +158,26 @@ def _execution_identity(
             "tgvf-rl:launch-representation:v2",
         )
     )
+    child_environment = build_child_environment(
+        POLICY_VERL_DRIVER_PROFILE
+        if mode == "run-policy"
+        else REPRESENTATION_TORCHRUN_PROFILE,
+        host_environment={},
+    )
+    parameters = {
+        **envelope.authorization_parameters(),
+        **child_environment.authorization_parameters(),
+        **bind_current_python_executable(sys.executable).authorization_parameters(),
+    }
+    parameters.update(parameter_updates or {})
+    for name in parameter_removals:
+        parameters.pop(name, None)
     return CLIExecutionAuthorizationIdentity.create(
         run_id="WORKER-BOOTSTRAP-INSPECTION",
         phase=phase,
         command_id=command_id,
         run_identity_sha256="9" * 64,
-        parameters=envelope.authorization_parameters(),
+        parameters=parameters,
     )
 
 
@@ -208,10 +234,59 @@ def _isolated_environment(extra: dict[str, str] | None = None) -> dict[str, str]
     }
 
 
+def _materialized_role_environment(
+    mode: str,
+    worker_environment: dict[str, str],
+) -> dict[str, str]:
+    profile = (
+        POLICY_VERL_DRIVER_PROFILE
+        if mode == "run-policy"
+        else REPRESENTATION_TORCHRUN_PROFILE
+    )
+    binding = build_child_environment(profile, host_environment={})
+    if mode == "run-policy":
+        role_overlay = {
+            "TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_PATH": (
+                "/runtime/compile-receipt.json"
+            ),
+            "TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_SHA256": "7" * 64,
+        }
+        assert set(role_overlay) == set(
+            POLICY_COMPILE_RECEIPT_LATE_ENVIRONMENT_NAMES
+        )
+    else:
+        role_overlay = {
+            "GROUP_RANK": "0",
+            "GROUP_WORLD_SIZE": "1",
+            "LOCAL_RANK": "0",
+            "LOCAL_WORLD_SIZE": "2",
+            "MASTER_ADDR": "localhost",
+            "MASTER_PORT": "29400",
+            "RANK": "0",
+            "ROLE_NAME": "default",
+            "ROLE_RANK": "0",
+            "ROLE_WORLD_SIZE": "2",
+            "TORCHELASTIC_ERROR_FILE": "/tmp/torchelastic/rank-0/error.json",
+            "TORCHELASTIC_MAX_RESTARTS": "0",
+            "TORCHELASTIC_RESTART_COUNT": "0",
+            "TORCHELASTIC_RUN_ID": "worker-bootstrap-inspection",
+            "TORCHELASTIC_USE_AGENT_STORE": "True",
+            "WORLD_SIZE": "2",
+        }
+        assert set(role_overlay) == set(TORCHRUN_WORKER_LATE_ENVIRONMENT_NAMES)
+    assert set(worker_environment) == set(CLI_WORKER_LATE_ENVIRONMENT_NAMES)
+    return binding.with_late_overlay(
+        {**worker_environment, **role_overlay}
+    ).as_environment()
+
+
 def _run_valid_main(tmp_path: Path, mode: str) -> subprocess.CompletedProcess[str]:
     envelope = _envelope(mode)
     identity = _execution_identity(mode, envelope)
-    worker_environment = _authorized_environment(tmp_path, identity)
+    worker_environment = _materialized_role_environment(
+        mode,
+        _authorized_environment(tmp_path, identity),
+    )
     command = envelope.identity_for_role(
         POLICY_DRIVER_ROLE
         if mode == "run-policy"
@@ -223,7 +298,45 @@ def _run_valid_main(tmp_path: Path, mode: str) -> subprocess.CompletedProcess[st
         check=False,
         capture_output=True,
         text=True,
-        env=_isolated_environment(worker_environment),
+        env=worker_environment,
+    )
+
+
+def _run_changed_contract_main(
+    tmp_path: Path,
+    mode: str,
+    *,
+    parameter_updates: dict[str, str] | None = None,
+    parameter_removals: tuple[str, ...] = (),
+    environment_updates: dict[str, str] | None = None,
+    environment_removals: tuple[str, ...] = (),
+) -> subprocess.CompletedProcess[str]:
+    envelope = _envelope(mode)
+    identity = _execution_identity(
+        mode,
+        envelope,
+        parameter_updates=parameter_updates,
+        parameter_removals=parameter_removals,
+    )
+    environment = _materialized_role_environment(
+        mode,
+        _authorized_environment(tmp_path, identity),
+    )
+    environment.update(environment_updates or {})
+    for name in environment_removals:
+        environment.pop(name, None)
+    selected_role = (
+        POLICY_DRIVER_ROLE
+        if mode == "run-policy"
+        else REPRESENTATION_MEMBER_ROLE
+    )
+    return subprocess.run(
+        envelope.identity_for_role(selected_role).command,
+        cwd=_REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
     )
 
 
@@ -246,6 +359,9 @@ def test_inspection_record_is_explicitly_non_authoritative() -> None:
         "run-policy",
         "run-representation-member",
     )
+    assert WORKER_BOOTSTRAP_INSPECTION_SCHEMA == (
+        "tgvf-worker-bootstrap-inspection-v2"
+    )
     assert inspection.as_record() == {
         "schema_version": WORKER_BOOTSTRAP_INSPECTION_SCHEMA,
         "authorization_scope": WORKER_BOOTSTRAP_AUTHORIZATION_SCOPE,
@@ -263,7 +379,11 @@ def test_inspection_record_is_explicitly_non_authoritative() -> None:
         "outer_cli_receipt_checked_by_existing_verifier": True,
         "outer_process_relation": "existing-descendant-check-only",
         "cli_environment_namespace_exact": True,
-        "role_specific_child_environment_verified": False,
+        "current_python_executable_identity_checked": True,
+        "current_python_descriptor_retained": False,
+        "role_child_environment_base_identity_checked": True,
+        "role_child_environment_late_field_inventory_checked": True,
+        "role_child_environment_late_values_checked": False,
         "heavy_import_roots_absent": True,
         "interpreter_flags_accepted": True,
         "default_import_machinery_shape_checked": True,
@@ -520,6 +640,7 @@ import sys
 import types
 import tgvf_rl.worker_bootstrap as module
 import tgvf_rl.ops.cli_authorization
+import tgvf_rl.ops.child_environment
 import tgvf_rl.ops.worker_startup
 sys.modules['tgvf_rl.framework'] = types.ModuleType('tgvf_rl.framework')
 try:
@@ -709,14 +830,182 @@ def test_authorized_inspection_still_exits_nonzero_without_target_dispatch(
     assert record["selected_role"] == selected_role
     assert record["target"] == expected_target
     assert record["outer_cli_receipt_checked_by_existing_verifier"] is True
+    assert record["current_python_executable_identity_checked"] is True
+    assert record["current_python_descriptor_retained"] is False
+    assert record["role_child_environment_base_identity_checked"] is True
+    assert record["role_child_environment_late_field_inventory_checked"] is True
+    assert record["role_child_environment_late_values_checked"] is False
     assert record["heavy_import_roots_absent"] is True
     assert record["runtime_origin_verified"] is False
     assert record["target_imported"] is False
     assert record["verified_worker_startup_minted"] is False
     assert record["dispatch_authorized"] is False
     assert "hostile-same-process-import-machinery-unclosed" in record["blockers"]
+    assert "canonical-worker-bootstrap-routing-missing" in record["blockers"]
+    assert (
+        "role-specific-child-environment-late-value-validation-missing"
+        in record["blockers"]
+    )
     assert expected_blocker in record["blockers"]
     assert "inspection-only scaffold cannot dispatch" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "parameter_name",
+    [
+        "python_executable",
+        "python_executable_realpath",
+        "python_executable_sha256",
+        "python_executable_size",
+        "python_executable_device",
+        "python_executable_inode",
+        "python_executable_mode",
+    ],
+)
+def test_current_python_identity_parameter_drift_is_rejected(
+    tmp_path: Path,
+    parameter_name: str,
+) -> None:
+    completed = _run_changed_contract_main(
+        tmp_path,
+        "run-policy",
+        parameter_updates={parameter_name: "changed"},
+    )
+
+    assert completed.returncode == WORKER_BOOTSTRAP_REFUSAL_EXIT_CODE
+    assert completed.stdout == ""
+    assert "did not establish dispatch authority" in completed.stderr
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra"])
+def test_current_python_identity_parameter_namespace_is_exact(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    completed = _run_changed_contract_main(
+        tmp_path,
+        "run-policy",
+        parameter_updates=(
+            {"python_executable_legacy_identity": "changed"}
+            if mutation == "extra"
+            else None
+        ),
+        parameter_removals=(
+            ("python_executable_mode",) if mutation == "missing" else ()
+        ),
+    )
+
+    assert completed.returncode == WORKER_BOOTSTRAP_REFUSAL_EXIT_CODE
+    assert completed.stdout == ""
+    assert "did not establish dispatch authority" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("mode", "mutation", "name"),
+    [
+        ("run-policy", "missing-base", "PATH"),
+        ("run-policy", "changed-base", "PATH"),
+        ("run-policy", "extra-base", "UNEXPECTED_CHILD_FIELD"),
+        (
+            "run-policy",
+            "missing-late",
+            "TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_PATH",
+        ),
+        ("run-representation-member", "missing-base", "PATH"),
+        ("run-representation-member", "changed-base", "PATH"),
+        (
+            "run-representation-member",
+            "extra-base",
+            "UNEXPECTED_CHILD_FIELD",
+        ),
+        ("run-representation-member", "missing-late", "RANK"),
+    ],
+)
+def test_role_child_environment_structure_drift_is_rejected(
+    tmp_path: Path,
+    mode: str,
+    mutation: str,
+    name: str,
+) -> None:
+    completed = _run_changed_contract_main(
+        tmp_path,
+        mode,
+        environment_updates=(
+            {name: "/changed"}
+            if mutation in {"changed-base", "extra-base"}
+            else None
+        ),
+        environment_removals=(
+            (name,) if mutation in {"missing-base", "missing-late"} else ()
+        ),
+    )
+
+    assert completed.returncode == WORKER_BOOTSTRAP_REFUSAL_EXIT_CODE
+    assert completed.stdout == ""
+    assert "did not establish dispatch authority" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("mode", "name", "value"),
+    [
+        (
+            "run-policy",
+            "TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_SHA256",
+            "not-a-digest",
+        ),
+        ("run-representation-member", "RANK", "not-a-rank"),
+        ("run-representation-member", "MASTER_PORT", "not-a-port"),
+    ],
+)
+def test_late_environment_values_remain_an_explicit_inspection_blocker(
+    tmp_path: Path,
+    mode: str,
+    name: str,
+    value: str,
+) -> None:
+    completed = _run_changed_contract_main(
+        tmp_path,
+        mode,
+        environment_updates={name: value},
+    )
+
+    assert completed.returncode == WORKER_BOOTSTRAP_REFUSAL_EXIT_CODE
+    record = json.loads(completed.stdout)
+    assert record["role_child_environment_base_identity_checked"] is True
+    assert record["role_child_environment_late_field_inventory_checked"] is True
+    assert record["role_child_environment_late_values_checked"] is False
+    assert (
+        "role-specific-child-environment-late-value-validation-missing"
+        in record["blockers"]
+    )
+    assert "inspection-only scaffold cannot dispatch" in completed.stderr
+
+
+@pytest.mark.parametrize("mode", WORKER_BOOTSTRAP_MODES)
+@pytest.mark.parametrize("mutation", ["missing", "extra"])
+def test_child_environment_parameter_namespace_is_exact(
+    tmp_path: Path,
+    mode: str,
+    mutation: str,
+) -> None:
+    completed = _run_changed_contract_main(
+        tmp_path,
+        mode,
+        parameter_updates=(
+            {"child_environment_legacy_identity": "changed"}
+            if mutation == "extra"
+            else None
+        ),
+        parameter_removals=(
+            ("child_environment_owned_names_sha256",)
+            if mutation == "missing"
+            else ()
+        ),
+    )
+
+    assert completed.returncode == WORKER_BOOTSTRAP_REFUSAL_EXIT_CODE
+    assert completed.stdout == ""
+    assert "did not establish dispatch authority" in completed.stderr
 
 
 @pytest.mark.parametrize("mutation", ["extra-prefix", "noncanonical-json"])
@@ -726,7 +1015,10 @@ def test_cli_environment_namespace_and_identity_spelling_are_exact(
 ) -> None:
     envelope = _envelope("run-policy")
     identity = _execution_identity("run-policy", envelope)
-    environment = _authorized_environment(tmp_path, identity)
+    environment = _materialized_role_environment(
+        "run-policy",
+        _authorized_environment(tmp_path, identity),
+    )
     if mutation == "extra-prefix":
         environment["TGVF_CLI_LEGACY_REPLAY_AUTHORITY"] = "injected"
     else:
@@ -738,7 +1030,7 @@ def test_cli_environment_namespace_and_identity_spelling_are_exact(
         check=False,
         capture_output=True,
         text=True,
-        env=_isolated_environment(environment),
+        env=environment,
     )
 
     assert completed.returncode == WORKER_BOOTSTRAP_REFUSAL_EXIT_CODE
@@ -762,7 +1054,10 @@ def test_changed_fixed_target_is_rejected_without_inspection_record(
         ),
     )
     identity = _execution_identity("run-policy", envelope)
-    environment = _authorized_environment(tmp_path, identity)
+    environment = _materialized_role_environment(
+        "run-policy",
+        _authorized_environment(tmp_path, identity),
+    )
 
     completed = subprocess.run(
         _bootstrap_command("run-policy"),
@@ -770,7 +1065,7 @@ def test_changed_fixed_target_is_rejected_without_inspection_record(
         check=False,
         capture_output=True,
         text=True,
-        env=_isolated_environment(environment),
+        env=environment,
     )
 
     assert completed.returncode == WORKER_BOOTSTRAP_REFUSAL_EXIT_CODE
@@ -783,7 +1078,10 @@ def test_changed_process_command_is_rejected_without_inspection_record(
 ) -> None:
     envelope = _envelope("run-policy")
     identity = _execution_identity("run-policy", envelope)
-    environment = _authorized_environment(tmp_path, identity)
+    environment = _materialized_role_environment(
+        "run-policy",
+        _authorized_environment(tmp_path, identity),
+    )
 
     completed = subprocess.run(
         _bootstrap_command("run-policy", "++trainer.total_epochs=2"),
@@ -791,7 +1089,7 @@ def test_changed_process_command_is_rejected_without_inspection_record(
         check=False,
         capture_output=True,
         text=True,
-        env=_isolated_environment(environment),
+        env=environment,
     )
 
     assert completed.returncode == WORKER_BOOTSTRAP_REFUSAL_EXIT_CODE
@@ -819,6 +1117,13 @@ def test_bootstrap_source_has_no_target_dispatch_or_evidence_mint() -> None:
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
+    called_attributes = {
+        (node.func.value.id, node.func.attr)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+    }
 
     assert top_level_import_roots <= {
         "__future__",
@@ -835,7 +1140,26 @@ def test_bootstrap_source_has_no_target_dispatch_or_evidence_mint() -> None:
     assert "importlib" not in top_level_import_roots
     assert "runpy" not in top_level_import_roots
     assert "subprocess" not in top_level_import_roots
+    assert not {
+        (owner, attribute)
+        for owner, attribute in called_attributes
+        if owner == "os" and attribute.startswith("exec")
+    }
     assert "_mint_verified_worker_startup_for_bootstrap" not in source
+    assert "representation_member_selection" not in source
+    assert "representation_member_consumption" not in source
+
+
+def test_canonical_launch_paths_remain_unwired_from_inspection_bootstrap() -> None:
+    production_paths = (
+        _SOURCE_ROOT / "tgvf_rl" / "cli.py",
+        _SOURCE_ROOT / "tgvf_rl" / "ops" / "cli_launch.py",
+        _SOURCE_ROOT / "tgvf_rl" / "policy" / "launch.py",
+        _SOURCE_ROOT / "tgvf_rl" / "framework" / "verl" / "policy_main.py",
+    )
+
+    for path in production_paths:
+        assert WORKER_BOOTSTRAP_MODULE not in path.read_text(encoding="utf-8")
 
 
 def test_python_m_executes_mutable_parent_package_before_bootstrap(

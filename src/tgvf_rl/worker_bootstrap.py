@@ -3,8 +3,11 @@
 This module is intentionally executable but can never dispatch a target.  It
 checks the interpreter/import firebreak before importing project verification
 leaves, re-verifies inherited outer CLI evidence, reconstructs the complete
-startup envelope, and compares one hard-coded role/target/argv contract.  A
-successful inspection remains ordinary diagnostic data and exits non-zero.
+startup envelope, rebinds the current Python image, checks the role environment
+base identity and late-field inventory, and compares one hard-coded
+role/target/argv contract.  Late-field value semantics remain an explicit
+blocker.  A successful inspection remains ordinary diagnostic data and exits
+non-zero.
 
 ``python -m tgvf_rl.worker_bootstrap`` is not a trusted root: Python executes
 the mutable :mod:`tgvf_rl` package before this module and ``-P`` still admits
@@ -26,7 +29,7 @@ import sys
 import threading
 
 
-WORKER_BOOTSTRAP_INSPECTION_SCHEMA = "tgvf-worker-bootstrap-inspection-v1"
+WORKER_BOOTSTRAP_INSPECTION_SCHEMA = "tgvf-worker-bootstrap-inspection-v2"
 WORKER_BOOTSTRAP_AUTHORIZATION_SCOPE = "inspection-only"
 WORKER_BOOTSTRAP_MODULE = "tgvf_rl.worker_bootstrap"
 WORKER_BOOTSTRAP_MODES = (
@@ -57,6 +60,23 @@ _CLI_WORKER_ENVIRONMENT_NAMES = frozenset(
         "TGVF_CLI_WORKER_AUTHORIZATION_SCHEMA",
     }
 )
+_CHILD_ENVIRONMENT_PARAMETER_NAMES = frozenset(
+    {
+        "child_environment_entry_count",
+        "child_environment_ignored_host_name_count",
+        "child_environment_ignored_host_names_sha256",
+        "child_environment_late_overlay_name_count",
+        "child_environment_late_overlay_names_sha256",
+        "child_environment_owned_name_count",
+        "child_environment_owned_names_sha256",
+        "child_environment_profile",
+        "child_environment_profile_sha256",
+        "child_environment_rejected_host_name_count",
+        "child_environment_rejected_host_names_sha256",
+        "child_environment_schema",
+        "child_environment_sha256",
+    }
+)
 _FORBIDDEN_PRECHECK_MODULE_ROOTS = (
     "hydra",
     "numpy",
@@ -83,6 +103,7 @@ _REQUIRED_DELAYED_PROJECT_MODULES = frozenset(
     {
         "tgvf_rl",
         "tgvf_rl.ops",
+        "tgvf_rl.ops.child_environment",
         "tgvf_rl.ops.cli_authorization",
         "tgvf_rl.ops.cli_authorization_identity",
         "tgvf_rl.ops.launch_gate",
@@ -93,11 +114,12 @@ _REQUIRED_DELAYED_PROJECT_MODULES = frozenset(
 _OPTIONAL_BOOTSTRAP_MODULES = frozenset({WORKER_BOOTSTRAP_MODULE})
 _COMMON_BLOCKERS = (
     "bootstrap-package-origin-unverified",
+    "canonical-worker-bootstrap-routing-missing",
     "hostile-same-process-import-machinery-unclosed",
     "immutable-runtime-code-package-missing",
     "project-verifier-module-origin-unverified",
+    "role-specific-child-environment-late-value-validation-missing",
     "runtime-locator-worker-reverification-missing",
-    "role-specific-child-environment-reverification-missing",
     "verified-worker-evidence-fork-rebinding-unclosed",
 )
 
@@ -183,7 +205,11 @@ class WorkerBootstrapInspection:
             "outer_cli_receipt_checked_by_existing_verifier": True,
             "outer_process_relation": "existing-descendant-check-only",
             "cli_environment_namespace_exact": True,
-            "role_specific_child_environment_verified": False,
+            "current_python_executable_identity_checked": True,
+            "current_python_descriptor_retained": False,
+            "role_child_environment_base_identity_checked": True,
+            "role_child_environment_late_field_inventory_checked": True,
+            "role_child_environment_late_values_checked": False,
             "heavy_import_roots_absent": True,
             "interpreter_flags_accepted": True,
             "default_import_machinery_shape_checked": True,
@@ -500,7 +526,12 @@ def inspect_inherited_worker_startup(
 
     # These project imports are deliberately delayed until after the firebreak.
     from tgvf_rl.ops.cli_authorization import (  # noqa: PLC0415
+        bind_current_python_executable_for_exec,
         verify_cli_worker_authorization_from_environment,
+    )
+    from tgvf_rl.ops.child_environment import (  # noqa: PLC0415
+        verify_policy_driver_child_environment,
+        verify_representation_torchrun_child_environment,
     )
     from tgvf_rl.ops.worker_startup import (  # noqa: PLC0415
         WorkerStartupEnvelope,
@@ -513,6 +544,44 @@ def inspect_inherited_worker_startup(
         expected_command_id=contract.command_id,
     )
     parameters = dict(launch_identity.parameters)
+    observed_python_names = {
+        name for name in parameters if name.startswith("python_executable")
+    }
+    with bind_current_python_executable_for_exec(sys.executable) as python_binding:
+        expected_python_parameters = (
+            python_binding.identity.authorization_parameters()
+        )
+        if observed_python_names != set(expected_python_parameters):
+            raise WorkerBootstrapInspectionError(
+                "worker bootstrap Python identity namespace differs"
+            )
+        for name, expected in expected_python_parameters.items():
+            if parameters.get(name) != expected:
+                raise WorkerBootstrapInspectionError(
+                    f"worker bootstrap current Python identity differs: {name}"
+                )
+    observed_child_environment_names = {
+        name for name in parameters if name.startswith("child_environment_")
+    }
+    if observed_child_environment_names != _CHILD_ENVIRONMENT_PARAMETER_NAMES:
+        raise WorkerBootstrapInspectionError(
+            "worker bootstrap child environment parameter namespace differs"
+        )
+    try:
+        if mode == "run-policy":
+            verify_policy_driver_child_environment(
+                environment_snapshot,
+                parameters,
+            )
+        else:
+            verify_representation_torchrun_child_environment(
+                environment_snapshot,
+                parameters,
+            )
+    except (TypeError, ValueError) as error:
+        raise WorkerBootstrapInspectionError(
+            "worker bootstrap role child environment differs"
+        ) from error
     try:
         envelope = WorkerStartupEnvelope.from_authorization_parameters(
             parameters,
