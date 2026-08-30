@@ -9,7 +9,6 @@ implementations.
 from __future__ import annotations
 
 import ast
-from collections.abc import Callable
 import csv
 from dataclasses import asdict, dataclass
 import fcntl
@@ -20,7 +19,6 @@ import os
 from pathlib import Path
 import re
 import stat
-from types import FunctionType
 from typing import Mapping, Sequence
 from uuid import uuid4
 
@@ -28,6 +26,10 @@ from PIL import Image
 import torch
 
 from tgvf_rl.contracts.identity import PolicyVersion
+from tgvf_rl.public_api_compat import (
+    rebind_public_class,
+    rebind_public_function,
+)
 from tgvf_rl.trajectories.schema import (
     CropTGVFToolCallRecord,
     CropToolCallRecord,
@@ -828,25 +830,13 @@ def load_policy_benchmark_results(
 _LEGACY_MODULE = "tgvf_rl.evaluation.policy_coredev"
 
 
-def _bind_legacy_function(value: Callable[..., object], *, name: str) -> None:
-    value.__module__ = _LEGACY_MODULE
-    value.__name__ = name
-    value.__qualname__ = name
-
-
 # These objects historically lived in policy_coredev. The facade re-exports
 # the exact objects so old imports and pickle payloads continue to resolve.
-CoreDevTask.__module__ = _LEGACY_MODULE
-for _member in CoreDevTask.__dict__.values():
-    if isinstance(_member, FunctionType) and _member.__module__ == __name__:
-        _member.__module__ = _LEGACY_MODULE
-    elif isinstance(_member, property):
-        for _accessor in (_member.fget, _member.fset, _member.fdel):
-            if (
-                isinstance(_accessor, FunctionType)
-                and _accessor.__module__ == __name__
-            ):
-                _accessor.__module__ = _LEGACY_MODULE
+rebind_public_class(
+    CoreDevTask,
+    implementation_module=__name__,
+    public_module=_LEGACY_MODULE,
+)
 for _function, _legacy_name in (
     (_read_regular_file_bytes, "_read_regular_file_bytes"),
     (_read_bound_image_bytes, "_read_bound_image_bytes"),
@@ -865,7 +855,14 @@ for _function, _legacy_name in (
     (validate_policy_benchmark_result, "validate_policy_benchmark_result"),
     (load_policy_benchmark_results, "load_policy_benchmark_results"),
 ):
-    _bind_legacy_function(_function, name=_legacy_name)
+    rebind_public_function(
+        _function,
+        implementation_module=__name__,
+        public_module=_LEGACY_MODULE,
+        public_name=_legacy_name,
+        public_qualname=_legacy_name,
+    )
+del _function, _legacy_name
 
 
 __all__ = [

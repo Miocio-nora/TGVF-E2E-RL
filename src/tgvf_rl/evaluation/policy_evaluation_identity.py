@@ -13,7 +13,6 @@ from dataclasses import asdict, dataclass
 import hashlib
 import json
 from pathlib import Path
-from types import FunctionType
 from typing import Callable, Mapping
 
 from tgvf_rl.environment.native_appender import NativeSuccessObservationContract
@@ -21,6 +20,10 @@ from tgvf_rl.framework.vllm import (
     VLLMOutputDecodingContract,
     VLLMTerminationOutcome,
     VLLMTurnTerminationContract,
+)
+from tgvf_rl.public_api_compat import (
+    rebind_public_class,
+    rebind_public_function,
 )
 from tgvf_rl.protocol import (
     native_assistant_dialect_for_model,
@@ -578,25 +581,13 @@ def build_policy_evaluation_identity(
 _LEGACY_MODULE = "tgvf_rl.evaluation.policy_coredev"
 
 
-def _bind_legacy_function(value: Callable[..., object], *, name: str) -> None:
-    value.__module__ = _LEGACY_MODULE
-    value.__name__ = name
-    value.__qualname__ = name
-
-
 # These contracts were historically defined by policy_coredev.  The facade
 # re-exports the exact same objects, including their pickle/import coordinates.
-PolicyEvalContract.__module__ = _LEGACY_MODULE
-for _member in PolicyEvalContract.__dict__.values():
-    if isinstance(_member, FunctionType) and _member.__module__ == __name__:
-        _member.__module__ = _LEGACY_MODULE
-    elif isinstance(_member, property):
-        for _accessor in (_member.fget, _member.fset, _member.fdel):
-            if (
-                isinstance(_accessor, FunctionType)
-                and _accessor.__module__ == __name__
-            ):
-                _accessor.__module__ = _LEGACY_MODULE
+rebind_public_class(
+    PolicyEvalContract,
+    implementation_module=__name__,
+    public_module=_LEGACY_MODULE,
+)
 for _function, _legacy_name in (
     (canonical_json_sha256, "_canonical_json_sha256"),
     (policy_benchmark_task_path, "policy_benchmark_task_path"),
@@ -614,7 +605,14 @@ for _function, _legacy_name in (
     (_decoding_contract, "_decoding_contract"),
     (_termination_contract, "_termination_contract"),
 ):
-    _bind_legacy_function(_function, name=_legacy_name)
+    rebind_public_function(
+        _function,
+        implementation_module=__name__,
+        public_module=_LEGACY_MODULE,
+        public_name=_legacy_name,
+        public_qualname=_legacy_name,
+    )
+del _function, _legacy_name
 
 
 __all__ = [

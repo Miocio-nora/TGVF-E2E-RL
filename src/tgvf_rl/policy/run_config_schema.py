@@ -11,9 +11,9 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
-from types import FunctionType
 from typing import TYPE_CHECKING, Any
 
+from tgvf_rl.public_api_compat import rebind_public_class
 from tgvf_rl.protocol import (
     StandardToolError,
     ToolErrorCode,
@@ -451,20 +451,12 @@ _RUN_CONFIG_SCHEMA_TYPES = (
 # These objects historically lived in ``policy.run_config``.  Keep that public
 # and pickle identity while the implementation moves behind the facade.
 for _schema_type in _RUN_CONFIG_SCHEMA_TYPES:
-    _schema_type.__module__ = _PUBLIC_RUN_CONFIG_MODULE
-    for _member in vars(_schema_type).values():
-        _functions = (
-            (_member.fget, _member.fset, _member.fdel)
-            if isinstance(_member, property)
-            else (_member,)
-        )
-        for _function in _functions:
-            if (
-                isinstance(_function, FunctionType)
-                and _function.__module__ == __name__
-            ):
-                _function.__module__ = _PUBLIC_RUN_CONFIG_MODULE
-del _function, _functions, _member, _schema_type
+    rebind_public_class(
+        _schema_type,
+        implementation_module=__name__,
+        public_module=_PUBLIC_RUN_CONFIG_MODULE,
+    )
+del _schema_type
 
 
 __all__ = [

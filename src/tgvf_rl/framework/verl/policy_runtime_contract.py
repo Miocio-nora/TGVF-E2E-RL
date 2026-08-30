@@ -9,7 +9,6 @@ builder from importing its factory and preserves one-way runtime composition.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from types import FunctionType
 from typing import TYPE_CHECKING, Protocol
 
 import torch
@@ -17,6 +16,7 @@ import torch
 from tgvf_rl.contracts.errors import IdentityMismatchError
 from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
+from tgvf_rl.public_api_compat import rebind_public_class
 
 if TYPE_CHECKING:
     from .native_agent_loop import VerlNativeTrajectoryComponentsPort
@@ -117,17 +117,12 @@ for _public_contract in (
     PolicyE2ERuntimeBuildContext,
     PolicyE2ERuntimeProduct,
 ):
-    _public_contract.__module__ = _LEGACY_PUBLIC_MODULE
-    for _member in _public_contract.__dict__.values():
-        if isinstance(_member, FunctionType) and _member.__module__ == __name__:
-            _member.__module__ = _LEGACY_PUBLIC_MODULE
-        elif isinstance(_member, property):
-            for _accessor in (_member.fget, _member.fset, _member.fdel):
-                if (
-                    isinstance(_accessor, FunctionType)
-                    and _accessor.__module__ == __name__
-                ):
-                    _accessor.__module__ = _LEGACY_PUBLIC_MODULE
+    rebind_public_class(
+        _public_contract,
+        implementation_module=__name__,
+        public_module=_LEGACY_PUBLIC_MODULE,
+    )
+del _public_contract
 
 
 __all__ = [

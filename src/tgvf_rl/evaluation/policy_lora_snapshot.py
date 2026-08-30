@@ -9,7 +9,6 @@ full-model snapshot backend.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 import fcntl
 import hashlib
@@ -18,7 +17,6 @@ import json
 import os
 from pathlib import Path
 import stat
-from types import FunctionType
 from uuid import uuid4
 
 import torch
@@ -35,6 +33,10 @@ from tgvf_rl.framework.vllm.registration import (
 )
 from tgvf_rl.observations.store import tensor_checksum
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
+from tgvf_rl.public_api_compat import (
+    rebind_public_class,
+    rebind_public_function,
+)
 
 from .policy_evaluation_config import (
     DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
@@ -751,26 +753,14 @@ def _standalone_engine_kwargs(
 _LEGACY_MODULE = "tgvf_rl.evaluation.policy_coredev"
 
 
-def _bind_legacy_function(value: Callable[..., object], *, name: str) -> None:
-    value.__module__ = _LEGACY_MODULE
-    value.__name__ = name
-    value.__qualname__ = name
-
-
 # These contracts were historically defined by policy_coredev. The facade
 # re-exports these exact objects so old imports and pickle payloads stay valid.
 for _legacy_class in (PolicyEvaluationSnapshot, VLLMLoRAAdapterIntegrityVerifier):
-    _legacy_class.__module__ = _LEGACY_MODULE
-    for _member in _legacy_class.__dict__.values():
-        if isinstance(_member, FunctionType) and _member.__module__ == __name__:
-            _member.__module__ = _LEGACY_MODULE
-        elif isinstance(_member, property):
-            for _accessor in (_member.fget, _member.fset, _member.fdel):
-                if (
-                    isinstance(_accessor, FunctionType)
-                    and _accessor.__module__ == __name__
-                ):
-                    _accessor.__module__ = _LEGACY_MODULE
+    rebind_public_class(
+        _legacy_class,
+        implementation_module=__name__,
+        public_module=_LEGACY_MODULE,
+    )
 for _function, _legacy_name in (
     (_vllm_lora_adapter_payloads, "_vllm_lora_adapter_payloads"),
     (_open_absolute_directory_nofollow, "_open_absolute_directory_nofollow"),
@@ -795,7 +785,14 @@ for _function, _legacy_name in (
     (_base_equivalent_step_zero_lora, "_base_equivalent_step_zero_lora"),
     (_standalone_engine_kwargs, "_standalone_engine_kwargs"),
 ):
-    _bind_legacy_function(_function, name=_legacy_name)
+    rebind_public_function(
+        _function,
+        implementation_module=__name__,
+        public_module=_LEGACY_MODULE,
+        public_name=_legacy_name,
+        public_qualname=_legacy_name,
+    )
+del _function, _legacy_class, _legacy_name
 
 
 __all__ = [

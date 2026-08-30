@@ -11,12 +11,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from types import FunctionType
 from typing import Literal, Protocol
 
 import torch
 
 from tgvf_rl.conditioning.base import TargetConditioningProviderKind
+from tgvf_rl.public_api_compat import (
+    rebind_public_class,
+    rebind_public_function,
+)
 from tgvf_rl.qwen.base import InjectedForwardRequest
 
 from .metrics import (
@@ -872,19 +875,11 @@ _INTERNAL_EVALUATION_CONTRACT_TYPES = (
 # These types historically lived in internal_evaluation. Preserve their public
 # and pickle coordinates while ownership moves behind that facade.
 for _contract_type in _INTERNAL_EVALUATION_CONTRACT_TYPES:
-    _contract_type.__module__ = _PUBLIC_INTERNAL_EVALUATION_MODULE
-    for _member in vars(_contract_type).values():
-        _functions = (
-            (_member.fget, _member.fset, _member.fdel)
-            if isinstance(_member, property)
-            else (_member,)
-        )
-        for _function in _functions:
-            if (
-                isinstance(_function, FunctionType)
-                and _function.__module__ == __name__
-            ):
-                _function.__module__ = _PUBLIC_INTERNAL_EVALUATION_MODULE
+    rebind_public_class(
+        _contract_type,
+        implementation_module=__name__,
+        public_module=_PUBLIC_INTERNAL_EVALUATION_MODULE,
+    )
 for _helper in (
     _assert_visual_bundle_contract,
     _non_empty_text,
@@ -892,8 +887,12 @@ for _helper in (
     _non_negative_int,
     _finite_float,
 ):
-    _helper.__module__ = _PUBLIC_INTERNAL_EVALUATION_MODULE
-del _contract_type, _function, _functions, _helper, _member
+    rebind_public_function(
+        _helper,
+        implementation_module=__name__,
+        public_module=_PUBLIC_INTERNAL_EVALUATION_MODULE,
+    )
+del _contract_type, _helper
 
 
 __all__ = [

@@ -9,11 +9,14 @@ in the public evaluator facade.
 from __future__ import annotations
 
 import math
-from types import FunctionType
 
 import torch
 from torch import nn
 
+from tgvf_rl.public_api_compat import (
+    rebind_public_class,
+    rebind_public_function,
+)
 from tgvf_rl.qwen.base import (
     CachedTokenForwardRequest,
     InjectedForwardRequest,
@@ -888,25 +891,18 @@ _NATIVE_RUNTIME_FUNCTIONS = (
 
 # Preserve the established facade and pickle coordinates without importing the
 # facade back into this runtime leaf.
-InjectedNativeCounterfactualEvaluator.__module__ = (
-    _PUBLIC_INTERNAL_EVALUATION_MODULE
+rebind_public_class(
+    InjectedNativeCounterfactualEvaluator,
+    implementation_module=__name__,
+    public_module=_PUBLIC_INTERNAL_EVALUATION_MODULE,
 )
-for _member in vars(InjectedNativeCounterfactualEvaluator).values():
-    _functions = (
-        (_member.fget, _member.fset, _member.fdel)
-        if isinstance(_member, property)
-        else (_member,)
-    )
-    for _function in _functions:
-        if (
-            isinstance(_function, FunctionType)
-            and _function.__module__ == __name__
-        ):
-            _function.__module__ = _PUBLIC_INTERNAL_EVALUATION_MODULE
 for _function in _NATIVE_RUNTIME_FUNCTIONS:
-    if _function.__module__ == __name__:
-        _function.__module__ = _PUBLIC_INTERNAL_EVALUATION_MODULE
-del _function, _functions, _member
+    rebind_public_function(
+        _function,
+        implementation_module=__name__,
+        public_module=_PUBLIC_INTERNAL_EVALUATION_MODULE,
+    )
+del _function
 
 
 __all__ = [

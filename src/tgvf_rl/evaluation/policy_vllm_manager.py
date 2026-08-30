@@ -5,12 +5,15 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from types import SimpleNamespace
-from types import FunctionType
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
 import torch
 
+from tgvf_rl.public_api_compat import (
+    rebind_public_class,
+    rebind_public_function,
+)
 from tgvf_rl.framework.verl.vllm_tool_runtime import (
     TGVFFocusMaterializationResult,
     _focus_from_utility_wire,
@@ -273,20 +276,19 @@ class StandaloneTGVFVLLMManager:
 
 # These objects were historically defined in policy_coredev.  Keep their
 # import/pickle coordinates stable while making their implementation reusable.
-_single_collective.__module__ = "tgvf_rl.evaluation.policy_coredev"
-_TurnRoute.__module__ = "tgvf_rl.evaluation.policy_coredev"
-StandaloneTGVFVLLMManager.__module__ = "tgvf_rl.evaluation.policy_coredev"
+_LEGACY_PUBLIC_MODULE = "tgvf_rl.evaluation.policy_coredev"
+rebind_public_function(
+    _single_collective,
+    implementation_module=__name__,
+    public_module=_LEGACY_PUBLIC_MODULE,
+)
 for _legacy_class in (_TurnRoute, StandaloneTGVFVLLMManager):
-    for _member in _legacy_class.__dict__.values():
-        if isinstance(_member, FunctionType) and _member.__module__ == __name__:
-            _member.__module__ = "tgvf_rl.evaluation.policy_coredev"
-        elif isinstance(_member, property):
-            for _accessor in (_member.fget, _member.fset, _member.fdel):
-                if (
-                    isinstance(_accessor, FunctionType)
-                    and _accessor.__module__ == __name__
-                ):
-                    _accessor.__module__ = "tgvf_rl.evaluation.policy_coredev"
+    rebind_public_class(
+        _legacy_class,
+        implementation_module=__name__,
+        public_module=_LEGACY_PUBLIC_MODULE,
+    )
+del _legacy_class
 
 
 __all__ = ["AdapterIntegrityVerifier", "StandaloneTGVFVLLMManager"]

@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from types import FunctionType
+
+from tgvf_rl.public_api_compat import rebind_public_class
 
 
 IMAGE_AXIS_GROUNDING_OBJECTIVE_SCHEMA_VERSION = "image_axis_grounding_objective_v1"
@@ -73,14 +74,11 @@ class ImageAxisGroundingObjectiveConfig:
 _LEGACY_PUBLIC_MODULE = (
     "tgvf_rl.representation.experiments.image_axis_grounding.trainer"
 )
-ImageAxisGroundingObjectiveConfig.__module__ = _LEGACY_PUBLIC_MODULE
-for _member in ImageAxisGroundingObjectiveConfig.__dict__.values():
-    if isinstance(_member, FunctionType) and _member.__module__ == __name__:
-        _member.__module__ = _LEGACY_PUBLIC_MODULE
-    elif isinstance(_member, property):
-        for _accessor in (_member.fget, _member.fset, _member.fdel):
-            if isinstance(_accessor, FunctionType) and _accessor.__module__ == __name__:
-                _accessor.__module__ = _LEGACY_PUBLIC_MODULE
+rebind_public_class(
+    ImageAxisGroundingObjectiveConfig,
+    implementation_module=__name__,
+    public_module=_LEGACY_PUBLIC_MODULE,
+)
 
 
 __all__ = [
