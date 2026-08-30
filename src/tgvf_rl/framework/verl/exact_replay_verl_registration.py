@@ -94,10 +94,7 @@ def build_exact_replay_fsdp2_engine_class(
                     "(parameter_stream, peft_config)"
                 )
             parameter_stream, peft_config = result
-            if (
-                not base_sync_done
-                or engine_role(self) is ComponentRole.REFERENCE
-            ):
+            if not base_sync_done or engine_role(self) is ComponentRole.REFERENCE:
                 return parameter_stream, peft_config
             if peft_config is None:
                 raise ReplayMismatchError(
