@@ -6,8 +6,9 @@ the three C2 target facades are below 1,000 lines, and the four known C3 import
 cycles are gone. C3 utility migration remains partial. C4 produced a read-only
 inventory; it did not authorize or execute a deletion. The complete
 post-consolidation hermetic suite, push, and remote CI verification remain
-required. This plan does not authorize an experiment or rewrite historical
-evidence.
+required. A policy-v3 size ratchet now records all 29 remaining oversized
+modules and rejects growth, slack, stale entries, or a relaxed baseline. This
+plan does not authorize an experiment or rewrite historical evidence.
 
 ## Why the repository feels fragmented
 
@@ -23,8 +24,8 @@ At the C2 completion snapshot `bd67d0a`, the corresponding measurements were
 1,000 lines, zero import cycles, and C2 facades of 902, 921, and 983 lines.
 The remaining structural inventory still includes:
 
-- 29 production modules above 1,000 lines that require a recorded ratchet
-  exception and a named next split, not an unmeasured waiver;
+- 29 production modules above 1,000 lines, now bound to their exact current
+  size, stable owner, rationale, and named next split by a fail-closed ratchet;
 - repeated local implementations of hashing, canonical JSON, file validation,
   and atomic publication across more than 100 files;
 - historical RP/PRL launchers, current reusable implementation, evidence
@@ -118,8 +119,11 @@ coordinates, type hints, and characterization tests:
 - the run-config facade is 983 lines; extracted schema, validation, canonical
   launch, and reward leaves are 511, 387, 838, and 259 lines.
 
-The three named C2 targets are complete. The repository-wide size condition is
-not: 29 other production modules still exceed 1,000 lines.
+The three named C2 targets are complete. Twenty-nine other production modules
+still exceed 1,000 lines, but policy v3 now records each exact current ceiling,
+owner, rationale, and next split. Candidate audit rejects new, growing, stale,
+or slack exceptions; optional baseline comparison also rejects a newly added
+exception or raised ceiling. These rows remain visible debt, not waivers.
 
 ### C3 — remove utility duplication and import cycles
 
@@ -148,6 +152,10 @@ prevents their silent return. Utility consolidation is intentionally partial:
 - `secure_file_read.py` defines separate leaf, absolute-chain, and
   descriptor-rooted contracts, but the first production migration currently
   covers only `evaluation/result_registry.py`.
+- `public_api_compat.py` owns implementation-to-facade identity rebinding for
+  nine extracted modules and changes only implementation-owned functions,
+  preventing shared `dataclasses` or `typing` helpers from being mutated by
+  import order.
 
 Names alone are not evidence of equivalent security semantics, so the
 remaining readers and publishers must be migrated one reviewed group at a
@@ -184,7 +192,7 @@ Consolidation is complete when:
 - the full hermetic CPU suite and repository audits run in CI.
 
 Current state: the entry-point disposition condition, the three C2 targets,
-the known-cycle condition, and the read-only C4 inventory are complete. The
-portable runtime/CLI closure, the 29-module size ratchet, remaining
-semantic-helper migrations, final full-suite verification, push, and remote CI
-are still open.
+the production-size exception ratchet, the known-cycle condition, and the
+read-only C4 inventory are complete. The portable runtime/CLI closure,
+remaining semantic-helper migrations, final full-suite verification, push,
+and remote CI are still open.

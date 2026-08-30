@@ -118,6 +118,22 @@ baseline simply to absorb a new machine path, run-specific module, or legacy
 configuration. Fix the new debt at its source. A baseline change is acceptable
 only for an intentional boundary migration with explicit review and evidence.
 
+## Production module size debt
+
+Repository-boundary policy v3 fixes the normal production-module limit at
+1,000 physical lines. Each of the 29 current exceptions names one exact Python
+path below `src/tgvf_rl`, its stable subsystem owner, concrete reason, next
+split seam, and a ceiling equal to its current line count. The candidate audit
+fails on an unregistered oversized module, growth above a ceiling, slack after
+a file shrinks, a missing/moved file, or an exception retained after the module
+reaches the limit.
+
+The boundary CLI also accepts an explicit baseline policy. In that mode the
+candidate exception paths must be a subset of the baseline and no ceiling may
+increase, so changing code and its allowance together cannot relax the
+ratchet. The initial v3 inventory is a reviewed bootstrap; its 29 rows are
+visible structural debt and do not declare those files well-factored.
+
 ## Running the audit
 
 From the repository root, run:

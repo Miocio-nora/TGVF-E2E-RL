@@ -23,7 +23,7 @@ not closed merely because the affected experiment has stopped running.
 
 | Area | State | Required closure |
 |---|---|---|
-| Repository ownership | partial | The boundary audit passes with zero new violations and content-binds frozen legacy config roots; 44 exact historical debts remain registered after deleting stale shell-path entries, and neutral-path semantic RP/PRL debt still needs a second policy layer. |
+| Repository ownership | partial | Boundary policy v3 passes with zero violations and 73 visible debts: 44 exact historical/config/path debts plus 29 exact oversized-module debts. Every oversized row binds its current line count, owner, rationale, and next split; optional baseline comparison rejects a new exception or raised ceiling. Neutral-path semantic RP/PRL debt still needs a second policy layer. |
 | Execution-surface inventory | verified | The v2 recursive exact-set manifest binds 79 entries and their file bytes: every Python file below `tools`/`spikes`, every shell file there, and every `src` main/module-main, Python-shebang, executable-bit, or console-entry target. Missing, extra, duplicate, moved, reclassified, or content-drifted entries fail closed. |
 | Public and historical launch surfaces | contained, not closed | Legacy/spike surfaces are inventoried and guarded. Independent review found unresolved worker-envelope, executable-FD, environment, member-claim, authorization-transaction and runtime-package gaps. Policy v2 therefore sets the non-overridable canonical runtime closure to disabled. |
 | Crop observation/action contracts | verified for the stabilization runtime | Matched60, legacy generic86 and strict/legacy action semantics are explicit identities with focused tests. No historical PRL/PRL config binds the new strict loop, so this does not retroactively certify old artifacts. |
@@ -270,8 +270,9 @@ that the source tree is already small or easy to extend. At C2 completion the
 tree contained 263 Python modules and 29 production modules above 1,000 lines.
 The three first decomposition targets are complete:
 `policy_coredev.py`, representation internal evaluation, and `run_config.py`
-are now 902, 921, and 983 lines. The remaining 29 large modules still require
-an exact ratchet exception with a named next split or an actual decomposition.
+are now 902, 921, and 983 lines. Policy v3 now gives every remaining large
+module an exact no-slack ceiling, stable owner, rationale, and named next split.
+They remain visible debt and still require actual decomposition over time.
 
 The four known multi-module import cycles are gone and a full-tree SCC test
 guards that boundary. Exact-equivalent canonical JSON helpers and three
