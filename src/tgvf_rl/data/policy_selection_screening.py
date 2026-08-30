@@ -13,6 +13,8 @@ import shutil
 import tempfile
 from typing import Any
 
+from tgvf_rl.artifact_contracts import canonical_json_bytes, canonical_json_sha256
+
 from .policy_selection import SelectionCandidate, canonical_json_line
 
 
@@ -51,14 +53,7 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _canonical_json_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+_canonical_json_bytes = canonical_json_bytes
 
 
 def _required_string(value: Any, *, field_name: str) -> str:
@@ -206,7 +201,7 @@ def screen_policy_selection_candidates(
                 "sha256": leakage_digest.hexdigest(),
             },
         }
-        content_sha256 = hashlib.sha256(_canonical_json_bytes(descriptor)).hexdigest()
+        content_sha256 = canonical_json_sha256(descriptor)
         manifest = {**descriptor, "content_sha256": content_sha256}
         manifest_bytes = _canonical_json_bytes(manifest) + b"\n"
         (temporary_root / "manifest.json").write_bytes(manifest_bytes)

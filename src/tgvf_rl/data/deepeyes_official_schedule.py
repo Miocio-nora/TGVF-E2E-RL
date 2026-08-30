@@ -24,6 +24,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
 
+from tgvf_rl.artifact_contracts import canonical_json_sha256
 from tgvf_rl.data.policy_selection import SelectionCandidate, SelectionSource
 from tgvf_rl.data.policy_t1_mixed_rl_dataset import (
     PolicyT1MixedRuntimeBinding,
@@ -84,18 +85,7 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
-
-
-def _sha256_json(value: object) -> str:
-    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+_sha256_json = canonical_json_sha256
 
 
 def _rank(seed: int, namespace: str, sample_id: str) -> tuple[str, str]:

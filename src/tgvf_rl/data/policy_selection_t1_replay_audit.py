@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from tgvf_rl.artifact_contracts import canonical_json_sha256
+
 from .policy_selection import SelectionCandidate, SelectionSource
 from .policy_selection_runtime import (
     T1_ATTEMPTS,
@@ -80,8 +82,7 @@ _IDENTITY_FIELDS = (
 )
 
 
-def _sha256_json(value: object) -> str:
-    return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+_sha256_json = canonical_json_sha256
 
 
 @dataclass(frozen=True, slots=True)

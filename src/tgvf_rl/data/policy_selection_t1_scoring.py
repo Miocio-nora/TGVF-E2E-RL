@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tgvf_rl.artifact_contracts import canonical_json_bytes, canonical_json_sha256
+
 from .policy_selection import (
     AttemptStatus,
     SelectionBranch,
@@ -48,14 +50,7 @@ T1_UNRETRIED_LENGTH_WAIVER_RUN_IDS = frozenset(
 )
 
 
-def _canonical_json_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+_canonical_json_bytes = canonical_json_bytes
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -222,7 +217,7 @@ def _judge_queue(
             "candidate_answer": answer,
             "reference_answer": candidate.ground_truth,
         }
-        payload_sha256 = _sha256_bytes(_canonical_json_bytes(payload))
+        payload_sha256 = canonical_json_sha256(payload)
         judge_request_id = f"t1-semantic-judge:{payload_sha256}"
         consumer = {
             "request_id": evidence.request_id,
@@ -435,7 +430,7 @@ def materialize_t1_deterministic_scoring(
         "quality_exclusions_sha256": quality_sha256,
         "files": files,
     }
-    manifest_sha256 = _sha256_bytes(_canonical_json_bytes(manifest_identity))
+    manifest_sha256 = canonical_json_sha256(manifest_identity)
     manifest = {**manifest_identity, "manifest_sha256": manifest_sha256}
     manifest_payload = _canonical_json_bytes(manifest) + b"\n"
     _atomic_write_immutable(output_root / "manifest.json", manifest_payload)

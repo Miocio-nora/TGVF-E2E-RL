@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tgvf_rl.artifact_contracts import canonical_json_bytes, canonical_json_sha256
 from tgvf_rl.judges.openai_compatible import (
     QWEN25_72B_RL_JUDGE_SYSTEM_PROMPT,
     _binary_verdict,
@@ -47,14 +48,7 @@ T1_JUDGE_DIRECTORY = Path("scoring") / "judge-v1"
 T1_FINAL_DIRECTORY = Path("scoring") / "final-v1"
 
 
-def _canonical_json_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+_canonical_json_bytes = canonical_json_bytes
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -88,7 +82,7 @@ def _load_scoring_queue(
         raise ValueError("deterministic scoring manifest identity differs")
     identity = dict(manifest)
     manifest_sha256 = identity.pop("manifest_sha256", None)
-    if manifest_sha256 != _sha256_bytes(_canonical_json_bytes(identity)):
+    if manifest_sha256 != canonical_json_sha256(identity):
         raise ValueError("deterministic scoring manifest SHA-256 differs")
     file_record = manifest.get("files", {}).get("semantic_judge_requests")
     if not isinstance(file_record, Mapping):
@@ -116,7 +110,7 @@ def _load_scoring_queue(
         }
         if request_id != f"t1-semantic-judge:{payload_sha256}":
             raise ValueError("semantic judge request identity differs")
-        if payload_sha256 != _sha256_bytes(_canonical_json_bytes(payload)):
+        if payload_sha256 != canonical_json_sha256(payload):
             raise ValueError("semantic judge payload SHA-256 differs")
         if request_id in request_ids:
             raise ValueError("duplicate semantic judge request ID")
@@ -212,7 +206,7 @@ def _load_completed_index(
     index = json.loads(index_path.read_text(encoding="utf-8"))
     index_identity = dict(index)
     index_sha256 = index_identity.pop("index_sha256", None)
-    if index_sha256 != _sha256_bytes(_canonical_json_bytes(index_identity)):
+    if index_sha256 != canonical_json_sha256(index_identity):
         raise ValueError("semantic judge resume index SHA-256 differs")
     if (
         index.get("schema_version") != T1_JUDGE_INDEX_SCHEMA
@@ -229,7 +223,7 @@ def _load_completed_index(
     evidence = json.loads(payload)
     evidence_identity = dict(evidence)
     evidence_sha256 = evidence_identity.pop("evidence_sha256", None)
-    if evidence_sha256 != _sha256_bytes(_canonical_json_bytes(evidence_identity)):
+    if evidence_sha256 != canonical_json_sha256(evidence_identity):
         raise ValueError("semantic judge evidence identity SHA-256 differs")
     if evidence_sha256 != index.get("evidence_sha256"):
         raise ValueError("semantic judge index/evidence SHA-256 differs")
@@ -357,7 +351,7 @@ async def run_t1_semantic_judge(
                         "evidence_file_sha256": _sha256_bytes(evidence_payload),
                         "verdict": verdict,
                     }
-                    index_sha256 = _sha256_bytes(_canonical_json_bytes(index_identity))
+                    index_sha256 = canonical_json_sha256(index_identity)
                     index = {**index_identity, "index_sha256": index_sha256}
                     _atomic_write_immutable(
                         _index_path(output_root, request),
@@ -411,7 +405,7 @@ async def run_t1_semantic_judge(
         "indices_sha256": _sha256_bytes(_records_payload(indices)),
         "indices": indices,
     }
-    manifest_sha256 = _sha256_bytes(_canonical_json_bytes(manifest_identity))
+    manifest_sha256 = canonical_json_sha256(manifest_identity)
     manifest = {**manifest_identity, "manifest_sha256": manifest_sha256}
     _atomic_write_immutable(
         output_root / "manifest.json", _canonical_json_bytes(manifest) + b"\n"
@@ -447,7 +441,7 @@ def finalize_t1_scoring(
         or judge_manifest.get("scoring_manifest_sha256")
         != scoring_manifest_sha256
         or judge_manifest_sha256
-        != _sha256_bytes(_canonical_json_bytes(judge_identity))
+        != canonical_json_sha256(judge_identity)
     ):
         raise ValueError("semantic judge manifest identity differs")
     index_by_judge_id = {
@@ -556,7 +550,7 @@ def finalize_t1_scoring(
         "judge_manifest_sha256": judge_manifest_sha256,
         "files": files,
     }
-    final_manifest_sha256 = _sha256_bytes(_canonical_json_bytes(manifest_identity))
+    final_manifest_sha256 = canonical_json_sha256(manifest_identity)
     final_manifest = {
         **manifest_identity,
         "manifest_sha256": final_manifest_sha256,

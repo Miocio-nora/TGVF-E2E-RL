@@ -19,6 +19,8 @@ import platform
 import tempfile
 from typing import Any
 
+from tgvf_rl.artifact_contracts import canonical_json_bytes, canonical_json_sha256
+
 from .policy_selection import (
     SelectionBranch,
     SelectionCandidate,
@@ -55,14 +57,7 @@ if set(_EXPECTED_PROMPT_SUFFIX_BY_REPOSITORY) != set(T1_MODEL_PATH_BY_REPOSITORY
     raise RuntimeError("T1 model and native prompt-suffix allowlists differ")
 
 
-def _canonical_json_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+_canonical_json_bytes = canonical_json_bytes
 
 
 def _sha256_file(path: Path) -> str:
@@ -250,7 +245,7 @@ def _mm_uuid(run: T1RunConfig, candidate: SelectionCandidate) -> str:
         "min_pixels": run.image["min_pixels"],
         "max_pixels": run.image["max_pixels"],
     }
-    return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+    return canonical_json_sha256(value)
 
 
 def load_candidate_rgb(

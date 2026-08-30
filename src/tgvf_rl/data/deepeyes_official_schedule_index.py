@@ -24,6 +24,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from tgvf_rl.artifact_contracts import canonical_json_bytes, canonical_json_sha256
 from tgvf_rl.data.deepeyes_official_schedule import (
     DEEPEYES_BATCH_COUNTS,
     DEEPEYES_CANDIDATE_ROWS,
@@ -94,22 +95,14 @@ _IMAGE_FIELDS = {"path", "sha256", "width", "height"}
 _HEX = frozenset("0123456789abcdef")
 
 
-def _canonical_json_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+_canonical_json_bytes = canonical_json_bytes
 
 
 def _sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _sha256_json(value: object) -> str:
-    return _sha256_bytes(_canonical_json_bytes(value))
+_sha256_json = canonical_json_sha256
 
 
 def _require_sha256(value: object, name: str) -> str:

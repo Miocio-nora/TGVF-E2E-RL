@@ -20,6 +20,8 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
+from tgvf_rl.artifact_contracts import canonical_json_bytes, canonical_json_sha256
+
 from .policy_selection_runtime import (
     T1_ATTEMPTS,
     T1RunConfig,
@@ -39,14 +41,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ARTIFACT_ROOT = _REPO_ROOT / "artifacts" / "data" / "policy_selection" / "t1"
 
 
-def _canonical_json_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+_canonical_json_bytes = canonical_json_bytes
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -201,7 +196,7 @@ def build_t1_resume_smoke_plan(
         output_root=output_root,
         continuous_baseline_root=baseline_root,
         audit_root=audit_root,
-        plan_sha256=_sha256_bytes(_canonical_json_bytes(identity)),
+        plan_sha256=canonical_json_sha256(identity),
     )
 
 
@@ -254,7 +249,7 @@ def validate_t1_resume_smoke_prefix(
     }
     return {
         **snapshot_identity,
-        "snapshot_sha256": _sha256_bytes(_canonical_json_bytes(snapshot_identity)),
+        "snapshot_sha256": canonical_json_sha256(snapshot_identity),
     }
 
 
@@ -295,7 +290,7 @@ def t1_resume_smoke_core_digest(root: Path, plan: T1ResumeSmokePlan) -> str:
         }
         for path in paths
     ]
-    return _sha256_bytes(_canonical_json_bytes(identity))
+    return canonical_json_sha256(identity)
 
 
 def compare_t1_resume_with_continuous(plan: T1ResumeSmokePlan) -> dict[str, Any]:
@@ -356,7 +351,7 @@ def compare_t1_resume_with_continuous(plan: T1ResumeSmokePlan) -> dict[str, Any]
     }
     return {
         **identity,
-        "report_sha256": _sha256_bytes(_canonical_json_bytes(identity)),
+        "report_sha256": canonical_json_sha256(identity),
     }
 
 
