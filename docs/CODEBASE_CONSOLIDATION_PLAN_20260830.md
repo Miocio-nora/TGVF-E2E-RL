@@ -26,8 +26,19 @@ CI workflow in run `33304029789`.
 Worker-startup identity scaffold commit `6cb133d` is independently green across
 the complete remote workflow in run `33304509263`.
 The later compile-verifier import-firebreak follow-up has 2,427 passed, five
-skipped, and four warnings in 143.16 seconds. It is locally green and awaits its
-own remote result.
+skipped, and four warnings in 143.16 seconds. Its first two remote attempts
+exposed FIFO regression tests that charged dependency-heavy imports against the
+short refusal timeout. Test-only commit `2488487` separates import readiness
+from FIFO refusal and is green across the complete workflow in run
+`33305858959`.
+Atomic worker-startup envelope commit `cd1eb5e` and its UTF-8 hardening follow-up
+`4bba7e9` are green across complete remote runs `33306088543` and `33306353388`,
+respectively.
+Runtime-locator scaffold commit `c60828d` has 50 focused tests, two isolated
+import/firebreak tests, 201 repository/control tests, and all 404 `tests/ops`
+tests passing locally. Its complete hermetic CPU suite has 2,508 passed, five
+skipped, and four warnings in 139.30 seconds; complete remote run `33307853768`
+is green.
 Policy v3 revision 7 records the 17 remaining oversized modules and rejects
 growth, slack, stale entries, or a relaxed baseline. This plan does not
 authorize an experiment or rewrite historical evidence.
@@ -80,7 +91,13 @@ the complete CPU suite in remote run `33304029789`.
 The newer compile-verifier import-firebreak head has 2,427 passed, five skipped,
 and four warnings in 143.16 seconds. Execution-surface revision 7 and boundary
 revision 7 pass locally at 79 surfaces/zero violations and 61 debts/zero
-violations, respectively; this head awaits its own remote workflow.
+violations, respectively. Its lineage is remotely green at test-only FIFO timing
+fix `2488487` in run `33305858959`. Envelope commit `cd1eb5e` and UTF-8
+hardening commit `4bba7e9` are remotely green in runs `33306088543` and
+`33306353388`. The later runtime-locator head `c60828d` has a complete local
+result of 2,508 passed, five skipped, and four warnings in 139.30 seconds, plus
+50 focused locator, two isolated import/firebreak, 201 repository/control, and
+404 complete `tests/ops` passes. Complete remote run `33307853768` is green.
 Predecessor commit `a5dd0d1` is green across install, lint, both audits, and the
 full CPU job after five private-machine-path test fixtures were made hermetic.
 The fd-closure head `ab508c4` is independently green in remote run
@@ -229,8 +246,51 @@ Execution-surface revision 7 binds the changed Policy worker and control
 utility. Sixty-nine migration-focused tests pass; the full hermetic CPU suite
 has 2,427 passed, five skipped, and four warnings in 143.16 seconds. Boundary
 revision 7 remains at 61 debts/zero violations and the control audit remains at
-79 surfaces/zero violations. These results are local until this head's remote
-workflow completes.
+79 surfaces/zero violations. Runs `33305253971` and `33305571095` failed only
+because two FIFO regressions included the heavy import phase inside the short
+refusal deadline. Commit `2488487` gives import readiness 30 seconds and then
+requires FIFO refusal within five seconds; its complete remote workflow is green
+in run `33305858959`.
+
+## 2026-08-30 atomic worker-startup envelope follow-up
+
+Commit `cd1eb5e` wraps worker identities in one strict canonical envelope. The
+Policy role set is exactly `{policy-driver}`; the Representation role set is
+exactly `{representation-launcher, representation-member}`, with only the
+launcher admitted as entry. Nested duplicate or unknown fields, non-finite
+values, non-canonical JSON, a changed identity digest, or a changed role set fail
+closed. The envelope exposes exactly three authorization parameters: schema,
+canonical JSON, and SHA-256. The legacy flat identity API is unchanged. The
+complete remote workflow is green in run `33306088543`.
+
+Commit `4bba7e9` also rejects every command argument that is not valid UTF-8
+text, including a lone surrogate. Its complete remote workflow is green in run
+`33306353388`. Neither commit wires the envelope into canonical dispatch or
+provides Representation member claims, so experiment policy revision 4 remains
+frozen with all seven blockers.
+
+## 2026-08-30 explicit runtime-locator scaffold
+
+Commit `c60828d` defines an externally SHA-256/byte-length-bound canonical
+manifest for an exact executable, cache tag, authorized target coordinates,
+the pure-Python import root above `tgvf_rl/`, and ordered dependency roots.
+Descriptor-relative no-follow traversal verifies exact tree inventories and
+retains root descriptors in PID-bound, non-copyable, non-pickleable evidence.
+It never discovers paths from the interpreter or environment, and `.pth` files
+remain inert. A fresh `python -B -P -S` regression imports the authorized
+targets and a dependency through duplicated descriptor-backed roots.
+
+Local validation has 50 runtime-locator tests, two isolated import/firebreak
+tests, 201 repository/control tests, and all 404 `tests/ops` tests passing. The
+complete hermetic CPU suite has 2,508 passed, five skipped, and four warnings in
+139.30 seconds, and complete remote run `33307853768` is green. Evidence remains
+explicitly incomplete:
+`closure_complete=false`, with residual
+`same-uid-mutable-executable-and-runtime-trees-have-no-atomic-observation-during-or-after-verification-v1`.
+The sequential scan is not an atomic snapshot, the executable descriptor is not
+retained through execution, and a formal stage-0 loader/module-origin proof is
+still absent. This scaffold removes no experiment blocker; revision 4 remains
+launch-disabled with the same seven identifiers.
 
 ## Why the repository feels fragmented
 
@@ -415,6 +475,32 @@ unanchored detached commits that must receive exact durable tags before any
 later removal is considered. No action code in that document is deletion
 approval.
 
+At canonical head `c60828d`, both local `main` and `origin/main` are strict
+ancestors of the stabilization line. The line is ahead by 117 and 75 commits,
+respectively; local `main` is itself 42 commits behind `origin/main`. Its delta
+from local `main` is 297 paths: 138 additions, 156 modifications, and three
+deletions. This linear graph permits a fast-forward but does not make the
+physical worktree promotion-ready.
+
+Physical `main` has 93 collapsed status entries: 38 unstaged tracked
+modifications and 55 untracked entries, with no staged, deleted, renamed, or
+copied entry. Expanded untracked enumeration has 132 entries total, including
+94 untracked paths and 14 below `.worktrees/`. Nineteen dirty paths overlap the
+stabilization delta. Eighteen modify/modify cases pass a read-only textual merge
+probe. The remaining modify/delete case is
+`tools/supervise_prl14_cleanfinal16_eval.sh`, modified on physical `main` but
+deleted on the stabilization line. Fast-forward promotion cannot reconcile
+that uncommitted state.
+
+The two clean unanchored detached heads are
+`2d61b07995b1d5b90c221fe1faf5090e8d985fef` at
+`/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.eval-runtime-rp70-20260802`
+and `151701fdb13c5ecf6fac6c0f67760e51c427c277` at
+`/tmp/prl26-gap-fix-NNVbZQ/worktree`. Neither has a containing local branch,
+remote-tracking branch, or tag. Preserving physical-main state and anchoring
+these commits require explicit operator-authorized actions; this plan does not
+authorize promotion, tagging, archival, or deletion.
+
 ## Definition of done
 
 Consolidation is complete when:
@@ -438,8 +524,12 @@ strict child-environment blocker are complete, and C4 remains a read-only
 inventory. Validated one-use proof fields are also consumed before downstream
 dispatch. The predecessor, fd-closure, strict child-environment, and
 proof-consumption checkpoints all have green remote CPU CI. The newer
-compile-verifier import-firebreak checkpoint is locally green and awaits its
-own remote result.
+compile-verifier import-firebreak lineage is remotely green at FIFO timing fix
+`2488487` in run `33305858959`; atomic envelope `cd1eb5e` and UTF-8 hardening
+`4bba7e9` are green in runs `33306088543` and `33306353388`. Runtime-locator
+head `c60828d` has 2,508 local passes, five skips, and four warnings, but
+deliberately reports incomplete closure; complete remote run `33307853768` is
+green.
 Portable runtime/CLI closure remains disabled by seven named blockers, now
 including `role_scoped_judge_secret_transport_missing`; immutable code/startup
 closure, the worker envelope and member claims, Ray-descendant environment

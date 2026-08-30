@@ -274,7 +274,91 @@ frozen with the same seven blockers. Execution-surface revision 7 binds the
 changed Policy worker and control utility; the full hermetic CPU suite has
 2,427 passed, five skipped, and four warnings in 143.16 seconds. Boundary and
 control audits pass locally at 61 debts/zero violations and 79 surfaces/zero
-violations.
+violations. The first two remote attempts, runs `33305253971` at `2c2b17b` and
+`33305571095` at `54fb8b9`, exposed FIFO regression tests that counted the
+dependency-heavy import phase against the short refusal timeout. Test-only
+commit `2488487` separates a 30-second import-readiness phase from the
+five-second FIFO-refusal phase; the complete remote workflow is green in run
+`33305858959`.
+
+## 2026-08-30 atomic worker-startup envelope follow-up
+
+Commit `cd1eb5e` adds one canonical `WorkerStartupEnvelope` around the existing
+worker identities. A Policy envelope has exactly the `policy-driver` role. A
+Representation envelope has exactly the `representation-launcher` and
+`representation-member` roles, and a member cannot be the entry role. Nested
+records use strict canonical JSON: duplicate or unknown fields, non-finite
+values, non-canonical spelling, changed identity digests, and an incorrect role
+set fail closed. One envelope contributes exactly three collision-free
+authorization parameters: its schema, canonical JSON, and SHA-256. The legacy
+flat identity API remains unchanged. This commit is green across the complete
+remote workflow in run `33306088543`.
+
+Commit `4bba7e9` additionally refuses a command argument that cannot be encoded
+as UTF-8, including a lone surrogate, before canonical serialization. It is
+green across the complete remote workflow in run `33306353388`.
+
+These contracts are not yet connected to canonical launch dispatch. They do not
+provide member claims, a formal stage-0 bootstrap, or role-scoped secret
+transport. Experiment policy revision 4 therefore remains unchanged:
+`runtime_closure.launch_enabled=false` with the same seven blockers.
+
+## 2026-08-30 explicit runtime-locator scaffold
+
+Commit `c60828d` adds a dependency-light, explicitly declared runtime locator.
+Its strict canonical manifest is externally bound by source SHA-256 and byte
+length and declares the executable, cache tag, authorized target coordinates,
+the exact pure-Python import root above `tgvf_rl/`, and ordered dependency
+roots. Descriptor-relative no-follow traversal verifies each exact directory
+and regular-file inventory, rejects bytecode and native runtime-package
+candidates, and retains the verified import/dependency root descriptors in
+PID-bound, non-copyable, non-pickleable evidence. Declared `.pth` files remain
+inert bytes. A fresh `python -B -P -S` test imports both authorized targets and
+a dependency through duplicated `/proc/self/fd` roots passed with `pass_fds`.
+
+Local validation has 50 runtime-locator tests, two isolated import/firebreak
+tests, 201 repository/control tests, and 404 complete `tests/ops` tests passing.
+The complete hermetic CPU suite has 2,508 passed, five skipped, and four warnings
+in 139.30 seconds. Commit `c60828d` is green across the complete remote workflow
+in run `33307853768`. The evidence deliberately reports `closure_complete=false`
+and the exact residual
+`same-uid-mutable-executable-and-runtime-trees-have-no-atomic-observation-during-or-after-verification-v1`.
+Sequential verification is not one atomic filesystem snapshot; the executable
+descriptor is not retained through execution; and the formal stage-0 loader and
+module-origin proof is absent. This scaffold neither supplies an immutable
+runtime package nor closes a launch blocker. Experiment policy revision 4 and
+all seven blockers remain unchanged.
+
+## 2026-08-30 canonical line versus physical `main`
+
+At committed head `c60828d`, the canonical stabilization branch and its remote
+tracking ref are synchronized. The graph is linear: it is 117 commits ahead of
+local `main` and 75 ahead of `origin/main`, with no commits on either comparison
+side that are absent from the stabilization line. Local `main` itself is 42
+commits behind `origin/main`. The stabilization delta from local `main` spans
+297 paths: 138 additions, 156 modifications, and three deletions.
+
+That graph permits a fast-forward, but the physical `main` worktree is not
+promotion-ready. It has 93 collapsed status entries: 38 unstaged tracked
+modifications and 55 untracked entries, with no staged, deleted, renamed, or
+copied entry. Expanding untracked directories yields 132 entries, including 94
+untracked paths and 14 paths below `.worktrees/`. Nineteen dirty paths overlap
+the stabilization delta. Eighteen are modify/modify and pass a read-only textual
+merge probe; `tools/supervise_prl14_cleanfinal16_eval.sh` is modified on
+physical `main` but deleted on the stabilization line and needs an explicit
+decision. A fast-forward does not merge any of this uncommitted state.
+
+Two clean detached worktrees also have no containing local branch,
+remote-tracking branch, or tag:
+
+- `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.eval-runtime-rp70-20260802`
+  at `2d61b07995b1d5b90c221fe1faf5090e8d985fef`;
+- `/tmp/prl26-gap-fix-NNVbZQ/worktree` at
+  `151701fdb13c5ecf6fac6c0f67760e51c427c277`.
+
+The canonical line is a real, tested integration line; it is not merely an
+audit. Physical `main` promotion, preservation tags, archival, and deletion
+remain separate operator-authorized actions.
 
 ## Absolute-path debt
 
@@ -473,4 +557,13 @@ four warnings in 141.13 seconds. Commit `311770f` passes install, lint, both
 audits, and the complete CPU suite in remote run `33304029789`.
 The newer compile-verifier import-firebreak follow-up has 69 focused passes and
 a full hermetic CPU result of 2,427 passed, five skipped, and four warnings in
-143.16 seconds. It is local until its own remote run completes.
+143.16 seconds. After two FIFO test-harness timing failures, test-only commit
+`2488487` passes the complete remote workflow in run `33305858959`. Atomic
+worker-envelope commit `cd1eb5e` and UTF-8 hardening commit `4bba7e9` are green
+in remote runs `33306088543` and `33306353388`, respectively. Runtime-locator
+commit `c60828d` has 50 focused tests, two isolated import/firebreak tests, 201
+repository/control tests, all 404 `tests/ops` tests, and a complete hermetic CPU
+suite of 2,508 passed, five skipped, and four warnings in 139.30 seconds. Its
+complete remote workflow is green in run `33307853768`. The non-atomic same-UID
+mutation residual remains launch-blocking under the existing immutable-runtime
+package blocker.

@@ -9,6 +9,13 @@ authorization to launch training or evaluation.
 - Worktree: `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-stabilize-protocol-v1`
 - Branch: `stabilize/protocol-contract-v1-20260830`
 - Base: `origin/main` at `43f2295c15da2bbc14972af6b63f0038e7789c3f`
+- Current committed head: `c60828da828cc3741709bc8370b7d771d6c48200`,
+  synchronized with the remote stabilization branch and green in complete
+  remote CI run `33307853768`.
+- Commit graph: zero commits unique to local `main` and 117 unique to the
+  stabilization line; zero unique to `origin/main` and 75 unique to the
+  stabilization line. Local `main` is 42 commits behind `origin/main`, and both
+  are strict ancestors of the canonical head.
 - Experiment execution: frozen until the protocol, evidence, control-plane,
   and test gates in this document pass.
 - Integration rule: selectively port reviewed changes. Do not merge an entire
@@ -25,14 +32,14 @@ not closed merely because the affected experiment has stopped running.
 |---|---|---|
 | Repository ownership | partial | Boundary policy v3 revision 7 passes with zero violations and 61 visible debts: five evidence-only roots, 25 machine paths, 17 oversized modules, and 14 run-specific paths. Every oversized row binds its current line count, owner, rationale, and next split; baseline comparison rejects a new exception or raised ceiling. Neutral-path semantic RP/PRL debt still needs a second policy layer. |
 | Execution-surface inventory | verified | Execution-surface policy revision 7 binds 79 entries and their file bytes under the v2 recursive exact-set schema: every Python file below `tools`/`spikes`, every shell file there, and every `src` main/module-main, Python-shebang, executable-bit, or console-entry target. Missing, extra, duplicate, moved, reclassified, or content-drifted entries fail closed, and the control-plane audit passes with zero violations. |
-| Public and historical launch surfaces | contained; fd execution and strict child environment narrowly closed | Legacy/spike surfaces remain inventoried and guarded. Descriptor-bound Python execution and exact empty-built canonical child environments have implementation, adversarial coverage, and policy promotion. Experiment policy revision 4 removes their blocker IDs but keeps launch false with seven blockers. Immutable runtime packaging, Python startup/`.pth` and import-before-authorization closure, worker startup envelope/member claims, role-scoped judge-secret transport, exact Ray-descendant environments, authorization transaction, and the artifact/compiler blockers are not thereby solved. |
+| Public and historical launch surfaces | contained; fd execution and strict child environment narrowly closed | Legacy/spike surfaces remain inventoried and guarded. Descriptor-bound Python execution and exact empty-built canonical child environments have implementation, adversarial coverage, and policy promotion. Atomic worker-envelope and explicit runtime-locator scaffolds now exist, but neither is wired into canonical launch authority and the locator explicitly reports incomplete closure. Experiment policy revision 4 keeps launch false with seven blockers. Immutable runtime packaging and stage-0/import closure, worker member claims, role-scoped judge-secret transport, exact Ray-descendant environments, authorization transaction, and the artifact/compiler blockers remain unsolved. |
 | Crop observation/action contracts | verified for the stabilization runtime | Matched60, legacy generic86 and strict/legacy action semantics are explicit identities with focused tests. No historical RP/PRL config binds the new strict loop, so this does not retroactively certify old artifacts. |
 | TGVF/Atomic observation layout | verified | Live append and immutable replay/layout consume the same once-rendered protocol/dialect-bound bytes; the layout has no implicit Thinking renderer. |
 | Historical TGVF/Atomic impact | verified | Implementation commits `b100d3d`, `ec0555b`, `8e6b3d`, `5baddc` and provenance checkouts `b87126a`, `017b507`, `001838b` explicitly pass one dialect-bound renderer to appender and layout. Training replay consumes the recorded token rows, so the unused fallback does not downgrade those rows. Their runtime is `training_run`/precomputed, not official-visible/native-pixel. |
 | Result comparisons | contained, not closed | Registry v2 verifies score-file bytes/content and independent preregistration bytes, but those artifacts do not bind a score to evaluation identity, the exact trajectory set, weights and the full comparison contract. V2 rejects every `golden` status and every numeric delta. Its implementation is now split into a 292-line facade, 839-line schema leaf, and 225-line support leaf without changing historical imports or serialization coordinates. |
 | Policy compile prerequisites | blocked | The hidden worktree-local default is removed and a strict content-bound v1 manifest now binds four minimum declared files. Launch remains blocked because recursive Python headers and the compiler system-toolchain are not yet closed by the manifest schema. |
 | Snapshot filesystem closure | partial | LoRA closure reads use descriptor-relative traversal and immutable publications use no-replace semantics. Full-model freeze stores immutable manifest/receipt records rather than copying the external weights; official loading now hashes the complete bound checkpoint/model closure and repeats that verification immediately before vLLM construction, including same-size mutation tests. vLLM 0.12 exposes neither a loaded-adapter nor loaded-full-model digest, so same-UID mutation after the final verification remains a documented runtime residual. |
-| Test discovery and behavior | newest head local green; preceding remote checkpoints preserved | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The fd-closure hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; before its added size-tamper parameter, the focused selection had 304 passing tests and the updated fd security file passed 10/10. Predecessor commit `a5dd0d1` and fd-closure head `ab508c4` are remotely green, the latter in run `33300849634`. Strict child-environment head `5c058a1` has 2,383 local passes and is remotely green in run `33302879219`. The authorization-proof consumption follow-up has 2,386 passes and is remotely green in run `33304029789`; worker-startup scaffold commit `6cb133d` is remotely green in run `33304509263`. The newer compile-verifier import-firebreak head has 2,427 passed, five skips, four warnings, and zero failures in 143.16 seconds; its 69 migration-focused tests pass. Current policies report boundary revision 7 at 61 debts/zero violations plus execution-surface revision 7 at 79 surfaces/zero violations. The newest head awaits its own remote workflow. |
+| Test discovery and behavior | current canonical head local and remote green; historical checkpoints preserved | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The fd-closure hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; before its added size-tamper parameter, the focused selection had 304 passing tests and the updated fd security file passed 10/10. Predecessor commit `a5dd0d1` and fd-closure head `ab508c4` are remotely green, the latter in run `33300849634`. Strict child-environment head `5c058a1` has 2,383 local passes and is remotely green in run `33302879219`. The authorization-proof consumption follow-up has 2,386 passes and is remotely green in run `33304029789`; worker-startup scaffold commit `6cb133d` is remotely green in run `33304509263`. Compile-verifier lineage fix `2488487`, atomic envelope `cd1eb5e`, and UTF-8 hardening `4bba7e9` are green in remote runs `33305858959`, `33306088543`, and `33306353388`. Runtime-locator head `c60828d` has 50 focused, two isolated import/firebreak, 201 repository/control, and 404 complete `tests/ops` passes; its full hermetic suite has 2,508 passed, five skips, and four warnings in 139.30 seconds, and complete remote run `33307853768` is green. Current policies report boundary revision 7 at 61 debts/zero violations plus execution-surface revision 7 at 79 surfaces/zero violations. |
 
 ## 2026-08-30 fd-closure checkpoint
 
@@ -174,7 +181,59 @@ Execution-surface revision 7 binds the changed Policy worker and control
 utility. Sixty-nine migration-focused tests pass; the final hermetic CPU suite
 has 2,427 passed, five skipped, and four warnings in 143.16 seconds. Boundary
 revision 7 reports 61 debts/zero violations and the control audit reports 79
-surfaces/zero violations. This head is local until its own remote run completes.
+surfaces/zero violations. Remote runs `33305253971` and `33305571095` exposed
+two FIFO tests whose short deadlines also covered dependency-heavy imports.
+Test-only commit `2488487` separates a 30-second readiness phase from the
+five-second FIFO refusal phase and is green across the complete remote workflow
+in run `33305858959`.
+
+## 2026-08-30 atomic worker-startup envelope follow-up
+
+Commit `cd1eb5e` adds an atomic `WorkerStartupEnvelope` without changing the
+legacy flat identity API. Policy requires exactly `{policy-driver}`;
+Representation requires exactly `{representation-launcher,
+representation-member}`, and the member cannot be the entry role. Strict
+canonical nested JSON rejects duplicate or unknown fields, non-finite values,
+non-canonical spelling, an identity-digest mismatch, and a changed role set.
+Exactly three authorization parameters bind the complete envelope: schema,
+canonical JSON, and SHA-256. The complete remote workflow is green in run
+`33306088543`.
+
+Commit `4bba7e9` further rejects command arguments that cannot be encoded as
+UTF-8, including a lone surrogate, before canonical serialization. It is green
+across the complete remote workflow in run `33306353388`. These contracts are
+not connected to canonical dispatch and do not provide member claims, so
+experiment policy revision 4 remains frozen with all seven blockers.
+
+## 2026-08-30 explicit runtime-locator scaffold
+
+Commit `c60828d` adds a strict canonical manifest externally bound by source
+SHA-256 and byte length. It declares the executable, cache tag, authorized
+target coordinates, exact pure-Python import root above `tgvf_rl/`, and ordered
+dependency roots. Descriptor-relative no-follow traversal verifies exact tree
+inventories, rejects bytecode and native runtime-package candidates, and
+retains the import/dependency root descriptors in PID-bound, non-copyable,
+non-pickleable evidence. The implementation does not discover paths from the
+interpreter or environment, and declared `.pth` files remain inert bytes. A
+fresh `python -B -P -S` regression imports the authorized targets and a
+dependency through duplicated descriptor-backed roots passed with `pass_fds`.
+
+Local verification has 50 runtime-locator tests, two isolated import/firebreak
+tests, 201 repository/control tests, and all 404 `tests/ops` tests passing. The
+complete hermetic CPU suite has 2,508 passed, five skipped, and four warnings in
+139.30 seconds. Commit `c60828d` is green across the complete remote workflow in
+run `33307853768`; its `unit-and-control-plane` job `99247475104` completed
+successfully.
+
+The evidence deliberately reports `closure_complete=false` and the exact
+residual
+`same-uid-mutable-executable-and-runtime-trees-have-no-atomic-observation-during-or-after-verification-v1`.
+A same-UID writer can change an earlier file while a later file is scanned or
+change verified bytes afterward; the executable descriptor is not retained
+through execution; and no formal stage-0 loader/module-origin proof exists.
+This scaffold is not an immutable runtime package and removes no blocker.
+Experiment policy revision 4 remains launch-disabled with the same seven exact
+identifiers.
 
 ## Historical post-ratchet consolidation milestone (`fd8da97`)
 
@@ -249,6 +308,24 @@ be removed, reset, stashed, or cleaned by the stabilization work:
 | 2 | `prl27-crop-replay-renderer-fix-20260830` | `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl27-replay-fix` |
 | 1 | `prl26b-generic86-matched-eval-20260830` | `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl26b-generic86-eval` |
 
+The physical `main` row's 93 collapsed entries are 38 unstaged tracked
+modifications and 55 untracked entries, with no staged, deleted, renamed, or
+copied entry. Expanding untracked directories yields 132 entries: the same 38
+tracked modifications plus 94 untracked paths, 14 of them below `.worktrees/`.
+At canonical head `c60828d`, the stabilization delta from local `main` spans 297
+paths: 138 additions, 156 modifications, and three deletions. Nineteen dirty
+paths overlap that delta. Eighteen are modify/modify and pass a read-only
+textual merge probe. The remaining modify/delete case is
+`tools/supervise_prl14_cleanfinal16_eval.sh`, which is modified on physical
+`main` and deleted on the stabilization line. A graph-only fast-forward cannot
+merge or preserve this uncommitted state.
+
+The graph itself is linear: the stabilization line is 117 commits ahead of
+local `main` and 75 ahead of `origin/main`, with neither comparison having a
+commit absent from the stabilization line. Local `main` is 42 commits behind
+`origin/main`. Consequently, the canonical unified line exists, but physical
+`main` is not promotion-ready.
+
 At baseline there were 71 registered worktrees before this stabilization
 worktree was added, 61 local branches, and 34 `origin/*` remote-tracking
 branches. The new stabilization worktree/branch raises the first two counts by
@@ -261,6 +338,17 @@ It also records 62 local branches. The complete per-path/per-ref table is
 Every artifact reference remains unknown, so even a clean row is only a
 review-only candidate. This audit does not remove a worktree or branch, and
 every exact deletion still requires separate operator approval.
+
+The two clean detached heads with no containing local branch, remote-tracking
+branch, or tag are:
+
+- `2d61b07995b1d5b90c221fe1faf5090e8d985fef` at
+  `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.eval-runtime-rp70-20260802`;
+- `151701fdb13c5ecf6fac6c0f67760e51c427c277` at
+  `/tmp/prl26-gap-fix-NNVbZQ/worktree`.
+
+Physical-main preservation, durable tags for these heads, branch promotion,
+archival, and deletion all require separate explicit operator authorization.
 
 ## Runtime preservation boundary
 
@@ -486,7 +574,14 @@ but is not score provenance.
   fixtures were made hermetic. Fd-closure head `ab508c4` independently passes
   install, lint, both audits, and the complete CPU suite in remote run
   `33300849634`. Strict child-environment head `5c058a1` independently passes
-  the same stages in remote run `33302879219`.
+  the same stages in remote run `33302879219`. Authorization-proof head
+  `311770f`, compile-line FIFO fix `2488487`, atomic envelope `cd1eb5e`, and
+  UTF-8 hardening `4bba7e9` pass complete remote runs `33304029789`,
+  `33305858959`, `33306088543`, and `33306353388`, respectively. Current head
+  `c60828d` has 50 runtime-locator, two isolated import/firebreak, 201
+  repository/control, and 404 complete `tests/ops` passes. Its full hermetic
+  suite has 2,508 passed, five skipped, four warnings, and zero failures in
+  139.30 seconds; complete remote run `33307853768` is green.
 - Ruff passes across `src`, `tools`, `spikes`, and `tests`; `git diff --check`,
   shell syntax, the repository-boundary audit, and the control-plane audit also
   pass.
