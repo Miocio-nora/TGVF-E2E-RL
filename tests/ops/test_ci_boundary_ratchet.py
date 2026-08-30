@@ -84,6 +84,14 @@ def test_ci_install_uses_the_exact_direct_dependency_constraints() -> None:
     assert "-e '.[test,qwen]'" in workflow
 
 
+def test_ci_failure_details_are_emitted_as_public_check_annotations() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    assert '--junitxml "$junit_report"' in workflow
+    assert 'python tools/emit_ci_pytest_annotations.py "$junit_report"' in workflow
+    assert 'exit "$pytest_status"' in workflow
+
+
 def test_ci_compares_module_size_exceptions_with_a_v3_git_baseline() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 

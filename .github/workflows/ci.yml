@@ -63,4 +63,14 @@ jobs:
       - name: Run complete CPU test suite
         env:
           CUDA_VISIBLE_DEVICES: ""
-        run: env -u OPENROUTER_API_KEY python -m pytest -q
+        run: |
+          junit_report="$RUNNER_TEMP/complete-cpu-pytest.xml"
+          set +e
+          env -u OPENROUTER_API_KEY python -m pytest -q \
+            --junitxml "$junit_report"
+          pytest_status=$?
+          set -e
+          if [[ "$pytest_status" -ne 0 ]]; then
+            python tools/emit_ci_pytest_annotations.py "$junit_report"
+          fi
+          exit "$pytest_status"
