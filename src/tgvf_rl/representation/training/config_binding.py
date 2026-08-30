@@ -5,7 +5,12 @@ from __future__ import annotations
 from hashlib import sha256
 
 from .config_run_schema import RepresentationTrainingConfig
-from .config_values import _existing_file_path, _nearest_existing_parent
+from .config_values import (
+    _nearest_existing_parent,
+    _optional_existing_file_probe,
+    _read_existing_file_bytes,
+    _require_existing_file_probe,
+)
 
 
 def _verify_external_files(
@@ -23,21 +28,26 @@ def _verify_external_files(
         "chat_template.json",
         "model.safetensors.index.json",
     )
-    missing = tuple(
-        name
-        for name in required_model_files
-        if not (config.model.local_path / name).is_file()
-    )
+    missing_names: list[str] = []
+    for name in required_model_files:
+        try:
+            _require_existing_file_probe(
+                config.model.local_path / name,
+                field_name=f"model.local_path/{name}",
+            )
+        except (TypeError, ValueError):
+            missing_names.append(name)
+    missing = tuple(missing_names)
     if missing:
         raise ValueError(f"accepted Qwen3 directory is incomplete: {missing}")
     for name, split in (
         ("train", config.data.train),
         ("validation", config.data.validation),
     ):
-        path = _existing_file_path(
+        _, payload = _read_existing_file_bytes(
             split.jsonl_path, field_name=f"data.{name}.jsonl_path"
         )
-        actual = sha256(path.read_bytes()).hexdigest()
+        actual = sha256(payload).hexdigest()
         if actual != split.source_sha256:
             raise ValueError(
                 f"data.{name}.source_sha256 mismatch: expected "
@@ -85,11 +95,11 @@ def _verify_external_files(
             ),
         ):
             assert path is not None and expected_sha256 is not None
-            actual_path = _existing_file_path(
+            _, payload = _read_existing_file_bytes(
                 path,
                 field_name=f"post_training_internal_evaluation.{name}",
             )
-            actual_sha256 = sha256(actual_path.read_bytes()).hexdigest()
+            actual_sha256 = sha256(payload).hexdigest()
             if actual_sha256 != expected_sha256:
                 raise ValueError(
                     f"post_training_internal_evaluation.{name} SHA256 mismatch: "
@@ -101,7 +111,11 @@ def _verify_external_files(
             raise ValueError(
                 "post_training_internal_evaluation.report_path has no usable parent"
             )
-        if evaluation.report_path.exists() and not allow_existing_post_training_report:
+        existing_report = _optional_existing_file_probe(
+            evaluation.report_path,
+            field_name="post_training_internal_evaluation.report_path",
+        )
+        if existing_report is not None and not allow_existing_post_training_report:
             raise ValueError(
                 "post_training_internal_evaluation.report_path already exists"
             )

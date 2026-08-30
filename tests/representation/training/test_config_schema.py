@@ -65,7 +65,12 @@ def test_config_facade_reexports_exact_schema_and_leaf_objects() -> None:
 
     for name in _definitions("config_parser.py"):
         assert getattr(config, name) is getattr(config_parser, name)
-    for name in _definitions("config_values.py"):
+    binding_only_values = {
+        "_optional_existing_file_probe",
+        "_read_existing_file_bytes",
+        "_require_existing_file_probe",
+    }
+    for name in _definitions("config_values.py") - binding_only_values:
         assert getattr(config, name) is getattr(config_values, name)
 
     assert config._verify_external_files is config_binding._verify_external_files
@@ -171,7 +176,7 @@ def test_config_implementation_has_single_ownership_and_one_way_imports() -> Non
             )
             owners[definition] = filename
 
-    assert len(owners) == 58
+    assert len(owners) == 62
     assert _definitions("config.py") == {"load_representation_training_config"}
 
     assert _training_imports("config_values.py") == set()

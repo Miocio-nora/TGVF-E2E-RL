@@ -30,6 +30,13 @@ class RegularFileSnapshot:
     after: os.stat_result
 
 
+@dataclass(frozen=True, slots=True)
+class RegularFileProbe:
+    """Metadata for a regular file opened under the absolute nofollow contract."""
+
+    metadata: os.stat_result
+
+
 def read_regular_file_leaf_nofollow(
     path: str | os.PathLike[str],
 ) -> RegularFileSnapshot:
@@ -64,6 +71,36 @@ def read_regular_file_absolute_nofollow(
         )
         try:
             return _read_regular_descriptor(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(parent_descriptor)
+
+
+def probe_regular_file_absolute_nofollow(
+    path: str | os.PathLike[str],
+) -> RegularFileProbe:
+    """Open and validate an absolute regular-file path without reading it.
+
+    Every path component is opened relative to the descriptor for its parent,
+    with symlink following disabled.  The leaf is opened nonblocking, checked
+    with ``fstat``, and closed immediately.  The returned contract contains
+    metadata only; this function never reads or allocates storage for payload
+    bytes.
+    """
+
+    components = _absolute_components(path, owner="regular-file path")
+    if not components:
+        raise SecureFileReadError("regular-file path does not name a file")
+    parent_descriptor = _open_absolute_directory_components(components[:-1])
+    try:
+        descriptor = _open_path(
+            components[-1],
+            _file_flags(),
+            dir_fd=parent_descriptor,
+        )
+        try:
+            return _probe_regular_descriptor(descriptor)
         finally:
             os.close(descriptor)
     finally:
@@ -226,9 +263,18 @@ def _read_regular_descriptor(descriptor: int) -> RegularFileSnapshot:
     return RegularFileSnapshot(payload=b"".join(chunks), before=before, after=after)
 
 
+def _probe_regular_descriptor(descriptor: int) -> RegularFileProbe:
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise SecureFileReadError("opened object is not a regular file")
+    return RegularFileProbe(metadata=metadata)
+
+
 __all__ = [
+    "RegularFileProbe",
     "RegularFileSnapshot",
     "SecureFileReadError",
+    "probe_regular_file_absolute_nofollow",
     "read_regular_file_absolute_nofollow",
     "read_regular_file_beneath_absolute_directory_nofollow",
     "read_regular_file_beneath_nofollow",

@@ -99,6 +99,7 @@ from .config_values import (
     _non_empty_text as _non_empty_text,
     _path as _path,
     _positive_int as _positive_int,
+    _read_configuration_source as _read_configuration_source,
     _safe_filename as _safe_filename,
     _sha256 as _sha256,
     _string as _string,
@@ -184,8 +185,7 @@ def load_representation_training_config(
         raise ValueError(
             "allow_existing_post_training_report requires external-file verification"
         )
-    source_path = _configuration_source_path(path)
-    raw = source_path.read_bytes()
+    source_path, raw = _read_configuration_source(path)
     source_toml_sha256 = sha256(raw).hexdigest()
     try:
         decoded = raw.decode("utf-8", errors="strict")

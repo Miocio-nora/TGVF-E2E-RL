@@ -6,8 +6,16 @@ from collections.abc import Mapping
 from hashlib import sha256
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any
+
+from tgvf_rl.secure_file_read import (
+    RegularFileProbe,
+    SecureFileReadError,
+    probe_regular_file_absolute_nofollow,
+    read_regular_file_absolute_nofollow,
+)
 
 
 _SHA256_CHARACTERS = frozenset("0123456789abcdef")
@@ -114,27 +122,92 @@ def _absolute_path(value: Path, *, field_name: str) -> Path:
 
 
 def _existing_file_path(value: str | Path, *, field_name: str) -> Path:
+    return _require_existing_file_probe(value, field_name=field_name)[0]
+
+
+def _require_existing_file_probe(
+    value: str | Path,
+    *,
+    field_name: str,
+) -> tuple[Path, RegularFileProbe]:
     if not isinstance(value, (str, Path)):
         raise TypeError(f"{field_name} must be a path")
     path = Path(value)
     _absolute_path(path, field_name=field_name)
-    if not path.is_file():
+    try:
+        probe = probe_regular_file_absolute_nofollow(path)
+    except (OSError, SecureFileReadError, TypeError) as error:
+        raise ValueError(f"{field_name} does not resolve to a file: {path}") from error
+    return path, probe
+
+
+def _optional_existing_file_probe(
+    value: str | Path,
+    *,
+    field_name: str,
+) -> tuple[Path, RegularFileProbe] | None:
+    if not isinstance(value, (str, Path)):
+        raise TypeError(f"{field_name} must be a path")
+    path = Path(value)
+    _absolute_path(path, field_name=field_name)
+    try:
+        probe = probe_regular_file_absolute_nofollow(path)
+    except FileNotFoundError:
+        return None
+    except (OSError, SecureFileReadError, TypeError) as error:
+        raise ValueError(f"{field_name} does not resolve to a file: {path}") from error
+    return path, probe
+
+
+def _read_existing_file_bytes(
+    value: str | Path,
+    *,
+    field_name: str,
+) -> tuple[Path, bytes]:
+    if not isinstance(value, (str, Path)):
+        raise TypeError(f"{field_name} must be a path")
+    path = Path(value)
+    _absolute_path(path, field_name=field_name)
+    try:
+        payload = read_regular_file_absolute_nofollow(path).payload
+    except (OSError, SecureFileReadError, TypeError):
         raise ValueError(f"{field_name} does not resolve to a file: {path}")
-    return path
+    return path, payload
 
 
 def _configuration_source_path(value: str | Path) -> Path:
     if not isinstance(value, (str, Path)):
         raise TypeError("configuration path must be a path")
     try:
-        path = Path(value).expanduser().resolve(strict=True)
-    except (FileNotFoundError, OSError) as error:
+        # Lexically absolutize without resolving filesystem components.  The
+        # secure reader below intentionally rejects every ancestor/leaf
+        # symlink instead of preserving the legacy resolve-and-follow behavior.
+        path = Path(os.path.abspath(Path(value).expanduser()))
+    except OSError as error:
         raise ValueError(
             f"configuration path does not resolve to a file: {value}"
         ) from error
-    if not path.is_file():
-        raise ValueError(f"configuration path is not a file: {path}")
     return path
+
+
+def _read_configuration_source(value: str | Path) -> tuple[Path, bytes]:
+    path = _configuration_source_path(value)
+    try:
+        payload = read_regular_file_absolute_nofollow(path).payload
+    except SecureFileReadError as error:
+        if str(error) in {
+            "opened object is not a regular file",
+            "opened object ceased to be a regular file",
+        }:
+            raise ValueError(f"configuration path is not a file: {path}") from error
+        raise ValueError(
+            f"configuration path does not resolve to a file: {value}"
+        ) from error
+    except (OSError, TypeError) as error:
+        raise ValueError(
+            f"configuration path does not resolve to a file: {value}"
+        ) from error
+    return path, payload
 
 
 def _nearest_existing_parent(path: Path) -> Path:
