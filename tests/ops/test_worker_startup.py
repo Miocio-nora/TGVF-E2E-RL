@@ -360,6 +360,192 @@ def test_policy_envelope_has_one_atomic_exact_authorization_group() -> None:
     assert WorkerStartupEnvelope.from_record(envelope.as_record()) == envelope
 
 
+def test_envelope_reconstructs_from_broader_authorization_parameters() -> None:
+    envelope = WorkerStartupEnvelope(
+        entry_role=POLICY_DRIVER_ROLE,
+        identities=(_identity(),),
+    )
+    parameters = {
+        "canonical_config_sha256": "c" * 64,
+        "prepared_policy_launch_sha256": "d" * 64,
+        **envelope.authorization_parameters(),
+    }
+
+    assert (
+        WorkerStartupEnvelope.from_authorization_parameters(
+            parameters,
+            expected_entry_role=POLICY_DRIVER_ROLE,
+        )
+        == envelope
+    )
+
+
+@pytest.mark.parametrize(
+    "retained_names",
+    [
+        (),
+        ("worker_startup_envelope_schema",),
+        (
+            "worker_startup_envelope_schema",
+            "worker_startup_envelope_json",
+        ),
+    ],
+)
+def test_envelope_authorization_rejects_missing_or_partial_group(
+    retained_names: tuple[str, ...],
+) -> None:
+    complete = _representation_envelope().authorization_parameters()
+    parameters = {name: complete[name] for name in retained_names}
+    parameters["unrelated_cli_parameter"] = "ignored"
+
+    with pytest.raises(ValueError, match="parameter group differs.*missing"):
+        WorkerStartupEnvelope.from_authorization_parameters(
+            parameters,
+            expected_entry_role=REPRESENTATION_LAUNCHER_ROLE,
+        )
+
+
+@pytest.mark.parametrize(
+    "extra_name",
+    [
+        "worker_startup_role",
+        "worker_startup_envelope_extra",
+        "worker_startup_future_authority",
+    ],
+)
+def test_envelope_authorization_rejects_any_extra_startup_parameter(
+    extra_name: str,
+) -> None:
+    parameters = _representation_envelope().authorization_parameters()
+    parameters[extra_name] = "forbidden"
+
+    with pytest.raises(ValueError, match="parameter group differs.*extra"):
+        WorkerStartupEnvelope.from_authorization_parameters(
+            parameters,
+            expected_entry_role=REPRESENTATION_LAUNCHER_ROLE,
+        )
+
+
+def test_envelope_authorization_requires_exact_container_and_value_types() -> None:
+    envelope = _representation_envelope()
+    parameters = envelope.authorization_parameters()
+
+    class _DictSubclass(dict[str, str]):
+        pass
+
+    with pytest.raises(TypeError, match="exact dict"):
+        WorkerStartupEnvelope.from_authorization_parameters(
+            _DictSubclass(parameters),
+            expected_entry_role=REPRESENTATION_LAUNCHER_ROLE,
+        )
+
+    parameters["worker_startup_envelope_schema"] = 1  # type: ignore[assignment]
+    with pytest.raises(TypeError, match="exactly str"):
+        WorkerStartupEnvelope.from_authorization_parameters(
+            parameters,
+            expected_entry_role=REPRESENTATION_LAUNCHER_ROLE,
+        )
+
+
+def test_envelope_authorization_rejects_nonexact_keys_before_namespace_scan() -> None:
+    class _StringSubclass(str):
+        pass
+
+    envelope = _representation_envelope()
+    subclass_required = {
+        _StringSubclass(name): value
+        for name, value in envelope.authorization_parameters().items()
+    }
+    with pytest.raises(TypeError, match="keys must be exactly str"):
+        WorkerStartupEnvelope.from_authorization_parameters(
+            subclass_required,
+            expected_entry_role=REPRESENTATION_LAUNCHER_ROLE,
+        )
+
+    subclass_extra = envelope.authorization_parameters()
+    subclass_extra[_StringSubclass("worker_startup_future_authority")] = "forbidden"
+    with pytest.raises(TypeError, match="keys must be exactly str"):
+        WorkerStartupEnvelope.from_authorization_parameters(
+            subclass_extra,
+            expected_entry_role=REPRESENTATION_LAUNCHER_ROLE,
+        )
+
+    nonstring_unrelated = envelope.authorization_parameters()
+    nonstring_unrelated[1] = object()  # type: ignore[index]
+    with pytest.raises(TypeError, match="keys must be exactly str"):
+        WorkerStartupEnvelope.from_authorization_parameters(
+            nonstring_unrelated,
+            expected_entry_role=REPRESENTATION_LAUNCHER_ROLE,
+        )
+
+
+def test_envelope_authorization_rejects_schema_or_digest_drift() -> None:
+    envelope = _representation_envelope()
+    wrong_schema = envelope.authorization_parameters()
+    wrong_schema["worker_startup_envelope_schema"] = "tgvf-worker-startup-envelope-v0"
+    with pytest.raises(ValueError, match="authorization schema differs"):
+        WorkerStartupEnvelope.from_authorization_parameters(
+            wrong_schema,
+            expected_entry_role=REPRESENTATION_LAUNCHER_ROLE,
+        )
+
+    wrong_digest = envelope.authorization_parameters()
+    wrong_digest["worker_startup_envelope_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="authorization SHA256 differs"):
+        WorkerStartupEnvelope.from_authorization_parameters(
+            wrong_digest,
+            expected_entry_role=REPRESENTATION_LAUNCHER_ROLE,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["noncanonical", "duplicate", "unknown"])
+def test_envelope_authorization_reuses_strict_nested_json_contract(
+    mutation: str,
+) -> None:
+    envelope = _representation_envelope()
+    parameters = envelope.authorization_parameters()
+    canonical = parameters["worker_startup_envelope_json"]
+    if mutation == "noncanonical":
+        changed = canonical + " "
+        expected = "not canonical"
+    elif mutation == "duplicate":
+        changed = canonical.replace(
+            '"entry_role":',
+            f'"entry_role":"{REPRESENTATION_LAUNCHER_ROLE}","entry_role":',
+            1,
+        )
+        expected = "duplicate key"
+    elif mutation == "unknown":
+        record = envelope.as_record()
+        record["unknown"] = "forbidden"
+        changed = json.dumps(
+            record,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        expected = "record field set differs"
+    else:  # pragma: no cover - parametrization is exhaustive
+        raise AssertionError(mutation)
+    parameters["worker_startup_envelope_json"] = changed
+
+    with pytest.raises(ValueError, match=expected):
+        WorkerStartupEnvelope.from_authorization_parameters(
+            parameters,
+            expected_entry_role=REPRESENTATION_LAUNCHER_ROLE,
+        )
+
+
+def test_envelope_authorization_rejects_wrong_expected_entry_role() -> None:
+    parameters = _representation_envelope().authorization_parameters()
+
+    with pytest.raises(PermissionError, match="entry role differs"):
+        WorkerStartupEnvelope.from_authorization_parameters(
+            parameters,
+            expected_entry_role=POLICY_DRIVER_ROLE,
+        )
+
+
 def test_representation_envelope_preserves_both_roles_without_flat_key_loss() -> None:
     envelope = _representation_envelope()
     launcher = envelope.identity_for_role(REPRESENTATION_LAUNCHER_ROLE)

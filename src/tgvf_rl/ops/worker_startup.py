@@ -46,6 +46,13 @@ _ENVELOPE_RECORD_FIELDS = {
     "entry_role",
     "identities",
 }
+_ENVELOPE_AUTHORIZATION_PARAMETER_NAMES = frozenset(
+    {
+        "worker_startup_envelope_schema",
+        "worker_startup_envelope_json",
+        "worker_startup_envelope_sha256",
+    }
+)
 _POLICY_ENVELOPE_ROLES = frozenset({POLICY_DRIVER_ROLE})
 _REPRESENTATION_ENVELOPE_ROLES = frozenset(
     {REPRESENTATION_LAUNCHER_ROLE, REPRESENTATION_MEMBER_ROLE}
@@ -361,6 +368,59 @@ class WorkerStartupEnvelope:
         envelope = cls.from_record(_load_strict_json(value))
         if envelope.to_json() != value:
             raise ValueError("worker startup envelope JSON is not canonical")
+        return envelope
+
+    @classmethod
+    def from_authorization_parameters(
+        cls,
+        parameters: object,
+        *,
+        expected_entry_role: str,
+    ) -> WorkerStartupEnvelope:
+        """Verify one complete envelope group inside broader CLI parameters."""
+
+        if type(parameters) is not dict:
+            raise TypeError(
+                "worker startup envelope authorization parameters must be an exact dict"
+            )
+        if any(type(key) is not str for key in parameters):
+            raise TypeError(
+                "worker startup envelope authorization parameter keys must be "
+                "exactly str"
+            )
+        startup_names = {key for key in parameters if key.startswith("worker_startup_")}
+        missing = sorted(_ENVELOPE_AUTHORIZATION_PARAMETER_NAMES.difference(parameters))
+        extra = sorted(
+            startup_names.difference(_ENVELOPE_AUTHORIZATION_PARAMETER_NAMES)
+        )
+        if missing or extra:
+            raise ValueError(
+                "worker startup envelope authorization parameter group differs: "
+                f"missing={missing!r}, extra={extra!r}"
+            )
+        values = {
+            name: parameters[name] for name in _ENVELOPE_AUTHORIZATION_PARAMETER_NAMES
+        }
+        if any(type(value) is not str for value in values.values()):
+            raise TypeError(
+                "worker startup envelope authorization parameter values must be "
+                "exactly str"
+            )
+        if values["worker_startup_envelope_schema"] != WORKER_STARTUP_ENVELOPE_SCHEMA:
+            raise ValueError("worker startup envelope authorization schema differs")
+        expected = _require_supported_role(expected_entry_role)
+        envelope = cls.from_json(values["worker_startup_envelope_json"])
+        supplied_sha256 = _require_sha256(
+            values["worker_startup_envelope_sha256"],
+            name="envelope_authorization_sha256",
+        )
+        if supplied_sha256 != envelope.envelope_sha256:
+            raise ValueError("worker startup envelope authorization SHA256 differs")
+        if envelope.entry_role != expected:
+            raise PermissionError(
+                "worker startup envelope entry role differs: "
+                f"expected {expected!r}, received {envelope.entry_role!r}"
+            )
         return envelope
 
     def authorization_parameters(self) -> dict[str, str]:
