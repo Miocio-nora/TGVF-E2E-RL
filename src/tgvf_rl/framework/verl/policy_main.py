@@ -8,7 +8,10 @@ from pathlib import Path
 import sys
 from typing import Sequence
 
-from tgvf_rl.ops.child_environment import verify_policy_driver_child_environment
+from tgvf_rl.ops.child_environment import (
+    scrub_policy_driver_authorization_environment,
+    verify_policy_driver_child_environment,
+)
 from tgvf_rl.ops.cli_authorization import (
     CLIExecutionAuthorizationIdentity,
     assert_canonical_runtime_launch_enabled,
@@ -62,6 +65,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         required=True,
         require_closure_complete=True,
     )
+    scrub_policy_driver_authorization_environment(os.environ)
     arguments = tuple(sys.argv[1:] if argv is None else argv)
     config = compose_pinned_verl_config(arguments)
     from verl.trainer.main_ppo import run_ppo

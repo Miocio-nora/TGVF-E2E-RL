@@ -26,6 +26,8 @@ from tgvf_rl.ops.child_environment import (
     build_child_environment,
     profile_late_overlay_environment_names,
     profile_owned_environment_names,
+    scrub_policy_driver_authorization_environment,
+    scrub_representation_worker_authorization_environment,
     verify_policy_driver_child_environment,
     verify_representation_torchrun_child_environment,
 )
@@ -521,3 +523,52 @@ def test_representation_worker_materialized_environment_verifies_torchrun_set() 
             environment,
             binding.authorization_parameters(),
         )
+
+
+def test_verified_worker_proofs_are_scrubbed_without_touching_runtime_fields() -> None:
+    policy_binding = build_child_environment(
+        POLICY_VERL_DRIVER_PROFILE,
+        host_environment={},
+    )
+    policy_late = _late_values(
+        (
+            *CLI_WORKER_LATE_ENVIRONMENT_NAMES,
+            *POLICY_COMPILE_RECEIPT_LATE_ENVIRONMENT_NAMES,
+        )
+    )
+    policy_environment = policy_binding.with_late_overlay(policy_late).as_environment()
+    scrub_policy_driver_authorization_environment(policy_environment)
+    assert policy_environment == policy_binding.as_environment()
+
+    representation_binding = build_child_environment(
+        REPRESENTATION_TORCHRUN_PROFILE,
+        host_environment={},
+    )
+    representation_late = _late_values(
+        (
+            *CLI_WORKER_LATE_ENVIRONMENT_NAMES,
+            *TORCHRUN_WORKER_LATE_ENVIRONMENT_NAMES,
+        )
+    )
+    representation_environment = representation_binding.with_late_overlay(
+        representation_late
+    ).as_environment()
+    scrub_representation_worker_authorization_environment(representation_environment)
+    assert set(representation_environment) == {
+        *representation_binding.as_environment(),
+        *TORCHRUN_WORKER_LATE_ENVIRONMENT_NAMES,
+    }
+    assert all(
+        representation_environment[name] == representation_late[name]
+        for name in TORCHRUN_WORKER_LATE_ENVIRONMENT_NAMES
+    )
+
+
+def test_worker_proof_scrub_fails_before_partial_mutation() -> None:
+    environment = _late_values(CLI_WORKER_LATE_ENVIRONMENT_NAMES)
+    del environment[CLI_WORKER_LATE_ENVIRONMENT_NAMES[-1]]
+    before = dict(environment)
+
+    with pytest.raises(RuntimeError, match="lacks fields to scrub"):
+        scrub_representation_worker_authorization_environment(environment)
+    assert environment == before

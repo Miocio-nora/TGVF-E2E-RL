@@ -54,6 +54,7 @@ from tgvf_rl.ops.cli_launch import (
     _representation_torchrun_command as _representation_torchrun_command,
 )
 from tgvf_rl.ops.child_environment import (
+    scrub_representation_worker_authorization_environment,
     verify_representation_torchrun_child_environment,
 )
 from tgvf_rl.representation.training.config import (
@@ -799,6 +800,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "world_size": str(config.fsdp2.world_size),
                 },
             )
+            scrub_representation_worker_authorization_environment(os.environ)
             result = _run_representation_training(
                 config_binding.source_path,
                 stop_after_global_step=args.stop_after_global_step,

@@ -12,13 +12,13 @@ Ray or torchrun could fan out to unrelated descendants.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass, field
 from hashlib import sha256
 import json
 import os
 from pathlib import Path, PurePath
 import re
-from typing import Mapping
 
 
 CHILD_ENVIRONMENT_SCHEMA = "tgvf-child-environment-v1"
@@ -622,6 +622,52 @@ def verify_representation_torchrun_child_environment(
     )
 
 
+def _scrub_required_environment_names(
+    environment: MutableMapping[str, str],
+    names: tuple[str, ...],
+    *,
+    owner: str,
+) -> None:
+    if not isinstance(environment, MutableMapping):
+        raise TypeError(f"{owner} environment must be mutable")
+    missing = set(names).difference(environment)
+    if missing:
+        raise RuntimeError(
+            f"{owner} environment lacks fields to scrub: " + ", ".join(sorted(missing))
+        )
+    for name in names:
+        del environment[name]
+    if set(names).intersection(environment):  # pragma: no cover - mapping invariant
+        raise RuntimeError(f"{owner} environment retained scrubbed fields")
+
+
+def scrub_policy_driver_authorization_environment(
+    environment: MutableMapping[str, str],
+) -> None:
+    """Remove validated one-use CLI and compile receipts before Ray starts."""
+
+    _scrub_required_environment_names(
+        environment,
+        (
+            *CLI_WORKER_LATE_ENVIRONMENT_NAMES,
+            *POLICY_COMPILE_RECEIPT_LATE_ENVIRONMENT_NAMES,
+        ),
+        owner="Policy driver authorization",
+    )
+
+
+def scrub_representation_worker_authorization_environment(
+    environment: MutableMapping[str, str],
+) -> None:
+    """Remove validated one-use CLI proof before rank-local descendants start."""
+
+    _scrub_required_environment_names(
+        environment,
+        CLI_WORKER_LATE_ENVIRONMENT_NAMES,
+        owner="representation worker authorization",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class OpenRouterSecretRequirement:
     """Serializable role/name requirement containing no secret material."""
@@ -789,6 +835,8 @@ __all__ = [
     "build_child_environment",
     "profile_late_overlay_environment_names",
     "profile_owned_environment_names",
+    "scrub_policy_driver_authorization_environment",
+    "scrub_representation_worker_authorization_environment",
     "verify_policy_driver_child_environment",
     "verify_representation_torchrun_child_environment",
 ]

@@ -18,6 +18,10 @@ from tgvf_rl.framework.verl.compile_prerequisites import (
     preflight_policy_compile_prerequisites,
     verify_policy_compile_prerequisites_from_environment,
 )
+from tgvf_rl.ops.child_environment import (
+    CLI_WORKER_LATE_ENVIRONMENT_NAMES,
+    POLICY_COMPILE_RECEIPT_LATE_ENVIRONMENT_NAMES,
+)
 
 
 def _canonical(value: object) -> bytes:
@@ -293,6 +297,78 @@ def test_policy_main_refuses_child_environment_before_process_or_compile(
         "worker-authorization",
         "runtime-closure",
         "child-environment",
+    ]
+
+
+def test_policy_main_scrubs_one_use_proofs_before_hydra_or_ray(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    proof_names = (
+        *CLI_WORKER_LATE_ENVIRONMENT_NAMES,
+        *POLICY_COMPILE_RECEIPT_LATE_ENVIRONMENT_NAMES,
+    )
+    real_scrub = policy_main.scrub_policy_driver_authorization_environment
+    for index, name in enumerate(proof_names):
+        monkeypatch.setenv(name, f"fixture-{index}")
+    monkeypatch.setenv("TGVF_PERSISTENT_SENTINEL", "preserved")
+    monkeypatch.setattr(
+        policy_main,
+        "verify_cli_worker_authorization_from_environment",
+        lambda **_kwargs: (
+            events.append("worker-authorization") or SimpleNamespace(parameters=())
+        ),
+    )
+    monkeypatch.setattr(
+        policy_main,
+        "assert_canonical_runtime_launch_enabled",
+        lambda: events.append("runtime-closure"),
+    )
+    monkeypatch.setattr(
+        policy_main,
+        "verify_policy_driver_child_environment",
+        lambda *_args: events.append("child-environment"),
+    )
+    monkeypatch.setattr(
+        policy_main,
+        "_verify_launch_identity_against_current_process",
+        lambda _identity: events.append("process-identity"),
+    )
+    monkeypatch.setattr(
+        policy_main,
+        "verify_policy_compile_prerequisites_from_environment",
+        lambda *_args, **_kwargs: events.append("compile-receipt"),
+    )
+    monkeypatch.setattr(
+        policy_main,
+        "scrub_policy_driver_authorization_environment",
+        lambda environment: (
+            events.append("scrub-authorization") or real_scrub(environment)
+        ),
+    )
+
+    def compose(*_args: object, **_kwargs: object) -> None:
+        assert not set(proof_names).intersection(os.environ)
+        assert os.environ["TGVF_PERSISTENT_SENTINEL"] == "preserved"
+        events.append("compose")
+        raise RuntimeError("synthetic compose stop")
+
+    monkeypatch.setattr(
+        policy_main,
+        "compose_pinned_verl_config",
+        compose,
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic compose stop"):
+        policy_main.main(())
+    assert events == [
+        "worker-authorization",
+        "runtime-closure",
+        "child-environment",
+        "process-identity",
+        "compile-receipt",
+        "scrub-authorization",
+        "compose",
     ]
 
 

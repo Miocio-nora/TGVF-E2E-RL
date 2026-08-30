@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import stat
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ import pytest
 
 from tgvf_rl import cli
 from tgvf_rl.ops.child_environment import (
+    CLI_WORKER_LATE_ENVIRONMENT_NAMES,
     REPRESENTATION_TORCHRUN_PROFILE,
     build_child_environment,
 )
@@ -370,6 +372,7 @@ def test_representation_worker_authorization_is_first_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
+    real_scrub = cli.scrub_representation_worker_authorization_environment
     binding = _binding("/canonical/representation.toml")
     config = SimpleNamespace(
         source_path=binding.source_path,
@@ -386,6 +389,9 @@ def test_representation_worker_authorization_is_first_action(
     monkeypatch.setenv("TGVF_CLI_CONSUMPTION_RECEIPT_PATH", "/gate/receipt.json")
     monkeypatch.setenv("TGVF_CLI_CONSUMPTION_RECEIPT_SHA256", "c" * 64)
     monkeypatch.setenv("TGVF_CLI_LAUNCHER_LIVENESS_RECEIPT_PATH", "/gate/live.json")
+    monkeypatch.setenv("TGVF_CLI_EXECUTION_IDENTITY_JSON", "{}")
+    monkeypatch.setenv("TGVF_CLI_WORKER_AUTHORIZATION_SCHEMA", "fixture")
+    monkeypatch.setenv("TGVF_PERSISTENT_SENTINEL", "preserved")
     monkeypatch.setattr(
         cli,
         "verify_cli_worker_authorization_from_environment",
@@ -400,6 +406,13 @@ def test_representation_worker_authorization_is_first_action(
         cli,
         "verify_representation_torchrun_child_environment",
         lambda *_args: events.append("child-environment"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "scrub_representation_worker_authorization_environment",
+        lambda environment: (
+            events.append("scrub-authorization") or real_scrub(environment)
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -426,9 +439,13 @@ def test_representation_worker_authorization_is_first_action(
         "_assert_worker_identity_parameters",
         lambda *_a, **_k: events.append("check-identity"),
     )
-    monkeypatch.setattr(
-        cli, "_run_representation_training", lambda *_a, **_k: events.append("runner")
-    )
+
+    def run_training(*_args: object, **_kwargs: object) -> None:
+        assert not set(CLI_WORKER_LATE_ENVIRONMENT_NAMES).intersection(os.environ)
+        assert os.environ["TGVF_PERSISTENT_SENTINEL"] == "preserved"
+        events.append("runner")
+
+    monkeypatch.setattr(cli, "_run_representation_training", run_training)
 
     assert (
         cli.main(
@@ -458,6 +475,7 @@ def test_representation_worker_authorization_is_first_action(
         "check-config",
         "check-python",
         "check-identity",
+        "scrub-authorization",
         "runner",
     ]
 
