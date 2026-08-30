@@ -15,6 +15,51 @@ in the facade explicitly and should have its own characterization test.
 from __future__ import annotations
 
 from types import FunctionType
+from typing import get_type_hints
+
+
+def freeze_public_class_annotations(
+    contract_type: type[object],
+    *,
+    implementation_globals: dict[str, object],
+) -> bool:
+    """Resolve one class's own annotations before rebinding its module.
+
+    ``typing.get_type_hints`` resolves class annotations through the globals of
+    ``contract_type.__module__``.  A leaf-first import therefore cannot resolve
+    postponed annotations after the class is rebound to a facade that has not
+    been imported yet.  This opt-in helper freezes only annotations declared on
+    ``contract_type`` while the implementation globals are explicitly
+    available.  It neither imports the facade nor copies inherited annotations.
+
+    Freezing intentionally changes the raw annotation values from postponed
+    strings to resolved type objects.  Callers should use it only when stable
+    historical module coordinates and leaf-first type-hint resolution are both
+    part of the compatibility contract.
+    """
+
+    if not isinstance(contract_type, type):
+        raise TypeError("public API compatibility requires a class")
+    if not isinstance(implementation_globals, dict):
+        raise TypeError("implementation globals must be a dictionary")
+    own_annotations = vars(contract_type).get("__annotations__")
+    if not own_annotations:
+        return False
+    if not isinstance(own_annotations, dict):
+        raise TypeError("class annotations must be a dictionary")
+    annotation_locals = dict(implementation_globals)
+    annotation_locals.update(vars(contract_type))
+    resolved = get_type_hints(
+        contract_type,
+        globalns=implementation_globals,
+        localns=annotation_locals,
+        include_extras=True,
+    )
+    frozen = {name: resolved[name] for name in own_annotations}
+    if frozen == own_annotations:
+        return False
+    contract_type.__annotations__ = frozen
+    return True
 
 
 def rebind_public_function(
@@ -87,4 +132,8 @@ def rebind_public_class(
     return changed
 
 
-__all__ = ["rebind_public_class", "rebind_public_function"]
+__all__ = [
+    "freeze_public_class_annotations",
+    "rebind_public_class",
+    "rebind_public_function",
+]

@@ -15,7 +15,11 @@ from typing import Any, Literal
 import torch
 
 from tgvf_rl.checkpoint.coordinator import state_digest
-from tgvf_rl.public_api_compat import rebind_public_class, rebind_public_function
+from tgvf_rl.public_api_compat import (
+    freeze_public_class_annotations,
+    rebind_public_class,
+    rebind_public_function,
+)
 from tgvf_rl.representation.training.config import (
     RepresentationTrainingConfig,
     load_representation_training_config,
@@ -624,6 +628,15 @@ def _assert_evaluation_output_isolated(
             )
 
 
+for _annotated_contract_type in (
+    AnswerUtilityEvaluationCandidate,
+    AnswerUtilityEvaluationInputs,
+):
+    freeze_public_class_annotations(
+        _annotated_contract_type,
+        implementation_globals=globals(),
+    )
+del _annotated_contract_type
 for _contract_type in (
     AnswerUtilityEvaluationArm,
     AnswerUtilityAdapterArtifact,

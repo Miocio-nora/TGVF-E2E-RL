@@ -9,6 +9,7 @@ import typing
 import pytest
 
 from tgvf_rl.public_api_compat import (
+    freeze_public_class_annotations,
     rebind_public_class,
     rebind_public_function,
 )
@@ -152,4 +153,63 @@ def test_rebinding_never_mutates_shared_dataclasses_or_typing_functions() -> Non
     assert {function.__module__ for function in _SHARED_STDLIB_FUNCTIONS} == {
         "dataclasses",
         "typing",
+    }
+
+
+def test_annotation_freezing_supports_leaf_first_type_hints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    implementation_name = "tgvf_public_api_compat_annotations_implementation"
+    public_name = "tgvf_public_api_compat_annotations_public"
+    implementation = _module(implementation_name)
+    monkeypatch.setitem(sys.modules, implementation_name, implementation)
+
+    exec(
+        """
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Literal
+
+@dataclass(frozen=True)
+class Payload:
+    value: int
+
+class Base:
+    inherited: Payload
+
+@dataclass(frozen=True)
+class Contract(Base):
+    PayloadAlias = Payload
+    payload: PayloadAlias
+    mode: Literal["strict"]
+""",
+        implementation.__dict__,
+    )
+    contract = implementation.Contract
+    assert all(isinstance(value, str) for value in contract.__annotations__.values())
+    assert isinstance(implementation.Base.__annotations__["inherited"], str)
+
+    assert freeze_public_class_annotations(
+        contract,
+        implementation_globals=implementation.__dict__,
+    )
+    assert not any(
+        isinstance(value, str) for value in contract.__annotations__.values()
+    )
+    assert isinstance(implementation.Base.__annotations__["inherited"], str)
+    assert not freeze_public_class_annotations(
+        contract,
+        implementation_globals=implementation.__dict__,
+    )
+    assert rebind_public_class(
+        contract,
+        implementation_module=implementation_name,
+        public_module=public_name,
+    )
+
+    assert public_name not in sys.modules
+    assert typing.get_type_hints(contract) == {
+        "inherited": implementation.Payload,
+        "payload": implementation.Payload,
+        "mode": typing.Literal["strict"],
     }

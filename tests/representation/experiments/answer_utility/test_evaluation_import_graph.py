@@ -282,6 +282,7 @@ def test_input_leaves_pickle_before_explicit_facade_import() -> None:
         import pickle
         import sys
         import types
+        from typing import get_type_hints
 
         import tgvf_rl.representation.experiments.answer_utility
 
@@ -303,6 +304,32 @@ def test_input_leaves_pickle_before_explicit_facade_import() -> None:
         assert inputs.AnswerUtilityEvaluationCandidate.__module__ == facade_name
         assert matching.build_answer_safe_wrong_mapping.__module__ == facade_name
         assert identity._evaluation_arm_contract.__module__ == facade_name
+        moved_types = (
+            matching.AnswerUtilityWrongImageDonor,
+            matching._QwenImageGridContract,
+            artifact.AnswerUtilityAdapterArtifact,
+            inputs.AnswerUtilityEvaluationArm,
+            inputs.AnswerUtilityEvaluationCandidate,
+            inputs.AnswerUtilityEvaluationInputs,
+        )
+        annotation_frozen_types = (
+            matching.AnswerUtilityWrongImageDonor,
+            artifact.AnswerUtilityAdapterArtifact,
+            inputs.AnswerUtilityEvaluationCandidate,
+            inputs.AnswerUtilityEvaluationInputs,
+        )
+        for moved_type in moved_types:
+            resolved_hints = get_type_hints(moved_type)
+            if moved_type in annotation_frozen_types:
+                own_annotations = vars(moved_type).get("__annotations__", {})
+                assert all(
+                    not isinstance(annotation, str)
+                    for annotation in own_annotations.values()
+                )
+                assert own_annotations == {
+                    name: resolved_hints[name] for name in own_annotations
+                }
+            assert facade_name not in sys.modules
 
         encoded_candidate_type = pickle.dumps(
             inputs.AnswerUtilityEvaluationCandidate

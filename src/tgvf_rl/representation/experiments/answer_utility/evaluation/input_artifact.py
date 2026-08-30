@@ -8,7 +8,11 @@ from pathlib import Path
 
 import torch
 
-from tgvf_rl.public_api_compat import rebind_public_class, rebind_public_function
+from tgvf_rl.public_api_compat import (
+    freeze_public_class_annotations,
+    rebind_public_class,
+    rebind_public_function,
+)
 from tgvf_rl.representation.training.post_training_evaluation import file_sha256
 
 from ..runner import (
@@ -98,6 +102,10 @@ def load_answer_utility_adapter_artifact(
     )
 
 
+freeze_public_class_annotations(
+    AnswerUtilityAdapterArtifact,
+    implementation_globals=globals(),
+)
 rebind_public_class(
     AnswerUtilityAdapterArtifact,
     implementation_module=__name__,

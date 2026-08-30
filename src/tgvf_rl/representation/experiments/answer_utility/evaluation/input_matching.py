@@ -16,7 +16,11 @@ import re
 from typing import Any, Literal
 import unicodedata
 
-from tgvf_rl.public_api_compat import rebind_public_class, rebind_public_function
+from tgvf_rl.public_api_compat import (
+    freeze_public_class_annotations,
+    rebind_public_class,
+    rebind_public_function,
+)
 from tgvf_rl.representation.training.config import RepresentationTrainingConfig
 from tgvf_rl.representation.training.post_training_evaluation import file_sha256
 from tgvf_rl.representation.training.schema import RepresentationTrainingSample
@@ -440,6 +444,10 @@ def _require_sha256(value: object, *, name: str) -> None:
         raise ValueError(f"{name} must be a lowercase SHA256")
 
 
+freeze_public_class_annotations(
+    AnswerUtilityWrongImageDonor,
+    implementation_globals=globals(),
+)
 for _contract_type in (AnswerUtilityWrongImageDonor, _QwenImageGridContract):
     rebind_public_class(
         _contract_type,
