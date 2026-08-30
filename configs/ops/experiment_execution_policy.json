@@ -9,7 +9,6 @@
     "blocker_ids": [
       "atomic_authority_transaction_missing",
       "child_environment_allowlist_missing",
-      "fd_bound_python_exec_missing",
       "immutable_runtime_code_package_missing",
       "policy_recursive_compile_closure_missing",
       "representation_eval_safe_artifact_missing",
@@ -20,6 +19,6 @@
   },
   "policy_id": "TGVF-EXPERIMENT-EXECUTION-STABILIZATION-V1",
   "reason": "Protocol stabilization audit is active; canonical runtime closure is incomplete and no training or evaluation may launch.",
-  "revision": 2,
+  "revision": 3,
   "schema_version": "tgvf-experiment-execution-policy-v2"
 }

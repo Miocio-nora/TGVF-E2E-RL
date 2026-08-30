@@ -213,6 +213,7 @@ def test_policy_uses_one_prepared_identity_after_consumption(
         config=config,
         horizon_extension=None,
         authorization_parameters=lambda: {"prepared_policy_launch_sha256": "e" * 64},
+        close_python_binding=lambda: None,
     )
     worker = CLIWorkerAuthorization(
         consumption_receipt_path=Path("/gate/consumptions/token.json"),

@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
-from hashlib import sha256
+from dataclasses import asdict
 from importlib import metadata
 import json
 import os
@@ -32,21 +31,27 @@ from tgvf_rl.ops.cli_authorization import (
     CANONICAL_POLICY_CONFIG_ROOT,
     CANONICAL_REPRESENTATION_CONFIG_ROOT,
     CLIExecutionAuthorizationIdentity,
-    CLIWorkerAuthorization,
     CanonicalConfigBinding,
     PythonExecutableIdentity,
     assert_canonical_runtime_launch_enabled,
     assert_loaded_config_matches_binding,
     bind_canonical_config_path,
     bind_current_python_executable,
-    cli_worker_authorization_environment,
+    bind_current_python_executable_for_exec,
     consume_cli_execution_authorization,
-    environment_sanitization_parameters,
     materialize_cli_worker_authorization,
-    sanitized_child_environment,
     verify_canonical_config_binding,
     verify_cli_worker_authorization_from_environment,
     verify_python_executable_identity,
+)
+from tgvf_rl.ops.cli_launch import (
+    PreparedRepresentationLaunch,
+    _canonical_json_sha256 as _canonical_json_sha256,
+    _execute_policy_run,
+    _execute_representation_torchrun,
+    _representation_child_environment,
+    _representation_command_prefix,
+    _representation_torchrun_command as _representation_torchrun_command,
 )
 from tgvf_rl.representation.training.config import (
     load_representation_training_config,
@@ -67,44 +72,6 @@ PUBLIC_MUTATING_COMMANDS = frozenset(
 INTERNAL_MUTATING_COMMANDS = frozenset({"run-representation"})
 _REPRESENTATION_COMMAND_ID = "tgvf-rl:launch-representation:v2"
 _POLICY_COMMAND_ID = "tgvf-rl:run-policy:v3"
-_REQUIRED_CUBLAS_WORKSPACE_CONFIG = ":4096:8"
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedRepresentationLaunch:
-    config: Any
-    config_binding: CanonicalConfigBinding
-    python_identity: PythonExecutableIdentity
-    stop_after_global_step: int | None
-    command_prefix: tuple[str, ...]
-    child_environment: tuple[tuple[str, str], ...]
-    stripped_environment_names: tuple[str, ...]
-
-    @property
-    def prepared_identity_sha256(self) -> str:
-        record = {
-            "schema_version": "tgvf-prepared-representation-launch-v1",
-            "canonical_config": self.config_binding.authorization_parameters(),
-            "python": self.python_identity.authorization_parameters(),
-            "stop_after_global_step": self.stop_after_global_step,
-            "command_prefix": list(self.command_prefix),
-            "child_environment_sha256": _canonical_json_sha256(
-                dict(self.child_environment)
-            ),
-            "stripped_environment_names": list(self.stripped_environment_names),
-        }
-        return _canonical_json_sha256(record)
-
-    def authorization_parameters(self) -> dict[str, str]:
-        return {
-            **self.config_binding.authorization_parameters(),
-            **self.python_identity.authorization_parameters(),
-            **environment_sanitization_parameters(self.stripped_environment_names),
-            "prepared_representation_launch_sha256": self.prepared_identity_sha256,
-            "child_environment_sha256": _canonical_json_sha256(
-                dict(self.child_environment)
-            ),
-        }
 
 
 def _require(mapping: Mapping[str, Any], key: str, expected: object) -> None:
@@ -372,78 +339,6 @@ def _consume_command_authorization(
     )
 
 
-def _canonical_json_sha256(value: object) -> str:
-    raw = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    return sha256(raw).hexdigest()
-
-
-def _representation_command_prefix(
-    config: Any,
-    *,
-    python_executable: Path,
-    stop_after_global_step: int | None,
-) -> tuple[str, ...]:
-    command = [
-        str(python_executable),
-        "-m",
-        "torch.distributed.run",
-        "--standalone",
-        f"--nproc-per-node={config.fsdp2.world_size}",
-        "-m",
-        "tgvf_rl.cli",
-        "run-representation",
-        str(config.source_path),
-    ]
-    if stop_after_global_step is not None:
-        command.extend(("--stop-after-global-step", str(stop_after_global_step)))
-    return tuple(command)
-
-
-def _representation_child_environment(
-    config: Any,
-    *,
-    base: Mapping[str, str] | None = None,
-) -> tuple[dict[str, str], tuple[str, ...]]:
-    environment, stripped = sanitized_child_environment(base)
-    torchrun_owned = {
-        "RANK",
-        "LOCAL_RANK",
-        "LOCAL_WORLD_SIZE",
-        "GROUP_RANK",
-        "ROLE_RANK",
-        "ROLE_NAME",
-        "MASTER_ADDR",
-        "MASTER_PORT",
-        "TORCHELASTIC_RESTART_COUNT",
-        "TORCHELASTIC_MAX_RESTARTS",
-        "TORCHELASTIC_RUN_ID",
-    }
-    inherited_conflicts = tuple(
-        sorted(name for name in torchrun_owned if name in environment)
-    )
-    for name in inherited_conflicts:
-        environment.pop(name)
-    stripped_names = tuple(sorted(set(stripped).union(inherited_conflicts)))
-    environment.update(
-        {
-            "CUDA_VISIBLE_DEVICES": ",".join(
-                str(gpu_id) for gpu_id in config.fsdp2.physical_gpu_ids
-            ),
-            "CUBLAS_WORKSPACE_CONFIG": _REQUIRED_CUBLAS_WORKSPACE_CONFIG,
-            "PYTHONHASHSEED": "0",
-            "TOKENIZERS_PARALLELISM": "false",
-            "WORLD_SIZE": str(config.fsdp2.world_size),
-        }
-    )
-    return environment, stripped_names
-
-
 def _preflight_representation_launch(
     config: Any,
     *,
@@ -460,29 +355,35 @@ def _preflight_representation_launch(
         config_binding,
         source_sha256_attribute="source_toml_sha256",
     )
-    python_identity = bind_current_python_executable(python_executable)
-    from tgvf_rl.representation.training import runner as representation_runner
+    python_binding = bind_current_python_executable_for_exec(python_executable)
+    try:
+        python_identity = python_binding.identity
+        from tgvf_rl.representation.training import runner as representation_runner
 
-    representation_runner._validate_invocation_stop(  # noqa: SLF001
-        config,
-        stop_after_global_step,
-    )
-    representation_runner._verify_live_code_identity(config)  # noqa: SLF001
-    environment, stripped_names = _representation_child_environment(config)
-    command_prefix = _representation_command_prefix(
-        config,
-        python_executable=python_identity.declared_path,
-        stop_after_global_step=stop_after_global_step,
-    )
-    return PreparedRepresentationLaunch(
-        config=config,
-        config_binding=config_binding,
-        python_identity=python_identity,
-        stop_after_global_step=stop_after_global_step,
-        command_prefix=command_prefix,
-        child_environment=tuple(sorted(environment.items())),
-        stripped_environment_names=stripped_names,
-    )
+        representation_runner._validate_invocation_stop(  # noqa: SLF001
+            config,
+            stop_after_global_step,
+        )
+        representation_runner._verify_live_code_identity(config)  # noqa: SLF001
+        environment, stripped_names = _representation_child_environment(config)
+        command_prefix = _representation_command_prefix(
+            config,
+            python_executable=python_identity.declared_path,
+            stop_after_global_step=stop_after_global_step,
+        )
+        return PreparedRepresentationLaunch(
+            config=config,
+            config_binding=config_binding,
+            python_identity=python_identity,
+            stop_after_global_step=stop_after_global_step,
+            command_prefix=command_prefix,
+            child_environment=tuple(sorted(environment.items())),
+            stripped_environment_names=stripped_names,
+            python_binding=python_binding,
+        )
+    except BaseException:
+        python_binding.close()
+        raise
 
 
 def _run_representation_training(
@@ -495,77 +396,6 @@ def _run_representation_training(
     return run_representation_training(
         path,
         stop_after_global_step=stop_after_global_step,
-    )
-
-
-def _representation_torchrun_command(
-    config: Any,
-    *,
-    python_executable: Path,
-    stop_after_global_step: int | None,
-    gate_directory: Path,
-    worker_authorization: CLIWorkerAuthorization,
-) -> tuple[str, ...]:
-    executable = python_executable.expanduser().absolute()
-    command = list(
-        _representation_command_prefix(
-            config,
-            python_executable=executable,
-            stop_after_global_step=stop_after_global_step,
-        )
-    )
-    command.extend(
-        (
-            "--launcher-python-executable",
-            str(executable),
-            "--gate-directory",
-            str(gate_directory.expanduser().absolute()),
-            "--launch-consumption-receipt",
-            str(worker_authorization.consumption_receipt_path),
-            "--launch-consumption-sha256",
-            worker_authorization.consumption_receipt_sha256,
-            "--launcher-liveness-receipt",
-            str(worker_authorization.launcher_liveness_receipt_path),
-        )
-    )
-    return tuple(command)
-
-
-def _execute_representation_torchrun(
-    prepared: PreparedRepresentationLaunch,
-    *,
-    launch_identity: CLIExecutionAuthorizationIdentity,
-    gate_directory: Path,
-    worker_authorization: CLIWorkerAuthorization,
-) -> None:
-    verify_canonical_config_binding(prepared.config_binding)
-    assert_loaded_config_matches_binding(
-        prepared.config,
-        prepared.config_binding,
-        source_sha256_attribute="source_toml_sha256",
-    )
-    verify_python_executable_identity(prepared.python_identity)
-    command = _representation_torchrun_command(
-        prepared.config,
-        python_executable=prepared.python_identity.declared_path,
-        stop_after_global_step=prepared.stop_after_global_step,
-        gate_directory=gate_directory,
-        worker_authorization=worker_authorization,
-    )
-    if command[: len(prepared.command_prefix)] != prepared.command_prefix:
-        raise RuntimeError("representation command changed after authorization")
-    environment = dict(prepared.child_environment)
-    environment.update(
-        cli_worker_authorization_environment(
-            launch_identity,
-            worker_authorization,
-            gate_directory=gate_directory,
-        )
-    )
-    os.execve(
-        str(prepared.python_identity.declared_path),
-        command,
-        environment,
     )
 
 
@@ -687,23 +517,6 @@ def _load_policy_horizon_extension(path: Path, config: Any) -> Any:
     from tgvf_rl.policy.horizon_extension import load_policy_horizon_extension
 
     return load_policy_horizon_extension(path, config, validate_artifacts=True)
-
-
-def _execute_policy_run(
-    prepared: Any,
-    *,
-    launch_identity: CLIExecutionAuthorizationIdentity,
-    worker_authorization: CLIWorkerAuthorization,
-    gate_directory: Path,
-) -> None:
-    from tgvf_rl.policy.launch import execute_policy_e2e_smoke
-
-    execute_policy_e2e_smoke(
-        prepared,
-        launch_identity=launch_identity,
-        worker_authorization=worker_authorization,
-        gate_directory=gate_directory,
-    )
 
 
 def _preflight_policy_run(
@@ -915,22 +728,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 python_executable=args.python,
                 stop_after_global_step=args.stop_after_global_step,
             )
-            identity = _representation_training_authorization_identity(prepared)
-            consumption = _consume_command_authorization(
-                args,
-                identity,
-            )
-            worker_authorization = materialize_cli_worker_authorization(
-                identity,
-                consumption,
-                gate_directory=args.gate_directory,
-            )
-            _execute_representation_torchrun(
-                prepared,
-                launch_identity=identity,
-                gate_directory=args.gate_directory,
-                worker_authorization=worker_authorization,
-            )
+            try:
+                identity = _representation_training_authorization_identity(prepared)
+                consumption = _consume_command_authorization(
+                    args,
+                    identity,
+                )
+                worker_authorization = materialize_cli_worker_authorization(
+                    identity,
+                    consumption,
+                    gate_directory=args.gate_directory,
+                )
+                _execute_representation_torchrun(
+                    prepared,
+                    launch_identity=identity,
+                    gate_directory=args.gate_directory,
+                    worker_authorization=worker_authorization,
+                )
+            finally:
+                prepared.close_python_binding()
         elif args.command == "run-representation":
             launch_identity = verify_cli_worker_authorization_from_environment(
                 expected_phase=REPRESENTATION_TRAINING_PHASE,
@@ -1102,34 +918,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                 horizon_extension=extension,
                 compile_prerequisite_manifest_path=(args.compile_prerequisite_manifest),
             )
-            _assert_installed_stack_identity(
-                audited_compatibility_stack(CONTROL_COMPATIBILITY_STACK)
-            )
-            verify_verl_distribution_identity(
-                expected_commit=audited_compatibility_stack(
-                    CONTROL_COMPATIBILITY_STACK
-                ).verl_commit
-            )
-            identity = _policy_training_authorization_identity(
-                prepared,
-                config_binding=config_binding,
-            )
-            consumption = _consume_command_authorization(
-                args,
-                identity,
-            )
-            worker_authorization = materialize_cli_worker_authorization(
-                identity,
-                consumption,
-                gate_directory=args.gate_directory,
-            )
-            verify_canonical_config_binding(config_binding)
-            _execute_policy_run(
-                prepared,
-                launch_identity=identity,
-                worker_authorization=worker_authorization,
-                gate_directory=args.gate_directory,
-            )
+            try:
+                _assert_installed_stack_identity(
+                    audited_compatibility_stack(CONTROL_COMPATIBILITY_STACK)
+                )
+                verify_verl_distribution_identity(
+                    expected_commit=audited_compatibility_stack(
+                        CONTROL_COMPATIBILITY_STACK
+                    ).verl_commit
+                )
+                identity = _policy_training_authorization_identity(
+                    prepared,
+                    config_binding=config_binding,
+                )
+                consumption = _consume_command_authorization(
+                    args,
+                    identity,
+                )
+                worker_authorization = materialize_cli_worker_authorization(
+                    identity,
+                    consumption,
+                    gate_directory=args.gate_directory,
+                )
+                verify_canonical_config_binding(config_binding)
+                _execute_policy_run(
+                    prepared,
+                    launch_identity=identity,
+                    worker_authorization=worker_authorization,
+                    gate_directory=args.gate_directory,
+                )
+            finally:
+                prepared.close_python_binding()
         else:  # pragma: no cover - argparse owns the command choices
             raise AssertionError(f"unhandled command {args.command}")
     except (OSError, TypeError, ValueError, RuntimeError) as error:

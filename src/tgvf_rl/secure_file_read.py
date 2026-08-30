@@ -12,6 +12,7 @@ import os
 from pathlib import PurePosixPath
 import stat
 from typing import Final
+from weakref import finalize
 
 
 _READ_CHUNK_BYTES: Final = 1024 * 1024
@@ -19,6 +20,15 @@ _READ_CHUNK_BYTES: Final = 1024 * 1024
 
 class SecureFileReadError(RuntimeError):
     """The platform or opened object cannot satisfy the declared contract."""
+
+
+def _close_descriptor_best_effort(descriptor: int) -> None:
+    """Close a descriptor from a GC finalizer without leaking an exception."""
+
+    try:
+        os.close(descriptor)
+    except OSError:
+        pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +45,77 @@ class RegularFileProbe:
     """Metadata for a regular file opened under the absolute nofollow contract."""
 
     metadata: os.stat_result
+
+
+class RetainedRegularFileDescriptor:
+    """Owned regular-file descriptor retained across a trust boundary.
+
+    The descriptor is opened by the absolute nofollow contract and remains
+    owned by this object until :meth:`close` is called.  Callers must close an
+    abandoned binding explicitly; the context-manager methods make that
+    ownership contract convenient for preflight code.
+    """
+
+    __slots__ = ("__weakref__", "_descriptor", "_finalizer")
+
+    def __init__(self, descriptor: int) -> None:
+        if isinstance(descriptor, bool) or not isinstance(descriptor, int):
+            raise TypeError("descriptor must be an integer")
+        if descriptor < 0:
+            raise ValueError("descriptor must be non-negative")
+        self._descriptor: int | None = descriptor
+        self._finalizer = finalize(
+            self,
+            _close_descriptor_best_effort,
+            descriptor,
+        )
+
+    @property
+    def closed(self) -> bool:
+        """Whether ownership of the descriptor has already been released."""
+
+        return self._descriptor is None
+
+    def fileno(self) -> int:
+        """Return the still-owned descriptor or fail closed after release."""
+
+        descriptor = self._descriptor
+        if descriptor is None:
+            raise SecureFileReadError("retained regular-file descriptor is closed")
+        return descriptor
+
+    def snapshot(self) -> RegularFileSnapshot:
+        """Re-read the retained inode from offset zero without reopening a path."""
+
+        descriptor = self.fileno()
+        try:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+        except OSError as error:
+            raise SecureFileReadError(
+                "retained regular-file descriptor cannot be rewound"
+            ) from error
+        return _read_regular_descriptor(descriptor)
+
+    def close(self) -> None:
+        """Idempotently release the owned descriptor."""
+
+        descriptor = self._descriptor
+        if descriptor is None:
+            return
+        self._descriptor = None
+        self._finalizer.detach()
+        os.close(descriptor)
+
+    def __enter__(self) -> RetainedRegularFileDescriptor:
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
+
+    def __reduce__(self) -> object:
+        raise TypeError(
+            "RetainedRegularFileDescriptor is process-local and not serializable"
+        )
 
 
 def read_regular_file_leaf_nofollow(
@@ -74,6 +155,47 @@ def read_regular_file_absolute_nofollow(
         finally:
             os.close(descriptor)
     finally:
+        os.close(parent_descriptor)
+
+
+def retain_regular_file_absolute_nofollow(
+    path: str | os.PathLike[str],
+) -> RetainedRegularFileDescriptor:
+    """Open and retain an absolute regular file without following symlinks.
+
+    Every ancestor and the final leaf are opened through descriptors with
+    symlink following disabled.  Ownership of the validated leaf descriptor
+    transfers to the returned object; every failure path closes it.
+    """
+
+    components = _absolute_components(path, owner="regular-file path")
+    if not components:
+        raise SecureFileReadError("regular-file path does not name a file")
+    try:
+        parent_descriptor = _open_absolute_directory_components(components[:-1])
+    except OSError as error:
+        raise SecureFileReadError(
+            "regular-file path is missing, unreadable, or contains a symlink"
+        ) from error
+    descriptor: int | None = None
+    try:
+        try:
+            descriptor = _open_path(
+                components[-1],
+                _file_flags(),
+                dir_fd=parent_descriptor,
+            )
+            _probe_regular_descriptor(descriptor)
+            retained = RetainedRegularFileDescriptor(descriptor)
+            descriptor = None
+            return retained
+        except OSError as error:
+            raise SecureFileReadError(
+                "regular-file path is missing, unreadable, or contains a symlink"
+            ) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
         os.close(parent_descriptor)
 
 
@@ -273,10 +395,12 @@ def _probe_regular_descriptor(descriptor: int) -> RegularFileProbe:
 __all__ = [
     "RegularFileProbe",
     "RegularFileSnapshot",
+    "RetainedRegularFileDescriptor",
     "SecureFileReadError",
     "probe_regular_file_absolute_nofollow",
     "read_regular_file_absolute_nofollow",
     "read_regular_file_beneath_absolute_directory_nofollow",
     "read_regular_file_beneath_nofollow",
     "read_regular_file_leaf_nofollow",
+    "retain_regular_file_absolute_nofollow",
 ]

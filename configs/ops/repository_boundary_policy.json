@@ -168,13 +168,6 @@
   "production_module_line_limit": 1000,
   "production_module_size_exceptions": [
     {
-      "current_ceiling": 1144,
-      "next_split_seam": "Move representation and policy command implementations into private subcommand leaves while retaining the parser facade.",
-      "owner": "public-cli",
-      "path": "src/tgvf_rl/cli.py",
-      "reason": "Parser construction, preflight, authorization identity, and dispatch still share the public facade."
-    },
-    {
       "current_ceiling": 1388,
       "next_split_seam": "Move VStar-specific materialization and quarantine logic into policy_selection_vstar_source.py.",
       "owner": "policy-data",
@@ -238,13 +231,6 @@
       "reason": "Wire codecs, the worker extension, and dynamic runtime-class construction remain colocated."
     },
     {
-      "current_ceiling": 1073,
-      "next_split_seam": "Move immutable config, Python, and environment identity binding into cli_authorization_identity.py.",
-      "owner": "repository-ops",
-      "path": "src/tgvf_rl/ops/cli_authorization.py",
-      "reason": "Identity and environment binding remain mixed with gate consumption and authorization materialization."
-    },
-    {
       "current_ceiling": 1181,
       "next_split_seam": "Move request sanitization, retry policy, and asynchronous judge transport into semantic_judge.py.",
       "owner": "answer-utility-evaluation",
@@ -301,7 +287,7 @@
       "reason": "External judge configuration and client code remain mixed with the veRL reward manager."
     }
   ],
-  "revision": 6,
+  "revision": 7,
   "run_specific_code_allowlist": [
     "src/tgvf_rl/framework/verl/prl13_main.py",
     "src/tgvf_rl/policy/prl13_group_signal.py",

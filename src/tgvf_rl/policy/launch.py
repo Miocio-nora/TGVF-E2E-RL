@@ -26,13 +26,15 @@ from tgvf_rl.framework.verl.launcher import (
 from tgvf_rl.ops.cli_authorization import (
     CLIExecutionAuthorizationIdentity,
     CLIWorkerAuthorization,
+    PythonExecutableBinding,
     PythonExecutableIdentity,
+    assert_fd_exec_supported,
     assert_canonical_runtime_launch_enabled,
-    bind_current_python_executable,
+    bind_current_python_executable_for_exec,
     cli_worker_authorization_environment,
     environment_sanitization_parameters,
     sanitized_child_environment,
-    verify_python_executable_identity,
+    verify_python_executable_binding,
 )
 
 from .horizon_extension import (
@@ -101,6 +103,20 @@ class PreparedPolicyLaunch:
     stripped_environment_names: tuple[str, ...]
     repository_root: Path
     horizon_extension: PolicyHorizonExtension | None = None
+    python_binding: PythonExecutableBinding | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.python_binding is not None
+            and self.python_binding.identity != self.python_identity
+        ):
+            raise ValueError("prepared Python binding differs from its identity")
+
+    def close_python_binding(self) -> None:
+        """Release the process-local executable capability if still owned."""
+
+        if self.python_binding is not None:
+            self.python_binding.close()
 
     @property
     def prepared_identity_sha256(self) -> str:
@@ -197,34 +213,40 @@ def preflight_policy_launch_for_authorization(
         repository_root=repository_root,
         horizon_extension=horizon_extension,
     )
-    python_identity = bind_current_python_executable(
+    python_binding = bind_current_python_executable_for_exec(
         python_executable or sys.executable
     )
-    command = plan.command(python_identity.declared_path)
-    child_environment, stripped_environment_names = policy_child_environment(
-        plan,
-        include_sanitization_record=True,
-    )
-    compile_authorization = PolicyCompileAuthorizationProof(
-        manifest_source_path=compile_prerequisites.manifest_source_path,
-        manifest_source_sha256=compile_prerequisites.manifest_source_sha256,
-        binding_sha256=compile_prerequisites.identity_sha256,
-        receipt_sha256=prerequisite_receipt.receipt_sha256,
-        closure_policy=compile_prerequisites.closure_policy,
-    )
-    return PreparedPolicyLaunch(
-        config=config,
-        plan=plan,
-        compile_prerequisites=compile_prerequisites,
-        compile_receipt=prerequisite_receipt,
-        compile_authorization=compile_authorization,
-        python_identity=python_identity,
-        command=command,
-        child_environment=tuple(sorted(child_environment.items())),
-        stripped_environment_names=stripped_environment_names,
-        repository_root=Path(repository_root).resolve(),
-        horizon_extension=horizon_extension,
-    )
+    try:
+        python_identity = python_binding.identity
+        command = plan.command(python_identity.declared_path)
+        child_environment, stripped_environment_names = policy_child_environment(
+            plan,
+            include_sanitization_record=True,
+        )
+        compile_authorization = PolicyCompileAuthorizationProof(
+            manifest_source_path=compile_prerequisites.manifest_source_path,
+            manifest_source_sha256=compile_prerequisites.manifest_source_sha256,
+            binding_sha256=compile_prerequisites.identity_sha256,
+            receipt_sha256=prerequisite_receipt.receipt_sha256,
+            closure_policy=compile_prerequisites.closure_policy,
+        )
+        return PreparedPolicyLaunch(
+            config=config,
+            plan=plan,
+            compile_prerequisites=compile_prerequisites,
+            compile_receipt=prerequisite_receipt,
+            compile_authorization=compile_authorization,
+            python_identity=python_identity,
+            command=command,
+            child_environment=tuple(sorted(child_environment.items())),
+            stripped_environment_names=stripped_environment_names,
+            repository_root=Path(repository_root).resolve(),
+            horizon_extension=horizon_extension,
+            python_binding=python_binding,
+        )
+    except BaseException:
+        python_binding.close()
+        raise
 
 
 def policy_child_environment(
@@ -337,68 +359,82 @@ def execute_policy_e2e_smoke(
 
     if not isinstance(prepared, PreparedPolicyLaunch):
         raise TypeError("prepared must be PreparedPolicyLaunch")
-    if not isinstance(launch_identity, CLIExecutionAuthorizationIdentity):
-        raise TypeError("launch_identity must be CLIExecutionAuthorizationIdentity")
-    expected_parameters = prepared.authorization_parameters()
-    observed_parameters = dict(launch_identity.parameters)
-    for name, expected in expected_parameters.items():
-        if observed_parameters.get(name) != expected:
+    python_binding = prepared.python_binding
+    if python_binding is None:
+        raise RuntimeError("prepared Policy launch has no bound Python fd")
+    try:
+        if python_binding.identity != prepared.python_identity:
             raise RuntimeError(
-                f"consumed Policy authorization differs from prepared launch: {name}"
+                "prepared Policy Python capability differs from its authorization identity"
             )
-    if (
-        launch_identity.run_id != prepared.config.run_id
-        or launch_identity.run_identity_sha256 != prepared.config.identity_sha256
-    ):
-        raise RuntimeError("consumed Policy authorization has a different run identity")
-    prepared.plan.assert_launch_ready()
-    assert_policy_execution_identity(
-        prepared.config,
-        repository_root=prepared.repository_root,
-        horizon_extension=prepared.horizon_extension,
-    )
-    verify_python_executable_identity(prepared.python_identity)
-    prerequisite_receipt = prepared.plan.preflight_live_prerequisites()
-    if prerequisite_receipt != prepared.compile_receipt:
-        raise RuntimeError(
-            "Policy compile prerequisites changed after authorization preflight"
+        if not isinstance(launch_identity, CLIExecutionAuthorizationIdentity):
+            raise TypeError("launch_identity must be CLIExecutionAuthorizationIdentity")
+        expected_parameters = prepared.authorization_parameters()
+        observed_parameters = dict(launch_identity.parameters)
+        for name, expected in expected_parameters.items():
+            if observed_parameters.get(name) != expected:
+                raise RuntimeError(
+                    "consumed Policy authorization differs from prepared launch: "
+                    f"{name}"
+                )
+        if (
+            launch_identity.run_id != prepared.config.run_id
+            or launch_identity.run_identity_sha256 != prepared.config.identity_sha256
+        ):
+            raise RuntimeError(
+                "consumed Policy authorization has a different run identity"
+            )
+        prepared.plan.assert_launch_ready()
+        assert_policy_execution_identity(
+            prepared.config,
+            repository_root=prepared.repository_root,
+            horizon_extension=prepared.horizon_extension,
         )
-    if (
-        prepared.plan.command(prepared.python_identity.declared_path)
-        != prepared.command
-    ):
-        raise RuntimeError("prepared Policy command changed after authorization")
-    prerequisite_receipt_path = materialize_policy_compile_prerequisite_receipt(
-        prerequisite_receipt,
-        state_directory=prepared.config.output.root
-        / "runtime-policy-state"
-        / "compile-prerequisite-attestations",
-    )
-    environment = dict(prepared.child_environment)
-    environment["TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_SHA256"] = (
-        prerequisite_receipt.receipt_sha256
-    )
-    environment["TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_PATH"] = str(
-        prerequisite_receipt_path
-    )
-    environment["TGVF_POLICY_COMPILE_PREREQUISITE_BINDING_SHA256"] = (
-        prepared.compile_prerequisites.identity_sha256
-    )
-    environment["TGVF_POLICY_COMPILE_PREREQUISITE_MANIFEST_SHA256"] = (
-        prepared.compile_prerequisites.manifest_source_sha256
-    )
-    environment.update(
-        cli_worker_authorization_environment(
-            launch_identity,
-            worker_authorization,
-            gate_directory=gate_directory,
+        prerequisite_receipt = prepared.plan.preflight_live_prerequisites()
+        if prerequisite_receipt != prepared.compile_receipt:
+            raise RuntimeError(
+                "Policy compile prerequisites changed after authorization preflight"
+            )
+        if (
+            prepared.plan.command(prepared.python_identity.declared_path)
+            != prepared.command
+        ):
+            raise RuntimeError("prepared Policy command changed after authorization")
+        if not prepared.command or prepared.command[0] != str(
+            prepared.python_identity.declared_path
+        ):
+            raise RuntimeError("Policy argv[0] lost its declared Python path")
+        prerequisite_receipt_path = materialize_policy_compile_prerequisite_receipt(
+            prerequisite_receipt,
+            state_directory=prepared.config.output.root
+            / "runtime-policy-state"
+            / "compile-prerequisite-attestations",
         )
-    )
-    os.execve(
-        str(prepared.python_identity.declared_path),
-        prepared.command,
-        environment,
-    )
+        environment = dict(prepared.child_environment)
+        environment["TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_SHA256"] = (
+            prerequisite_receipt.receipt_sha256
+        )
+        environment["TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_PATH"] = str(
+            prerequisite_receipt_path
+        )
+        environment["TGVF_POLICY_COMPILE_PREREQUISITE_BINDING_SHA256"] = (
+            prepared.compile_prerequisites.identity_sha256
+        )
+        environment["TGVF_POLICY_COMPILE_PREREQUISITE_MANIFEST_SHA256"] = (
+            prepared.compile_prerequisites.manifest_source_sha256
+        )
+        environment.update(
+            cli_worker_authorization_environment(
+                launch_identity,
+                worker_authorization,
+                gate_directory=gate_directory,
+            )
+        )
+        descriptor = verify_python_executable_binding(python_binding)
+        assert_fd_exec_supported()
+        os.execve(descriptor, prepared.command, environment)
+    finally:
+        python_binding.close()
 
 
 def _load_compile_prerequisites(

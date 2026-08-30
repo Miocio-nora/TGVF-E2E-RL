@@ -42,7 +42,7 @@ DEFAULT_EXECUTION_SURFACE_POLICY = (
     REPOSITORY_ROOT / "configs/ops/execution_surface_policy.json"
 )
 EXECUTION_SURFACE_POLICY_SCHEMA = "tgvf-execution-surface-policy-v2"
-EXECUTION_SURFACE_POLICY_REVISION = 3
+EXECUTION_SURFACE_POLICY_REVISION = 4
 EXECUTION_SURFACE_CONTENT_BINDING = "sha256-file-bytes-v1"
 EXECUTION_SURFACE_ROOTS = ("src", "tools", "spikes")
 EXECUTION_SHELL_ROOTS = ("tools", "spikes")
@@ -213,16 +213,6 @@ PUBLIC_MUTATING_CLI_PREFLIGHTS = {
 }
 PUBLIC_MUTATING_CLI_FIRST_GUARD = "assert_canonical_runtime_launch_enabled"
 PUBLIC_MUTATING_CLI_BRANCH_CONTRACTS = {
-    "launch-representation": (
-        (None, ("assert_canonical_runtime_launch_enabled",)),
-        ("config_binding", ("bind_canonical_config_path",)),
-        ("config", ("load_representation_training_config",)),
-        ("prepared", ("_preflight_representation_launch",)),
-        ("identity", ("_representation_training_authorization_identity",)),
-        ("consumption", ("_consume_command_authorization",)),
-        ("worker_authorization", ("materialize_cli_worker_authorization",)),
-        (None, ("_execute_representation_torchrun",)),
-    ),
     "run-representation-internal-evaluation": (
         (None, ("assert_canonical_runtime_launch_enabled",)),
         ("config_binding", ("bind_canonical_config_path",)),
@@ -235,27 +225,47 @@ PUBLIC_MUTATING_CLI_BRANCH_CONTRACTS = {
         (None, ("verify_python_executable_identity",)),
         ("result", ("_run_representation_internal_evaluation",)),
     ),
+}
+PUBLIC_MUTATING_CLI_PREPARED_LIFETIME_CONTRACTS = {
+    "launch-representation": (
+        (
+            (None, ("assert_canonical_runtime_launch_enabled",)),
+            ("config_binding", ("bind_canonical_config_path",)),
+            ("config", ("load_representation_training_config",)),
+            ("prepared", ("_preflight_representation_launch",)),
+        ),
+        (
+            ("identity", ("_representation_training_authorization_identity",)),
+            ("consumption", ("_consume_command_authorization",)),
+            ("worker_authorization", ("materialize_cli_worker_authorization",)),
+            (None, ("_execute_representation_torchrun",)),
+        ),
+    ),
     "run-policy": (
-        (None, ("assert_canonical_runtime_launch_enabled",)),
-        ("config_binding", ("bind_canonical_config_path",)),
-        ("config", ("_load_policy_run_config",)),
-        (None, ("assert_loaded_config_matches_binding",)),
-        ("@extension-none", ()),
-        ("@horizon-extension-if", ("_load_policy_horizon_extension",)),
-        ("prepared", ("_preflight_policy_run",)),
         (
-            None,
-            ("_assert_installed_stack_identity", "audited_compatibility_stack"),
+            (None, ("assert_canonical_runtime_launch_enabled",)),
+            ("config_binding", ("bind_canonical_config_path",)),
+            ("config", ("_load_policy_run_config",)),
+            (None, ("assert_loaded_config_matches_binding",)),
+            ("@extension-none", ()),
+            ("@horizon-extension-if", ("_load_policy_horizon_extension",)),
+            ("prepared", ("_preflight_policy_run",)),
         ),
         (
-            None,
-            ("verify_verl_distribution_identity", "audited_compatibility_stack"),
+            (
+                None,
+                ("_assert_installed_stack_identity", "audited_compatibility_stack"),
+            ),
+            (
+                None,
+                ("verify_verl_distribution_identity", "audited_compatibility_stack"),
+            ),
+            ("identity", ("_policy_training_authorization_identity",)),
+            ("consumption", ("_consume_command_authorization",)),
+            ("worker_authorization", ("materialize_cli_worker_authorization",)),
+            (None, ("verify_canonical_config_binding",)),
+            (None, ("_execute_policy_run",)),
         ),
-        ("identity", ("_policy_training_authorization_identity",)),
-        ("consumption", ("_consume_command_authorization",)),
-        ("worker_authorization", ("materialize_cli_worker_authorization",)),
-        (None, ("verify_canonical_config_binding",)),
-        (None, ("_execute_policy_run",)),
     ),
 }
 INTERNAL_MUTATING_CLI_CONTROLS = {
@@ -263,6 +273,14 @@ INTERNAL_MUTATING_CLI_CONTROLS = {
         "verify_cli_worker_authorization_from_environment",
         "_run_representation_training",
     )
+}
+CLI_IMPORTED_CONTROL_SYMBOLS = {
+    PUBLIC_MUTATING_CLI_FIRST_GUARD: "tgvf_rl.ops.cli_authorization",
+    "verify_cli_worker_authorization_from_environment": (
+        "tgvf_rl.ops.cli_authorization"
+    ),
+    "_execute_representation_torchrun": "tgvf_rl.ops.cli_launch",
+    "_execute_policy_run": "tgvf_rl.ops.cli_launch",
 }
 CLI_LOCAL_CONTROL_SYMBOLS = frozenset(
     {
@@ -281,13 +299,7 @@ CLI_LOCAL_CONTROL_SYMBOLS = frozenset(
         )
     }
     | set(PUBLIC_MUTATING_CLI_PREFLIGHTS.values())
-)
-CLI_IMPORTED_CONTROL_SYMBOLS = {
-    PUBLIC_MUTATING_CLI_FIRST_GUARD: "tgvf_rl.ops.cli_authorization",
-    "verify_cli_worker_authorization_from_environment": (
-        "tgvf_rl.ops.cli_authorization"
-    ),
-}
+).difference(CLI_IMPORTED_CONTROL_SYMBOLS)
 CHECK_LAUNCH_GATE_ALLOWED_MODES = (
     "audit-control-plane",
     "authorize",
@@ -446,16 +458,45 @@ def _direct_branch_call_positions(branch: ast.If, name: str) -> tuple[int, ...]:
     )
 
 
-def _public_branch_matches_contract(command: str, branch: ast.If) -> bool:
-    contract = PUBLIC_MUTATING_CLI_BRANCH_CONTRACTS[command]
-    if len(branch.body) != len(contract):
-        return False
+def _controlled_branch_call_positions(
+    command: str,
+    branch: ast.If,
+    name: str,
+) -> tuple[int, ...]:
+    """Locate direct calls in the audited outer/owned-lifetime sequence only."""
+
+    statements = list(branch.body)
+    if command in PUBLIC_MUTATING_CLI_PREPARED_LIFETIME_CONTRACTS:
+        final_statement = statements.pop() if statements else None
+        if isinstance(final_statement, ast.Try):
+            statements.extend(final_statement.body)
+    return tuple(
+        index
+        for index, statement in enumerate(statements)
+        if (call := _direct_statement_call(statement)) is not None
+        and call.func.id == name
+    )
+
+
+def _statement_matches_public_branch_contract(
+    statement: ast.stmt,
+    target: str | None,
+    expected_calls: tuple[str, ...],
+) -> bool:
     expected_extension_if = ast.parse(
         "if args.horizon_extension is not None:\n"
         "    extension = _load_policy_horizon_extension("
         "args.horizon_extension, config)\n"
     ).body[0]
     expected_extension_none = ast.parse("extension = None\n").body[0]
+    if target == "@extension-none":
+        return ast.dump(statement, include_attributes=False) == ast.dump(
+            expected_extension_none, include_attributes=False
+        )
+    if target == "@horizon-extension-if":
+        return ast.dump(statement, include_attributes=False) == ast.dump(
+            expected_extension_if, include_attributes=False
+        )
     forbidden_nested = (
         ast.Await,
         ast.Delete,
@@ -468,48 +509,79 @@ def _public_branch_matches_contract(command: str, branch: ast.If) -> bool:
         ast.Yield,
         ast.YieldFrom,
     )
-    for statement, (target, expected_calls) in zip(branch.body, contract, strict=True):
-        if target == "@extension-none":
-            if ast.dump(statement, include_attributes=False) != ast.dump(
-                expected_extension_none, include_attributes=False
-            ):
-                return False
-            continue
-        if target == "@horizon-extension-if":
-            if ast.dump(statement, include_attributes=False) != ast.dump(
-                expected_extension_if, include_attributes=False
-            ):
-                return False
-            continue
-        call = _direct_statement_call(statement)
-        if call is None or not expected_calls or call.func.id != expected_calls[0]:
+    call = _direct_statement_call(statement)
+    if call is None or not expected_calls or call.func.id != expected_calls[0]:
+        return False
+    if target is None:
+        if not isinstance(statement, ast.Expr):
             return False
-        if target is None:
-            if not isinstance(statement, ast.Expr):
-                return False
-        elif not (
-            isinstance(statement, ast.Assign)
-            and len(statement.targets) == 1
-            and isinstance(statement.targets[0], ast.Name)
-            and statement.targets[0].id == target
-        ):
-            return False
-        calls = [node for node in ast.walk(statement) if isinstance(node, ast.Call)]
-        if any(not isinstance(node.func, ast.Name) for node in calls):
-            return False
-        if tuple(node.func.id for node in calls) != expected_calls:
-            return False
-        if any(
-            isinstance(node, forbidden_nested)
-            for argument in (*call.args, *(item.value for item in call.keywords))
-            for node in ast.walk(argument)
-        ):
-            return False
-        if call.func.id == PUBLIC_MUTATING_CLI_FIRST_GUARD and (
-            call.args or call.keywords
-        ):
-            return False
-    return True
+    elif not (
+        isinstance(statement, ast.Assign)
+        and len(statement.targets) == 1
+        and isinstance(statement.targets[0], ast.Name)
+        and statement.targets[0].id == target
+    ):
+        return False
+    calls = [node for node in ast.walk(statement) if isinstance(node, ast.Call)]
+    if any(not isinstance(node.func, ast.Name) for node in calls):
+        return False
+    if tuple(node.func.id for node in calls) != expected_calls:
+        return False
+    if any(
+        isinstance(node, forbidden_nested)
+        for argument in (*call.args, *(item.value for item in call.keywords))
+        for node in ast.walk(argument)
+    ):
+        return False
+    return not (
+        call.func.id == PUBLIC_MUTATING_CLI_FIRST_GUARD and (call.args or call.keywords)
+    )
+
+
+def _statements_match_public_branch_contract(
+    statements: list[ast.stmt],
+    contract: tuple[tuple[str | None, tuple[str, ...]], ...],
+) -> bool:
+    return len(statements) == len(contract) and all(
+        _statement_matches_public_branch_contract(statement, target, expected_calls)
+        for statement, (target, expected_calls) in zip(
+            statements, contract, strict=True
+        )
+    )
+
+
+def _prepared_lifetime_try_matches_contract(
+    statement: ast.stmt,
+    contract: tuple[tuple[str | None, tuple[str, ...]], ...],
+) -> bool:
+    expected_finally = ast.parse(
+        "try:\n    pass\nfinally:\n    prepared.close_python_binding()\n"
+    ).body[0]
+    assert isinstance(expected_finally, ast.Try)
+    return (
+        isinstance(statement, ast.Try)
+        and not statement.handlers
+        and not statement.orelse
+        and len(statement.finalbody) == 1
+        and ast.dump(statement.finalbody[0], include_attributes=False)
+        == ast.dump(expected_finally.finalbody[0], include_attributes=False)
+        and _statements_match_public_branch_contract(statement.body, contract)
+    )
+
+
+def _public_branch_matches_contract(command: str, branch: ast.If) -> bool:
+    lifetime_contract = PUBLIC_MUTATING_CLI_PREPARED_LIFETIME_CONTRACTS.get(command)
+    if lifetime_contract is not None:
+        prefix_contract, try_contract = lifetime_contract
+        return (
+            len(branch.body) == len(prefix_contract) + 1
+            and _statements_match_public_branch_contract(
+                branch.body[:-1], prefix_contract
+            )
+            and _prepared_lifetime_try_matches_contract(branch.body[-1], try_contract)
+        )
+    contract = PUBLIC_MUTATING_CLI_BRANCH_CONTRACTS[command]
+    return _statements_match_public_branch_contract(branch.body, contract)
 
 
 def _internal_worker_guard_prefix_matches(branch: ast.If) -> bool:
@@ -897,8 +969,10 @@ def _audit_public_cli_controls(
             guard_positions: tuple[int, ...] = ()
             dispatch_positions: tuple[int, ...] = ()
         else:
-            guard_positions = _direct_branch_call_positions(branch, guard)
-            dispatch_positions = _direct_branch_call_positions(branch, dispatch)
+            guard_positions = _controlled_branch_call_positions(command, branch, guard)
+            dispatch_positions = _controlled_branch_call_positions(
+                command, branch, dispatch
+            )
             if (
                 len(guard_positions) != 1
                 or _branch_named_call_count(branch, guard) != 1
@@ -916,7 +990,11 @@ def _audit_public_cli_controls(
             ):
                 missing.append(f"direct {guard} before {dispatch}")
         if (
-            command in PUBLIC_MUTATING_CLI_BRANCH_CONTRACTS
+            command
+            in {
+                *PUBLIC_MUTATING_CLI_BRANCH_CONTRACTS,
+                *PUBLIC_MUTATING_CLI_PREPARED_LIFETIME_CONTRACTS,
+            }
             and branch is not None
             and not _public_branch_matches_contract(command, branch)
         ):

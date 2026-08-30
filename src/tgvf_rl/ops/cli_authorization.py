@@ -9,17 +9,35 @@ repository execution policy immediately before dispatch.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from hashlib import sha256
 import json
 import os
 from pathlib import Path
 import re
 import socket
-import stat
-import sys
 from typing import Mapping, NoReturn
 
+from .cli_authorization_identity import (
+    CANONICAL_EVALUATION_CONFIG_ROOT,
+    CANONICAL_POLICY_CONFIG_ROOT,
+    CANONICAL_REPRESENTATION_CONFIG_ROOT,
+    CLIExecutionAuthorizationIdentity,
+    CLIWorkerAuthorization,
+    CanonicalConfigBinding,
+    PythonExecutableBinding,
+    PythonExecutableIdentity,
+    _lexical_absolute_path,
+    assert_fd_exec_supported,
+    assert_loaded_config_matches_binding,
+    bind_canonical_config_path,
+    bind_current_python_executable,
+    bind_current_python_executable_for_exec,
+    environment_sanitization_parameters,
+    sanitized_child_environment,
+    verify_canonical_config_binding,
+    verify_python_executable_binding,
+    verify_python_executable_identity,
+)
 from .launch_gate import (
     CONSUMPTION_SCHEMA,
     LaunchAuthorizationError,
@@ -27,7 +45,6 @@ from .launch_gate import (
     assert_process_liveness,
     consume_launch_authorization,
     gate_status,
-    make_run_identity,
     write_process_liveness_receipt,
 )
 
@@ -36,11 +53,6 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 REPOSITORY_EXECUTION_POLICY_PATH = (
     REPOSITORY_ROOT / "configs/ops/experiment_execution_policy.json"
 )
-CANONICAL_POLICY_CONFIG_ROOT = REPOSITORY_ROOT / "configs/canonical/policy"
-CANONICAL_REPRESENTATION_CONFIG_ROOT = (
-    REPOSITORY_ROOT / "configs/canonical/representation"
-)
-CANONICAL_EVALUATION_CONFIG_ROOT = REPOSITORY_ROOT / "configs/canonical/evaluation"
 CLI_WORKER_AUTHORIZATION_SCHEMA = "tgvf-cli-worker-authorization-environment-v1"
 _CLI_WORKER_ENVIRONMENT_NAMES = (
     "TGVF_CLI_WORKER_AUTHORIZATION_SCHEMA",
@@ -50,7 +62,6 @@ _CLI_WORKER_ENVIRONMENT_NAMES = (
     "TGVF_CLI_CONSUMPTION_RECEIPT_SHA256",
     "TGVF_CLI_LAUNCHER_LIVENESS_RECEIPT_PATH",
 )
-_ENVIRONMENT_SANITIZATION_POLICY = "strip-credentials-and-python-injection-v1"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TOKEN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _CONSUMPTION_FIELDS = {
@@ -73,368 +84,6 @@ _CONSUMPTION_FIELDS = {
     "freeze_override_id",
     "freeze_override_sha256",
 }
-
-
-@dataclass(frozen=True, slots=True)
-class CLIExecutionAuthorizationIdentity:
-    """Immutable identity required to authorize one public CLI dispatch."""
-
-    run_id: str
-    phase: str
-    command_id: str
-    run_identity_sha256: str
-    parameters: tuple[tuple[str, str], ...] = ()
-
-    def __post_init__(self) -> None:
-        for field_name in ("run_id", "phase", "command_id"):
-            value = getattr(self, field_name)
-            if not isinstance(value, str) or not value.strip() or "\x00" in value:
-                raise ValueError(f"{field_name} must be a non-empty string without NUL")
-        if not isinstance(self.run_identity_sha256, str) or not _SHA256_RE.fullmatch(
-            self.run_identity_sha256
-        ):
-            raise ValueError("run_identity_sha256 must be a lowercase SHA-256 digest")
-        normalized = tuple(sorted(self.parameters))
-        if normalized != self.parameters:
-            raise ValueError("CLI authorization parameters must be sorted")
-        keys: set[str] = set()
-        for key, value in self.parameters:
-            if (
-                not isinstance(key, str)
-                or not key
-                or "\x00" in key
-                or key == "run_identity_sha256"
-            ):
-                raise ValueError("CLI authorization parameter name is invalid")
-            if not isinstance(value, str) or "\x00" in value:
-                raise ValueError("CLI authorization parameter value must be a string")
-            if key in keys:
-                raise ValueError("CLI authorization parameter names must be unique")
-            keys.add(key)
-
-    @classmethod
-    def create(
-        cls,
-        *,
-        run_id: str,
-        phase: str,
-        command_id: str,
-        run_identity_sha256: str,
-        parameters: Mapping[str, str] | None = None,
-    ) -> "CLIExecutionAuthorizationIdentity":
-        return cls(
-            run_id=run_id,
-            phase=phase,
-            command_id=command_id,
-            run_identity_sha256=run_identity_sha256,
-            parameters=tuple(sorted(dict(parameters or {}).items())),
-        )
-
-    @property
-    def gate_run_identity(self) -> dict[str, object]:
-        parameters = {
-            "run_identity_sha256": self.run_identity_sha256,
-            **dict(self.parameters),
-        }
-        return make_run_identity(
-            run_id=self.run_id,
-            phase=self.phase,
-            command_id=self.command_id,
-            parameters=parameters,
-        )
-
-    def as_record(self) -> dict[str, object]:
-        """Return the strict JSON-safe identity inherited by an authorized worker."""
-
-        return {
-            "run_id": self.run_id,
-            "phase": self.phase,
-            "command_id": self.command_id,
-            "run_identity_sha256": self.run_identity_sha256,
-            "parameters": dict(self.parameters),
-        }
-
-    @classmethod
-    def from_record(cls, value: object) -> "CLIExecutionAuthorizationIdentity":
-        if not isinstance(value, dict) or set(value) != {
-            "run_id",
-            "phase",
-            "command_id",
-            "run_identity_sha256",
-            "parameters",
-        }:
-            raise LaunchAuthorizationError(
-                "CLI worker execution identity has an unexpected field set"
-            )
-        parameters = value["parameters"]
-        if not isinstance(parameters, dict) or any(
-            not isinstance(key, str) or not isinstance(item, str)
-            for key, item in parameters.items()
-        ):
-            raise LaunchAuthorizationError(
-                "CLI worker execution identity parameters are invalid"
-            )
-        try:
-            return cls.create(
-                run_id=value["run_id"],
-                phase=value["phase"],
-                command_id=value["command_id"],
-                run_identity_sha256=value["run_identity_sha256"],
-                parameters=parameters,
-            )
-        except (TypeError, ValueError) as error:
-            raise LaunchAuthorizationError(
-                "CLI worker execution identity is malformed"
-            ) from error
-
-
-@dataclass(frozen=True, slots=True)
-class CLIWorkerAuthorization:
-    """Exact consumed authorization and live launcher inherited by workers."""
-
-    consumption_receipt_path: Path
-    consumption_receipt_sha256: str
-    launcher_liveness_receipt_path: Path
-
-
-@dataclass(frozen=True, slots=True)
-class CanonicalConfigBinding:
-    """Securely opened identity of one public mutating command configuration."""
-
-    canonical_root: Path
-    source_path: Path
-    resolved_path: Path
-    source_sha256: str
-    byte_length: int
-    device: int
-    inode: int
-    mode: int
-
-    def authorization_parameters(self) -> dict[str, str]:
-        return {
-            "canonical_config_root": str(self.canonical_root),
-            "canonical_config_path": str(self.source_path),
-            "canonical_config_realpath": str(self.resolved_path),
-            "canonical_config_sha256": self.source_sha256,
-            "canonical_config_size": str(self.byte_length),
-            "canonical_config_device": str(self.device),
-            "canonical_config_inode": str(self.inode),
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class PythonExecutableIdentity:
-    """The exact current interpreter and securely opened final executable bytes."""
-
-    declared_path: Path
-    resolved_path: Path
-    sha256: str
-    byte_length: int
-    device: int
-    inode: int
-    mode: int
-
-    def authorization_parameters(self) -> dict[str, str]:
-        return {
-            "python_executable": str(self.declared_path),
-            "python_executable_realpath": str(self.resolved_path),
-            "python_executable_sha256": self.sha256,
-            "python_executable_size": str(self.byte_length),
-            "python_executable_device": str(self.device),
-            "python_executable_inode": str(self.inode),
-            "python_executable_mode": oct(self.mode & 0o7777),
-        }
-
-
-def bind_canonical_config_path(
-    path: str | Path,
-    *,
-    canonical_root: str | Path,
-) -> CanonicalConfigBinding:
-    """Bind a config below one strict root without following any symlink.
-
-    This check intentionally runs before a format-specific loader.  Legacy
-    configuration trees remain readable by validation and planning commands,
-    but they cannot authorize a mutating command.
-    """
-
-    root = _lexical_absolute_path(canonical_root, label="canonical config root")
-    source = _lexical_absolute_path(path, label="public mutating config")
-    try:
-        relative = source.relative_to(root)
-    except ValueError as error:
-        raise LaunchAuthorizationError(
-            f"public mutating config is outside canonical root {root}: {source}"
-        ) from error
-    if not relative.parts:
-        raise LaunchAuthorizationError("public mutating config cannot be a directory")
-    try:
-        resolved_root = root.resolve(strict=True)
-        resolved_source = source.resolve(strict=True)
-        resolved_source.relative_to(resolved_root)
-    except (OSError, ValueError) as error:
-        raise LaunchAuthorizationError(
-            "public mutating config does not resolve inside its canonical root"
-        ) from error
-    raw, observed = _read_regular_file_without_symlinks(
-        source,
-        label="public mutating config",
-    )
-    if resolved_source != source:
-        # openat/O_NOFOLLOW above already rejects every symlink.  Keep this
-        # explicit equality so mount/path aliasing cannot silently change the
-        # identity recorded in the launch gate.
-        raise LaunchAuthorizationError(
-            "public mutating config lexical path differs from its real path"
-        )
-    return CanonicalConfigBinding(
-        canonical_root=root,
-        source_path=source,
-        resolved_path=resolved_source,
-        source_sha256=sha256(raw).hexdigest(),
-        byte_length=observed.st_size,
-        device=observed.st_dev,
-        inode=observed.st_ino,
-        mode=observed.st_mode,
-    )
-
-
-def verify_canonical_config_binding(binding: CanonicalConfigBinding) -> None:
-    """Re-open and compare the same config identity immediately before exec/run."""
-
-    if not isinstance(binding, CanonicalConfigBinding):
-        raise TypeError("binding must be CanonicalConfigBinding")
-    rebound = bind_canonical_config_path(
-        binding.source_path,
-        canonical_root=binding.canonical_root,
-    )
-    if rebound != binding:
-        raise LaunchAuthorizationError(
-            "canonical config identity changed after launch preflight"
-        )
-
-
-def assert_loaded_config_matches_binding(
-    config: object,
-    binding: CanonicalConfigBinding,
-    *,
-    source_sha256_attribute: str,
-) -> None:
-    """Prove the format-specific loader consumed the bytes bound above."""
-
-    verify_canonical_config_binding(binding)
-    source_path = getattr(config, "source_path", None)
-    source_sha256 = getattr(config, source_sha256_attribute, None)
-    if (
-        not isinstance(source_path, Path)
-        or source_path.resolve() != binding.resolved_path
-    ):
-        raise LaunchAuthorizationError(
-            "loaded config source path differs from canonical config binding"
-        )
-    if source_sha256 != binding.source_sha256:
-        raise LaunchAuthorizationError(
-            "loaded config source bytes differ from canonical config binding"
-        )
-
-
-def bind_current_python_executable(
-    requested: str | Path,
-    *,
-    current_executable: str | Path | None = None,
-) -> PythonExecutableIdentity:
-    """Accept only the interpreter running this audited CLI process."""
-
-    current = _lexical_absolute_path(
-        sys.executable if current_executable is None else current_executable,
-        label="current Python executable",
-    )
-    candidate = _lexical_absolute_path(requested, label="requested Python executable")
-    if candidate != current:
-        raise LaunchAuthorizationError(
-            "--python must be the exact current audited sys.executable"
-        )
-    try:
-        resolved = candidate.resolve(strict=True)
-    except OSError as error:
-        raise LaunchAuthorizationError(
-            "current Python executable cannot be resolved"
-        ) from error
-    process_executable = Path("/proc/self/exe")
-    if process_executable.exists():
-        try:
-            if process_executable.resolve(strict=True) != resolved:
-                raise LaunchAuthorizationError(
-                    "sys.executable does not resolve to the running process executable"
-                )
-        except OSError as error:
-            raise LaunchAuthorizationError(
-                "running process executable identity cannot be resolved"
-            ) from error
-    raw, observed = _read_regular_file_without_symlinks(
-        resolved,
-        label="resolved Python executable",
-    )
-    if stat.S_ISLNK(observed.st_mode) or observed.st_mode & 0o111 == 0:
-        raise LaunchAuthorizationError(
-            "resolved Python executable must be a non-symlink executable regular file"
-        )
-    if not os.access(candidate, os.X_OK):
-        raise LaunchAuthorizationError("current Python executable is not executable")
-    return PythonExecutableIdentity(
-        declared_path=candidate,
-        resolved_path=resolved,
-        sha256=sha256(raw).hexdigest(),
-        byte_length=observed.st_size,
-        device=observed.st_dev,
-        inode=observed.st_ino,
-        mode=observed.st_mode,
-    )
-
-
-def verify_python_executable_identity(identity: PythonExecutableIdentity) -> None:
-    """Reverify the current interpreter path, target, metadata, and bytes."""
-
-    if not isinstance(identity, PythonExecutableIdentity):
-        raise TypeError("identity must be PythonExecutableIdentity")
-    rebound = bind_current_python_executable(identity.declared_path)
-    if rebound != identity:
-        raise LaunchAuthorizationError(
-            "Python executable identity changed after launch preflight"
-        )
-
-
-def sanitized_child_environment(
-    base: Mapping[str, str] | None = None,
-) -> tuple[dict[str, str], tuple[str, ...]]:
-    """Remove credential and interpreter-injection state from a child env."""
-
-    source = os.environ if base is None else base
-    result: dict[str, str] = {}
-    stripped: list[str] = []
-    for name, value in source.items():
-        if not isinstance(name, str) or not isinstance(value, str):
-            raise TypeError("child environment keys and values must be strings")
-        if _is_sensitive_or_injectable_environment_name(name):
-            stripped.append(name)
-        else:
-            result[name] = value
-    return result, tuple(sorted(stripped))
-
-
-def environment_sanitization_parameters(
-    stripped_names: tuple[str, ...],
-) -> dict[str, str]:
-    """Record the non-secret residual identity without exposing secret values."""
-
-    if tuple(sorted(stripped_names)) != stripped_names:
-        raise ValueError("stripped environment names must be sorted")
-    raw = json.dumps(list(stripped_names), separators=(",", ":")).encode("utf-8")
-    return {
-        "child_environment_policy": _ENVIRONMENT_SANITIZATION_POLICY,
-        "stripped_environment_name_count": str(len(stripped_names)),
-        "stripped_environment_names_sha256": sha256(raw).hexdigest(),
-    }
 
 
 def cli_worker_authorization_environment(
@@ -513,110 +162,6 @@ def verify_cli_worker_authorization_from_environment(
         ],
     )
     return identity
-
-
-def _lexical_absolute_path(path: str | Path, *, label: str) -> Path:
-    raw = Path(path).expanduser()
-    if "\x00" in os.fspath(raw) or ".." in raw.parts:
-        raise LaunchAuthorizationError(f"{label} path is unsafe")
-    absolute = Path(os.path.abspath(os.fspath(raw)))
-    if not absolute.is_absolute() or ".." in absolute.parts:
-        raise LaunchAuthorizationError(f"{label} path must be absolute")
-    return absolute
-
-
-def _read_regular_file_without_symlinks(
-    path: Path,
-    *,
-    label: str,
-) -> tuple[bytes, os.stat_result]:
-    """Use openat/O_NOFOLLOW for every ancestor and the final file."""
-
-    source = _lexical_absolute_path(path, label=label)
-    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
-        raise LaunchAuthorizationError(
-            f"{label} cannot be verified without openat/O_NOFOLLOW support"
-        )
-    directory_fd: int | None = None
-    descriptor: int | None = None
-    try:
-        directory_fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
-        for component in source.parts[1:-1]:
-            next_fd = os.open(
-                component,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=directory_fd,
-            )
-            os.close(directory_fd)
-            directory_fd = next_fd
-        descriptor = os.open(
-            source.name,
-            os.O_RDONLY | os.O_NOFOLLOW,
-            dir_fd=directory_fd,
-        )
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise LaunchAuthorizationError(f"{label} is not a regular file: {source}")
-        chunks: list[bytes] = []
-        while True:
-            block = os.read(descriptor, 8 * 1024 * 1024)
-            if not block:
-                break
-            chunks.append(block)
-        after = os.fstat(descriptor)
-        if (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-            before.st_mode,
-        ) != (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-            after.st_mode,
-        ):
-            raise LaunchAuthorizationError(f"{label} changed while it was read")
-        return b"".join(chunks), after
-    except LaunchAuthorizationError:
-        raise
-    except OSError as error:
-        raise LaunchAuthorizationError(
-            f"{label} is missing, unreadable, or contains a symlink: {source}"
-        ) from error
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        if directory_fd is not None:
-            os.close(directory_fd)
-
-
-def _is_sensitive_or_injectable_environment_name(name: str) -> bool:
-    upper = name.upper()
-    if upper in {
-        "PYTHONPATH",
-        "PYTHONHOME",
-        "PYTHONSTARTUP",
-        "PYTHONINSPECT",
-        "LD_PRELOAD",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-    }:
-        return True
-    if upper.startswith(("AWS_", "AZURE_", "OPENAI_", "OPENROUTER_")):
-        return True
-    return upper.endswith(
-        (
-            "_API_KEY",
-            "_ACCESS_KEY",
-            "_SECRET_KEY",
-            "_AUTH_TOKEN",
-            "_PASSWORD",
-            "_CREDENTIALS",
-        )
-    ) or upper in {"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"}
 
 
 def assert_legacy_standalone_execution_quarantined(tool_id: str) -> NoReturn:
@@ -1053,14 +598,17 @@ __all__ = [
     "CLIExecutionAuthorizationIdentity",
     "CLIWorkerAuthorization",
     "CanonicalConfigBinding",
+    "PythonExecutableBinding",
     "PythonExecutableIdentity",
     "REPOSITORY_EXECUTION_POLICY_PATH",
     "assert_loaded_config_matches_binding",
+    "assert_fd_exec_supported",
     "assert_canonical_runtime_launch_enabled",
     "assert_legacy_standalone_execution_quarantined",
     "assert_legacy_standalone_mode_quarantined",
     "bind_canonical_config_path",
     "bind_current_python_executable",
+    "bind_current_python_executable_for_exec",
     "cli_worker_authorization_environment",
     "consume_cli_execution_authorization",
     "environment_sanitization_parameters",
@@ -1070,4 +618,5 @@ __all__ = [
     "verify_cli_worker_authorization",
     "verify_cli_worker_authorization_from_environment",
     "verify_python_executable_identity",
+    "verify_python_executable_binding",
 ]

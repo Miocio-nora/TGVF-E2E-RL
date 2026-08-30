@@ -133,7 +133,7 @@ def test_stabilization_policy_v2_is_frozen_and_runtime_closed() -> None:
         )
     )
     assert policy["schema_version"] == "tgvf-experiment-execution-policy-v2"
-    assert policy["revision"] == 2
+    assert policy["revision"] == 3
     assert policy["execution_mode"] == "frozen"
     assert policy["freeze_override"] == {
         "max_ttl_seconds": 3600,
@@ -144,7 +144,6 @@ def test_stabilization_policy_v2_is_frozen_and_runtime_closed() -> None:
         "blocker_ids": [
             "atomic_authority_transaction_missing",
             "child_environment_allowlist_missing",
-            "fd_bound_python_exec_missing",
             "immutable_runtime_code_package_missing",
             "policy_recursive_compile_closure_missing",
             "representation_eval_safe_artifact_missing",
@@ -267,7 +266,11 @@ def _direct_call_statement(
     call_name: str,
 ) -> ast.stmt:
     matches: list[ast.stmt] = []
+    controlled_statements = list(branch.body)
     for statement in branch.body:
+        if isinstance(statement, ast.Try):
+            controlled_statements.extend(statement.body)
+    for statement in controlled_statements:
         value: ast.expr | None = None
         if isinstance(statement, ast.Expr):
             value = statement.value
@@ -396,6 +399,76 @@ def test_control_plane_audit_blocks_caught_public_cli_guard_after_hash_refresh(
     )
     assert not any(
         relative in item and "content SHA256 differs" in item
+        for item in report["violations"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "dispatch"),
+    (
+        ("launch-representation", "_execute_representation_torchrun"),
+        ("run-policy", "_execute_policy_run"),
+    ),
+)
+@pytest.mark.parametrize(
+    "mutation",
+    ("caught-dispatch", "extra-try-effect", "extra-finally", "wrong-finally"),
+)
+def test_control_plane_audit_enforces_exact_prepared_lifetime_try_finally(
+    tmp_path: Path,
+    command: str,
+    dispatch: str,
+    mutation: str,
+) -> None:
+    relative = "src/tgvf_rl/cli.py"
+    repository = _minimal_audit_repository(tmp_path)
+    cli_path = repository / relative
+    source = cli_path.read_text(encoding="utf-8")
+    branch = _cli_command_branch(source, command)
+    lifetime_tries = [
+        statement for statement in branch.body if isinstance(statement, ast.Try)
+    ]
+    assert len(lifetime_tries) == 1
+    lifetime_try = lifetime_tries[0]
+    dispatch_statement = _direct_call_statement(branch, dispatch)
+    if mutation == "caught-dispatch":
+        mutated = _replace_statement_with_caught_call(source, dispatch_statement)
+    elif mutation == "extra-try-effect":
+        mutated = _insert_source_before(
+            source,
+            dispatch_statement,
+            "os.system('unsafe-between-authorization-and-dispatch')",
+        )
+    elif mutation == "extra-finally":
+        assert len(lifetime_try.finalbody) == 1
+        mutated = _insert_source_after(
+            source,
+            lifetime_try.finalbody[0],
+            "os.system('unsafe-finalizer-effect')",
+        )
+    else:
+        assert len(lifetime_try.finalbody) == 1
+        finalizer = lifetime_try.finalbody[0]
+        lines = source.splitlines(keepends=True)
+        original = "".join(lines[finalizer.lineno - 1 : finalizer.end_lineno])
+        assert original.count("prepared.close_python_binding()") == 1
+        mutated = (
+            "".join(lines[: finalizer.lineno - 1])
+            + original.replace(
+                "prepared.close_python_binding()",
+                "prepared.abandon_python_binding()",
+                1,
+            )
+            + "".join(lines[finalizer.end_lineno :])
+        )
+    cli_path.write_text(mutated, encoding="utf-8")
+    _refresh_surface_hash(repository, relative)
+
+    report = _run_control_audit(repository)
+
+    assert any(
+        f"public CLI control {command}" in item
+        and "exact fail-closed branch statement/call shape" in item
         for item in report["violations"]
     )
 
@@ -1073,7 +1146,7 @@ def test_execution_surface_manifest_is_exact_and_content_bound() -> None:
         )
     )
     assert policy["schema_version"] == "tgvf-execution-surface-policy-v2"
-    assert policy["revision"] == 3
+    assert policy["revision"] == 4
     completed = subprocess.run(
         [
             sys.executable,
@@ -1389,6 +1462,46 @@ def test_control_plane_audit_blocks_public_control_lambda_rebind(
     assert any(
         "_consume_command_authorization provenance" in item
         and "Store/Delete/shadow/rebind" in item
+        for item in report["violations"]
+    )
+
+
+@pytest.mark.parametrize("mutation", ("rebind", "wrong-import"))
+def test_control_plane_audit_requires_exact_cli_launch_dispatch_imports(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    relative = "src/tgvf_rl/cli.py"
+    repository = _minimal_audit_repository(tmp_path)
+    cli_path = repository / relative
+    source = cli_path.read_text(encoding="utf-8")
+    if mutation == "rebind":
+        marker = "\ndef main(argv: Sequence[str] | None = None) -> int:\n"
+        assert source.count(marker) == 1
+        mutated = source.replace(
+            marker,
+            "\n_execute_policy_run = lambda *_args, **_kwargs: None\n" + marker,
+            1,
+        )
+    else:
+        marker = "from tgvf_rl.ops.cli_launch import ("
+        assert source.count(marker) == 1
+        mutated = source.replace(
+            marker,
+            "from attacker_control import (",
+            1,
+        )
+    cli_path.write_text(mutated, encoding="utf-8")
+    _refresh_surface_hash(repository, relative)
+
+    report = _run_control_audit(repository)
+
+    assert any(
+        "_execute_policy_run provenance" in item
+        and (
+            "Store/Delete/shadow/rebind" in item
+            or "direct import from tgvf_rl.ops.cli_launch" in item
+        )
         for item in report["violations"]
     )
 
