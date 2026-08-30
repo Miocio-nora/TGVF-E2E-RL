@@ -437,4 +437,5 @@ warnings in 143.29 seconds. Commit `5c058a1` passes install, lint, both audits,
 and the complete CPU suite in remote run `33302879219`.
 The later authorization-proof consumption follow-up has 289 focused passes in
 64.83 seconds and a full hermetic CPU result of 2,386 passed, five skipped, and
-four warnings in 141.13 seconds. It is local until its own remote run completes.
+four warnings in 141.13 seconds. Commit `311770f` passes install, lint, both
+audits, and the complete CPU suite in remote run `33304029789`.

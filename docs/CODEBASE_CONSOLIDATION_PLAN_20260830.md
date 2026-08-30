@@ -19,10 +19,10 @@ CPU suite of 2,383 passed, five skipped, and four non-failing warnings in
 `33302879219` across install, lint, both audits, and the complete CPU suite. Its
 expanded focused selection has 285 passing tests in 64.77 seconds, and the core
 aggregate had already reached 126 passing tests.
-The authorization-proof consumption follow-up is locally green with 2,386
-passed, five skipped, and four warnings in 141.13 seconds; its expanded focused
-selection has 289 passing tests in 64.83 seconds. It has no remote result of its
-own yet.
+The authorization-proof consumption follow-up is green with 2,386 passed, five
+skipped, and four warnings in 141.13 seconds; its expanded focused selection has
+289 passing tests in 64.83 seconds. Commit `311770f` passes the complete remote
+CI workflow in run `33304029789`.
 Policy v3 revision 7 records the 17 remaining oversized modules and rejects
 growth, slack, stale entries, or a relaxed baseline. This plan does not
 authorize an experiment or rewrite historical evidence.
@@ -70,7 +70,8 @@ the same strict child-environment head across install, lint, both audits, and
 the complete CPU suite.
 The later authorization-proof consumption follow-up has 2,386 passed, five
 skipped, and four warnings in 141.13 seconds, with 289 passing focused tests in
-64.83 seconds. It is local until its own remote run completes.
+64.83 seconds. Commit `311770f` is green across install, lint, both audits, and
+the complete CPU suite in remote run `33304029789`.
 Predecessor commit `a5dd0d1` is green across install, lint, both audits, and the
 full CPU job after five private-machine-path test fixtures were made hermetic.
 The fd-closure head `ab508c4` is independently green in remote run
@@ -387,8 +388,8 @@ nine post-C2 priority decompositions, the revision-7 production-size exception
 ratchet, the known-cycle condition, the fd-bound Python-exec blocker, and the
 strict child-environment blocker are complete, and C4 remains a read-only
 inventory. Validated one-use proof fields are also consumed before downstream
-dispatch. The predecessor, fd-closure, and strict child-environment checkpoints
-all have green remote CPU CI; the proof-consumption follow-up is locally green.
+dispatch. The predecessor, fd-closure, strict child-environment, and
+proof-consumption checkpoints all have green remote CPU CI.
 Portable runtime/CLI closure remains disabled by seven named blockers, now
 including `role_scoped_judge_secret_transport_missing`; immutable code/startup
 closure, the worker envelope and member claims, Ray-descendant environment
