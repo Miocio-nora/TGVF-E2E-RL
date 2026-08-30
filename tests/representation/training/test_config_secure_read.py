@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import textwrap
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -141,14 +142,17 @@ def test_public_loader_intentionally_rejects_source_symlinks(
 
 def test_public_loader_rejects_source_fifo_without_blocking(tmp_path: Path) -> None:
     fifo = tmp_path / "config.fifo"
+    ready = tmp_path / "fifo-probe-ready"
     os.mkfifo(fifo)
     program = textwrap.dedent(
         """
+        from pathlib import Path
         import sys
         from tgvf_rl.representation.training.config import (
             load_representation_training_config,
         )
 
+        Path(sys.argv[2]).write_text("ready", encoding="utf-8")
         try:
             load_representation_training_config(
                 sys.argv[1],
@@ -160,13 +164,36 @@ def test_public_loader_rejects_source_fifo_without_blocking(tmp_path: Path) -> N
         """
     )
 
-    completed = subprocess.run(
-        [sys.executable, "-c", program, str(fifo)],
-        check=False,
-        timeout=2.0,
+    process = subprocess.Popen(
+        [sys.executable, "-c", program, str(fifo), str(ready)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
     )
+    try:
+        import_deadline = time.monotonic() + 30.0
+        while not ready.is_file() and process.poll() is None:
+            if time.monotonic() >= import_deadline:
+                process.kill()
+                _stdout, stderr = process.communicate(timeout=5.0)
+                pytest.fail(f"FIFO probe import did not become ready: {stderr}")
+            time.sleep(0.01)
+        if not ready.is_file():
+            _stdout, stderr = process.communicate(timeout=5.0)
+            pytest.fail(f"FIFO probe exited before loader invocation: {stderr}")
+        try:
+            returncode = process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            _stdout, stderr = process.communicate(timeout=5.0)
+            pytest.fail(f"configuration loader blocked on FIFO: {stderr}")
+        _stdout, stderr = process.communicate(timeout=5.0)
+    finally:
+        if process.poll() is None:  # pragma: no cover - defensive cleanup
+            process.kill()
+            process.wait(timeout=5.0)
 
-    assert completed.returncode == 0
+    assert returncode == 0, stderr
 
 
 def test_source_missing_and_nonregular_errors_preserve_valueerror_text(
