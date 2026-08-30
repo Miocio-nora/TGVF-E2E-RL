@@ -122,7 +122,7 @@ from .native_agent_loop import VerlNativeTrajectoryComponents
 from .objective_bridge import make_objective_sentinels
 from .reward_bridge import VerlRewardedAgentLoopOutputBuilder
 from .rollout_bridge import RolloutBridgeRecord
-from .policy_runtime import (
+from .policy_runtime_contract import (
     PolicyE2ERuntimeBuildContext,
     PolicyE2ERuntimeProduct,
 )

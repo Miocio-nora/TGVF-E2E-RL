@@ -43,7 +43,13 @@ from tgvf_rl.policy.run_config import (
 from .native_agent_loop import (
     BoundVerlNativeAgentLoopInvocationFactory,
     VerlNativeAgentLoopInvocation,
-    VerlNativeTrajectoryComponentsPort,
+    VerlNativeTrajectoryComponentsPort as VerlNativeTrajectoryComponentsPort,
+)
+from .policy_runtime_contract import (
+    PolicyAgentLoopWorkerPlacement,
+    PolicyE2ERuntimeBuildContext,
+    PolicyE2ERuntimeProduct,
+    PolicyLoRASnapshotConsumer,
 )
 
 if TYPE_CHECKING:
@@ -62,92 +68,6 @@ _AGENT_LOOP_WORKER_NAME = re.compile(
 
 class PolicyE2ELiveRuntimeUnavailableError(RuntimeError):
     """Raised when the real model/tool/replay composition is not installed."""
-
-
-@dataclass(frozen=True, slots=True)
-class PolicyAgentLoopWorkerPlacement:
-    """Deterministic upstream-worker to configured GPU assignment."""
-
-    worker_index: int
-    logical_gpu_id: int
-    physical_gpu_id: int
-    world_size: int
-
-    def __post_init__(self) -> None:
-        for name in ("worker_index", "logical_gpu_id", "physical_gpu_id"):
-            value = getattr(self, name)
-            if type(value) is not int or value < 0:
-                raise ValueError(f"{name} must be a non-negative integer")
-        if type(self.world_size) is not int or self.world_size != 4:
-            raise ValueError("Policy Pilot worker placement requires world_size=4")
-        if self.worker_index >= self.world_size:
-            raise ValueError("AgentLoop worker index lies outside the four-GPU world")
-
-    @property
-    def torch_device(self) -> torch.device:
-        """Logical CUDA device used under the run-bound visible-device order."""
-
-        return torch.device("cuda", self.logical_gpu_id)
-
-
-class PolicyLoRASnapshotConsumer(Protocol):
-    """Install and prove the exact LoRA state used for local behavior forwards."""
-
-    def apply_policy_lora_snapshot(
-        self, snapshot: "PolicyLoRASnapshot", /
-    ) -> PolicyVersion: ...
-
-
-@dataclass(frozen=True, slots=True)
-class PolicyE2ERuntimeBuildContext:
-    """Identity-complete inputs supplied to one live runtime builder."""
-
-    config: PolicyE2ESmokeRunConfig
-    placement: PolicyAgentLoopWorkerPlacement
-    initial_snapshot: "PolicyLoRASnapshot"
-    weight_sync_state: "PolicyWeightSyncState"
-    trainer_config: object
-    server_manager: object
-    tokenizer: object
-    processor: object
-    dataset_cls: object
-    data_config: object
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.config, PolicyE2ESmokeRunConfig):
-            raise TypeError("runtime context requires PolicyE2ESmokeRunConfig")
-        if not isinstance(self.placement, PolicyAgentLoopWorkerPlacement):
-            raise TypeError("runtime context requires a worker placement")
-        if self.initial_snapshot.policy_version.run_id != self.config.run_id:
-            raise IdentityMismatchError(
-                "initial local LoRA snapshot belongs to another run"
-            )
-
-
-@dataclass(frozen=True, slots=True)
-class PolicyE2ERuntimeProduct:
-    """Real trajectory components and the local exact-weight consumer."""
-
-    trajectory_components: VerlNativeTrajectoryComponentsPort
-    snapshot_consumer: PolicyLoRASnapshotConsumer
-
-    def __post_init__(self) -> None:
-        sync_builder = getattr(
-            self.trajectory_components, "build_trajectory_components", None
-        )
-        async_builder = getattr(
-            self.trajectory_components, "build_trajectory_components_async", None
-        )
-        if not callable(sync_builder) and not callable(async_builder):
-            raise TypeError(
-                "runtime product must provide a sync or async trajectory builder"
-            )
-        if not callable(
-            getattr(self.snapshot_consumer, "apply_policy_lora_snapshot", None)
-        ):
-            raise TypeError(
-                "runtime product must provide apply_policy_lora_snapshot()"
-            )
 
 
 class PolicyE2ERuntimeBuilder(Protocol):
