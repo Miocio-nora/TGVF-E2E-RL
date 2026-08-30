@@ -10,6 +10,7 @@ from pathlib import Path
 import pickle
 import sys
 import threading
+import tomllib
 from types import ModuleType
 from types import SimpleNamespace
 
@@ -18,6 +19,17 @@ import torch
 
 from tgvf_rl.contracts.errors import ReplayMismatchError
 from tgvf_rl.contracts.identity import PolicyVersion
+from tgvf_rl.data import (
+    DEEPEYES47K_DATASET_ID,
+    DEEPEYES47K_MANIFEST_FILE,
+    DEEPEYES47K_SAMPLES_FILE,
+    DEEPEYES47K_SCHEMA_VERSION,
+    DEEPEYES47K_SHUFFLE_ALGORITHM,
+    DEEPEYES47K_SNAPSHOT,
+    DEEPEYES47K_SOURCE_FILES,
+    DEEPEYES47K_TOTAL_ROWS,
+    DeepEyes47KRuntimeBinding,
+)
 import tgvf_rl.evaluation.policy_coredev as policy_coredev
 import tgvf_rl.evaluation.policy_evaluation_config as policy_evaluation_config
 from tgvf_rl.evaluation.policy_coredev import (
@@ -50,7 +62,10 @@ from tgvf_rl.framework.verl.policy_weight_sync import (
     publish_policy_weight_sync_request,
     wrap_lora_parameter_stream_for_snapshot,
 )
-from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
+from tgvf_rl.policy.run_config import (
+    formal_deepeyes47k_iteration_identity_sha256,
+    load_policy_e2e_smoke_run_config,
+)
 from tgvf_rl.protocol import (
     NativeActionBoundaryProtocolId,
     NativeSuccessObservationProtocolId,
@@ -82,6 +97,129 @@ def test_policy_coredev_reexports_policy_evaluation_config_contract() -> None:
 
 def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _replace_once(source: str, old: str, new: str) -> str:
+    assert source.count(old) == 1
+    return source.replace(old, new, 1)
+
+
+def _materialize_native_vllm_eos_run_config(tmp_path: Path) -> Path:
+    source_path = (
+        REPOSITORY_ROOT / "configs/policy/runs/"
+        "prl_02_r5_qwen3_grpo_bs16_tgvf_t1_formal_pilot_80step_gpu0123.toml"
+    )
+    payload = tomllib.loads(source_path.read_text(encoding="utf-8"))
+    dataset = payload["dataset"]
+    representation = payload["representation"]
+    reward = payload["reward"]
+    framework = payload["framework"]
+    assert isinstance(dataset, dict)
+    assert isinstance(representation, dict)
+    assert isinstance(reward, dict)
+    assert isinstance(framework, dict)
+
+    dataset_root = (tmp_path / "formal-deepeyes-evidence").resolve()
+    dataset_root.mkdir()
+    samples_payload = b"{}\n" * DEEPEYES47K_TOTAL_ROWS
+    samples_path = dataset_root / DEEPEYES47K_SAMPLES_FILE
+    samples_path.write_bytes(samples_payload)
+    samples_sha256 = _sha256(samples_payload)
+    descriptor = {
+        "schema_version": DEEPEYES47K_SCHEMA_VERSION,
+        "dataset_id": DEEPEYES47K_DATASET_ID,
+        "snapshot": DEEPEYES47K_SNAPSHOT,
+        "fixture": False,
+        "source_files": [spec.as_record() for spec in DEEPEYES47K_SOURCE_FILES],
+        "source_total_rows": sum(spec.rows for spec in DEEPEYES47K_SOURCE_FILES),
+        "sample_count": DEEPEYES47K_TOTAL_ROWS,
+        "shuffle": {
+            "algorithm": DEEPEYES47K_SHUFFLE_ALGORITHM,
+            "seed": 42,
+        },
+        "samples": {
+            "path": DEEPEYES47K_SAMPLES_FILE,
+            "rows": DEEPEYES47K_TOTAL_ROWS,
+            "sha256": samples_sha256,
+        },
+        "images": {
+            "directory": "images",
+            "address": "sha256-of-original-bytes",
+        },
+    }
+    content_sha256 = _sha256(_canonical_json_bytes(descriptor))
+    manifest_payload = (
+        _canonical_json_bytes({**descriptor, "content_sha256": content_sha256}) + b"\n"
+    )
+    (dataset_root / DEEPEYES47K_MANIFEST_FILE).write_bytes(manifest_payload)
+    manifest_file_sha256 = _sha256(manifest_payload)
+    binding = DeepEyes47KRuntimeBinding.formal(
+        manifest_file_sha256=manifest_file_sha256,
+        content_sha256=content_sha256,
+        shuffle_seed=42,
+    )
+    iteration_identity_sha256 = formal_deepeyes47k_iteration_identity_sha256(
+        binding,
+        samples_sha256=samples_sha256,
+    )
+
+    representation_path = (tmp_path / "representation" / "adapter.pt").resolve()
+    representation_path.parent.mkdir()
+    representation_payload = b"hermetic native-vllm-eos representation evidence"
+    representation_path.write_bytes(representation_payload)
+
+    bound_inputs = tmp_path / "bound-inputs"
+    bound_inputs.mkdir()
+    judge_source = (
+        REPOSITORY_ROOT
+        / "configs/policy/judges/openrouter_qwen25_72b_formal_pilot_judge_v3.json"
+    )
+    judge_path = (bound_inputs / judge_source.name).resolve()
+    judge_payload = judge_source.read_bytes()
+    judge_path.write_bytes(judge_payload)
+    agent_loop_source = (
+        REPOSITORY_ROOT / "configs/policy/agent_loops/tgvf_native_policy_v1.yaml"
+    )
+    agent_loop_path = (bound_inputs / agent_loop_source.name).resolve()
+    agent_loop_payload = agent_loop_source.read_bytes()
+    agent_loop_path.write_bytes(agent_loop_payload)
+
+    text = source_path.read_text(encoding="utf-8")
+    replacements = {
+        str(dataset["root"]): str(dataset_root),
+        str(dataset["manifest_file_sha256"]): manifest_file_sha256,
+        str(dataset["content_sha256"]): content_sha256,
+        str(dataset["samples_sha256"]): samples_sha256,
+        str(dataset["iteration_identity_sha256"]): iteration_identity_sha256,
+        str(representation["artifact_path"]): str(representation_path),
+        str(representation["artifact_file_sha256"]): _sha256(representation_payload),
+        str(reward["judge_config_path"]): str(judge_path),
+        str(reward["judge_config_sha256"]): _sha256(judge_payload),
+        str(framework["agent_loop_config_path"]): str(agent_loop_path),
+        str(framework["agent_loop_config_sha256"]): _sha256(agent_loop_payload),
+    }
+    for old, new in replacements.items():
+        text = _replace_once(text, old, new)
+    for external_input in (
+        str(dataset["root"]),
+        str(representation["artifact_path"]),
+        str(reward["judge_config_path"]),
+        str(framework["agent_loop_config_path"]),
+    ):
+        assert external_input not in text
+    destination = tmp_path / source_path.name
+    destination.write_text(text, encoding="utf-8")
+    return destination
 
 
 def _lora_evaluation_fixture(
@@ -231,14 +369,18 @@ def test_canonical_evaluation_schema_tracks_runtime_v2_constants() -> None:
     } <= required
 
 
-def test_policy_evaluation_accepts_native_vllm_eos_identity() -> None:
+def test_policy_evaluation_accepts_native_vllm_eos_identity(tmp_path: Path) -> None:
     run = load_policy_e2e_smoke_run_config(
-        REPOSITORY_ROOT
-        / "configs/policy/runs/prl_02_r5_qwen3_grpo_bs16_tgvf_t1_formal_pilot_80step_gpu0123.toml",
+        _materialize_native_vllm_eos_run_config(tmp_path),
         allow_external_agent_loop_config=True,
         allow_historical_reward_contract=True,
     )
 
+    assert run.dataset.root.is_relative_to(tmp_path.resolve())
+    assert run.representation.artifact_path.is_relative_to(tmp_path.resolve())
+    assert run.reward.judge_config_path is not None
+    assert run.reward.judge_config_path.is_relative_to(tmp_path.resolve())
+    assert run.framework.agent_loop_config_path.is_relative_to(tmp_path.resolve())
     assert (
         VLLMTerminationOutcome("stop", None)
         in _termination_contract(run).final_turn_outcomes

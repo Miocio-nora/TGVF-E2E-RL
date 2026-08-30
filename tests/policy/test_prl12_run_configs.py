@@ -6,6 +6,8 @@ import tomllib
 
 import pytest
 
+from tests.data.test_policy_t1_mixed_rl_dataset import _three_source_fixture
+from tgvf_rl.data import materialize_policy_t1_mixed_retained_pool
 from tgvf_rl.policy.deepeyes_strict_control import (
     DeepEyesSourceToolRoutingMode,
     DeepEyesVisualAnswerVerifierMode,
@@ -36,6 +38,29 @@ def _toml(path: Path) -> dict[str, object]:
         return tomllib.load(handle)
 
 
+def _replace_once(source: str, old: str, new: str) -> str:
+    assert source.count(old) == 1
+    return source.replace(old, new, 1)
+
+
+def _materialize_mixed_dataset_evidence(
+    tmp_path: Path,
+    source_path: Path,
+) -> dict[str, object]:
+    fixture_root = tmp_path / f"{source_path.stem}-dataset-evidence"
+    fixture_root.mkdir()
+    candidates_path, final_manifest_path, expected_source_counts = (
+        _three_source_fixture(fixture_root)
+    )
+    result = materialize_policy_t1_mixed_retained_pool(
+        candidates_path,
+        final_manifest_path,
+        fixture_root / "artifact",
+        expected_source_counts=expected_source_counts,
+    )
+    return result.as_record()
+
+
 def _materialize_historical_read_copy(tmp_path: Path, source_path: Path) -> Path:
     """Rebind deleted-worktree dependencies without changing frozen evidence."""
 
@@ -52,9 +77,45 @@ def _materialize_historical_read_copy(tmp_path: Path, source_path: Path) -> Path
     local_judge = _ROOT / "configs/policy/judges" / Path(historical_judge).name
     assert local_agent_loop.is_file()
     assert local_judge.is_file()
+    dataset = payload["dataset"]
+    representation = payload["representation"]
+    assert isinstance(dataset, dict)
+    assert isinstance(representation, dict)
+    dataset_evidence = _materialize_mixed_dataset_evidence(tmp_path, source_path)
+    representation_path = (tmp_path / "representation" / "adapter.pt").resolve()
+    representation_path.parent.mkdir(exist_ok=True)
+    representation_payload = b"hermetic representation artifact evidence"
+    representation_path.write_bytes(representation_payload)
     text = source_path.read_text(encoding="utf-8")
-    text = text.replace(historical_agent_loop, str(local_agent_loop), 1)
-    text = text.replace(historical_judge, str(local_judge), 1)
+    replacements = {
+        historical_agent_loop: str(local_agent_loop),
+        historical_judge: str(local_judge),
+        str(dataset["root"]): str(dataset_evidence["root"]),
+        f"sample_count = {dataset['sample_count']}": (
+            f"sample_count = {dataset_evidence['sample_count']}"
+        ),
+        str(dataset["manifest_file_sha256"]): str(
+            dataset_evidence["manifest_file_sha256"]
+        ),
+        str(dataset["content_sha256"]): str(dataset_evidence["content_sha256"]),
+        str(dataset["samples_sha256"]): str(dataset_evidence["samples_sha256"]),
+        str(dataset["iteration_identity_sha256"]): str(
+            dataset_evidence["iteration_identity_sha256"]
+        ),
+        str(representation["artifact_path"]): str(representation_path),
+        str(representation["artifact_file_sha256"]): sha256(
+            representation_payload
+        ).hexdigest(),
+    }
+    for old, new in replacements.items():
+        text = _replace_once(text, old, new)
+    for external_input in (
+        historical_agent_loop,
+        historical_judge,
+        str(dataset["root"]),
+        str(representation["artifact_path"]),
+    ):
+        assert external_input not in text
     destination = tmp_path / source_path.name
     destination.write_text(text, encoding="utf-8")
     return destination
@@ -136,6 +197,8 @@ def test_prl12_configs_load_with_separate_content_identities(tmp_path: Path) -> 
     assert arm_a.source_sha256 == sha256(arm_a_path.read_bytes()).hexdigest()
     assert arm_b.source_sha256 == sha256(arm_b_path.read_bytes()).hexdigest()
     for arm in (arm_a, arm_b):
+        assert arm.dataset.root.is_relative_to(tmp_path.resolve())
+        assert arm.representation.artifact_path.is_relative_to(tmp_path.resolve())
         assert arm.accumulation.global_prompt_batch_size == 256
         assert arm.policy.sampling.trajectories_per_prompt == 16
         assert arm.optimizer.learning_rate == 1.0e-6
