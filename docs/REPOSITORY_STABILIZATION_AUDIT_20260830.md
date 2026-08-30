@@ -32,7 +32,7 @@ not closed merely because the affected experiment has stopped running.
 | Result comparisons | contained, not closed | Registry v2 verifies score-file bytes/content and independent preregistration bytes, but those artifacts do not bind a score to evaluation identity, the exact trajectory set, weights and the full comparison contract. V2 rejects every `golden` status and every numeric delta. Its implementation is now split into a 292-line facade, 839-line schema leaf, and 225-line support leaf without changing historical imports or serialization coordinates. |
 | Policy compile prerequisites | blocked | The hidden worktree-local default is removed and a strict content-bound v1 manifest now binds four minimum declared files. Launch remains blocked because recursive Python headers and the compiler system-toolchain are not yet closed by the manifest schema. |
 | Snapshot filesystem closure | partial | LoRA closure reads use descriptor-relative traversal and immutable publications use no-replace semantics. Full-model freeze stores immutable manifest/receipt records rather than copying the external weights; official loading now hashes the complete bound checkpoint/model closure and repeats that verification immediately before vLLM construction, including same-size mutation tests. vLLM 0.12 exposes neither a loaded-adapter nor loaded-full-model digest, so same-UID mutation after the final verification remains a documented runtime residual. |
-| Test discovery and behavior | current local green; remote reproduction pending | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The final current hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; both repository audits pass. Before the added size-tamper parameter, the focused selection had 304 passing tests; the updated fd security file passes 10/10 and the final full suite contains that case. Predecessor commit `a5dd0d1` is remotely green after five private-machine-path fixtures were made hermetic, but the fd-closure commit still requires its own remote run. |
+| Test discovery and behavior | current local and remote verification green | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The final current hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; both repository audits pass. Before the added size-tamper parameter, the focused selection had 304 passing tests; the updated fd security file passes 10/10 and the final full suite contains that case. Predecessor commit `a5dd0d1` is remotely green after five private-machine-path fixtures were made hermetic, and fd-closure head `ab508c4` independently passes install, lint, both audits, and the complete CPU suite in remote run `33300849634`. |
 
 ## 2026-08-30 fd-closure checkpoint
 
@@ -362,8 +362,8 @@ but is not score provenance.
   non-failing warnings, and zero failures in 118.46 seconds. The boundary audit
   passed with 73 visible debts and zero violations; the control-plane audit
   passed with 79 surfaces and zero violations. This is a historical snapshot;
-  its local count is superseded by the later local suite. Remote status is
-  stated separately below and is not inherited by the fd-closure commit.
+  its local count is superseded by the later local suite. Each later remote
+  status is stated separately below rather than inherited from this snapshot.
 - At the current checkpoint, repository boundary policy v3 revision 7 passes
   with 61 debts and zero violations, and execution-surface policy revision 4
   passes with 79 surfaces and zero violations. Before the added size-tamper
@@ -371,8 +371,9 @@ but is not score provenance.
   security file passes 10/10. The final hermetic CPU rerun has 2,337 passed,
   five skipped, four warnings, and zero failures in 140.25 seconds. Predecessor
   commit `a5dd0d1` is green for install, lint, both audits, and full CPU after
-  five private-path fixtures were made hermetic; the fd-closure commit still
-  requires its own remote reproduction.
+  five private-path fixtures were made hermetic. Fd-closure head `ab508c4`
+  independently passes install, lint, both audits, and the complete CPU suite
+  in remote run `33300849634`.
 - Ruff passes across `src`, `tools`, `spikes`, and `tests`; `git diff --check`,
   shell syntax, the repository-boundary audit, and the control-plane audit also
   pass.

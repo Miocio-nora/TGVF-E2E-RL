@@ -10,8 +10,9 @@ C4 produced a read-only inventory; it did not authorize or execute a deletion.
 The final hermetic CPU rerun has 2,337 passed tests, five explicit skips, and
 four non-failing warnings in 140.25 seconds, including the added size-tamper
 case. Remote CI commit `a5dd0d1` is green for install, lint, repository
-boundary, control plane, and the full CPU suite; it is the predecessor of the
-fd-closure commit, whose remote reproduction is still pending.
+boundary, control plane, and the full CPU suite. The later fd-closure head
+`ab508c4` is also green in remote CI run `33300849634` across install, lint,
+both audits, and the complete CPU suite.
 Policy v3 revision 7 records the 17 remaining oversized modules and rejects
 growth, slack, stale entries, or a relaxed baseline. This plan does not
 authorize an experiment or rewrite historical evidence.
@@ -52,7 +53,8 @@ passing tests; the updated fd security file passes 10/10, and the final full
 CPU rerun has 2,337 passed, five skipped, and four warnings in 140.25 seconds.
 Predecessor commit `a5dd0d1` is green across install, lint, both audits, and the
 full CPU job after five private-machine-path test fixtures were made hermetic.
-The fd-closure commit has not yet been reproduced remotely.
+The fd-closure head `ab508c4` is independently green in remote run
+`33300849634` across the same stages.
 
 This milestone does not close the runtime authority boundary. The experiment
 policy revision 3 still has `runtime_closure.launch_enabled=false` with seven
@@ -154,8 +156,8 @@ integration/environment skips, zero failures), Ruff, and no GPU process
 started by the cleanup. The remote annotated tag
 `stabilization-c0-20260830` preserves that baseline. At that historical
 checkpoint, the later consolidation head still awaited remote reproduction.
-The later `a5dd0d1` predecessor is remotely green; the fd-closure checkpoint
-still awaits its own run.
+The later `a5dd0d1` predecessor and fd-closure head `ab508c4` have since passed
+their respective remote CI runs.
 
 No module split or historical deletion belongs in C0. Combining security fixes
 with broad moves would make review and provenance harder.
@@ -300,8 +302,8 @@ Consolidation is complete when:
 Current state: the entry-point disposition condition, the three C2 targets, all
 nine post-C2 priority decompositions, the revision-7 production-size exception
 ratchet, the known-cycle condition, the fd-bound Python-exec blocker, and the
-read-only C4 inventory are complete. The predecessor's remote CPU CI is green,
-while the fd-closure checkpoint still awaits remote reproduction. The portable
-runtime/CLI closure remains disabled by its seven remaining named blockers;
+read-only C4 inventory are complete. The predecessor and fd-closure checkpoint
+both have green remote CPU CI. The portable runtime/CLI closure remains
+disabled by its seven remaining named blockers;
 `child_environment_allowlist_missing` and the remaining semantic-helper
 migrations are still open.

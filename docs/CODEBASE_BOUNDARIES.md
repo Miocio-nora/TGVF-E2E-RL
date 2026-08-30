@@ -364,7 +364,9 @@ and both the control-plane and repository-boundary audits pass locally. The
 predecessor commit `a5dd0d1` is green in remote CI across dependency
 installation, lint, boundary, control-plane, and the full CPU suite after five
 tests with private machine dataset paths were made hermetic. The fd-closure
-commit still requires its own remote reproduction. The final local full suite,
+checkpoint head `ab508c4` is now independently green in remote CI run
+`33300849634`; install, lint, both audits, and the complete CPU suite all
+passed. The final local full suite,
 including the added size-tamper case, is 2,337 passed, five skipped, and four
 non-failing warnings in 140.25 seconds. Before that additional parameter, the
 combined focused selection was 304 passed; the updated fd security file passes
