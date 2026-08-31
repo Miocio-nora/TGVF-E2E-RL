@@ -50,6 +50,7 @@ from .data import (
 )
 from .distributed_checkpoint import (
     gather_rank_zero_full_adapter_owned_state,
+    load_distributed_representation_checkpoint_metadata,
     load_rank_zero_adapter_owned_state_export,
     restore_distributed_representation_checkpoint,
     save_distributed_representation_checkpoint_atomic,
@@ -59,6 +60,7 @@ from .fsdp2 import apply_representation_fsdp2
 from .history import (
     RepresentationMetricsHistoryIdentity,
     load_representation_metrics_history,
+    recover_representation_metrics_history_prefix,
 )
 from .native_pipeline import Qwen3NativeRepresentationGroupBuilder
 from .performance import (
@@ -294,16 +296,12 @@ def _run_initialized(
             config.checkpoint.filename_prefix,
         )
         if isinstance(run_identity, RepresentationRunIdentityV3):
-            expected_metrics_history = load_representation_metrics_history(
-                config.output.metrics_jsonl_path,
-                run_id=config.run_id,
-                run_identity_sha256=run_identity.identity_sha256,
+            expected_metrics_history = _recover_resume_metrics_history_collective(
+                checkpoint_path=config.resume.checkpoint_path,
+                metrics_path=config.output.metrics_jsonl_path,
+                expected_run_identity=run_identity,
                 checkpoint_global_step=checkpoint_path_step,
-                runner_schema_version=REPRESENTATION_RUNNER_SCHEMA_VERSION,
-            ).identity
-            _require_same_string_across_ranks(
-                expected_metrics_history.identity_sha256,
-                name="representation metrics-history SHA256",
+                rank=rank,
             )
         resume = restore_distributed_representation_checkpoint(
             config.resume.checkpoint_path,
@@ -477,9 +475,7 @@ def _run_initialized(
                 family_adapter=family_adapter,
                 samples=validation_data.samples,
                 group_builder=group_builder,
-                validation_manifest_sha256=(
-                    validation_data.manifest.manifest_sha256
-                ),
+                validation_manifest_sha256=(validation_data.manifest.manifest_sha256),
                 validation_event_index=validation_event_index,
             )
             binding.assert_optimizer_ownership(optimizer)
@@ -1079,6 +1075,68 @@ def _validate_resume_metrics_history_collective(
         raise RuntimeError(f"resume metrics history is invalid: {error[0]}")
 
 
+def _recover_resume_metrics_history_collective(
+    *,
+    checkpoint_path: Path,
+    metrics_path: Path,
+    expected_run_identity: RepresentationRunIdentityV3,
+    checkpoint_global_step: int,
+    rank: int,
+) -> RepresentationMetricsHistoryIdentity:
+    """Reconcile a live metrics WAL to the exact prefix bound by a DCP.
+
+    Rank zero first validates that the checkpoint belongs to the requested run
+    and path step.  Only then may it archive and remove an uncommitted metrics
+    suffix.  The checkpoint-owned identity is broadcast so every rank supplies
+    the same expected history to the distributed restore boundary.
+    """
+
+    outcome: list[object | None] = [None]
+    if rank == 0:
+        try:
+            metadata = load_distributed_representation_checkpoint_metadata(
+                checkpoint_path
+            )
+            manifest = metadata.manifest
+            if (
+                manifest.run_identity != expected_run_identity
+                or manifest.run_identity_sha256 != expected_run_identity.identity_sha256
+            ):
+                raise ValueError(
+                    "checkpoint run identity differs before metrics-history recovery"
+                )
+            if manifest.global_step != checkpoint_global_step:
+                raise ValueError(
+                    "checkpoint global step differs before metrics-history recovery"
+                )
+            checkpoint_identity = manifest.metrics_history
+            if not isinstance(
+                checkpoint_identity,
+                RepresentationMetricsHistoryIdentity,
+            ):
+                raise ValueError(
+                    "checkpoint has no metrics-history identity for recovery"
+                )
+            recovered = recover_representation_metrics_history_prefix(
+                metrics_path,
+                checkpoint_identity=checkpoint_identity,
+                runner_schema_version=REPRESENTATION_RUNNER_SCHEMA_VERSION,
+            )
+            if recovered.committed_history.identity != checkpoint_identity:
+                raise RuntimeError(
+                    "recovered metrics history differs from checkpoint identity"
+                )
+            outcome[0] = checkpoint_identity
+        except Exception as exception:
+            outcome[0] = _exception_text(exception)
+    torch.distributed.broadcast_object_list(outcome, src=0)
+    if isinstance(outcome[0], str):
+        raise RuntimeError(f"resume metrics history is invalid: {outcome[0]}")
+    if not isinstance(outcome[0], RepresentationMetricsHistoryIdentity):
+        raise RuntimeError("resume metrics-history recovery returned no identity")
+    return outcome[0]
+
+
 def _validate_resume_metrics_history(
     path: Path,
     *,
@@ -1488,8 +1546,7 @@ def _verify_live_code_identity(config: RepresentationTrainingConfig) -> None:
                 config.resume.enabled
                 and config.resume.code_compatibility
                 == VALIDATED_NON_TRAINING_CODE_TRANSITION
-                and live_digest
-                == config.resume.compatible_live_dirty_state_sha256
+                and live_digest == config.resume.compatible_live_dirty_state_sha256
             )
             if not compatible_resume:
                 raise ValueError(

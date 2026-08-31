@@ -803,6 +803,138 @@ def test_resume_metrics_history_rejects_torn_last_line(tmp_path: Path) -> None:
         )
 
 
+def _checkpoint_bound_metrics_fixture(
+    tmp_path: Path,
+) -> tuple[Path, bytes, object, object]:
+    metrics_path = tmp_path / "metrics.jsonl"
+    run_identity = SimpleNamespace(identity_sha256="a" * 64)
+    records = [
+        {
+            "event": "start",
+            "schema_version": runner_module.REPRESENTATION_RUNNER_SCHEMA_VERSION,
+            "run_id": "representation-smoke",
+            "run_identity_sha256": run_identity.identity_sha256,
+            "initial_global_step": 0,
+        },
+        {
+            "event": "train",
+            "run_identity_sha256": run_identity.identity_sha256,
+            "global_step": 1,
+        },
+        {
+            "event": "validation",
+            "run_identity_sha256": run_identity.identity_sha256,
+            "global_step": 1,
+            "validation_event_index": 0,
+        },
+        {
+            "event": "train",
+            "run_identity_sha256": run_identity.identity_sha256,
+            "global_step": 2,
+        },
+    ]
+    _write_metrics(metrics_path, records)
+    committed = metrics_path.read_bytes()
+    checkpoint_identity = runner_module.load_representation_metrics_history(
+        metrics_path,
+        run_id="representation-smoke",
+        run_identity_sha256=run_identity.identity_sha256,
+        checkpoint_global_step=2,
+        runner_schema_version=runner_module.REPRESENTATION_RUNNER_SCHEMA_VERSION,
+    ).identity
+    metadata = SimpleNamespace(
+        manifest=SimpleNamespace(
+            run_identity=run_identity,
+            run_identity_sha256=run_identity.identity_sha256,
+            global_step=2,
+            metrics_history=checkpoint_identity,
+        )
+    )
+    return metrics_path, committed, run_identity, metadata
+
+
+def test_resume_recovers_metrics_ahead_of_checkpoint_and_archives_suffix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics_path, committed, run_identity, metadata = _checkpoint_bound_metrics_fixture(
+        tmp_path
+    )
+    suffix = (
+        json.dumps(
+            {
+                "event": "train",
+                "run_identity_sha256": run_identity.identity_sha256,
+                "global_step": 3,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+    observed = committed + suffix
+    metrics_path.write_bytes(observed)
+    monkeypatch.setattr(
+        runner_module,
+        "load_distributed_representation_checkpoint_metadata",
+        lambda _path: metadata,
+    )
+    monkeypatch.setattr(
+        torch.distributed,
+        "broadcast_object_list",
+        lambda _values, *, src: None,
+    )
+
+    recovered_identity = runner_module._recover_resume_metrics_history_collective(
+        checkpoint_path=tmp_path / "representation-step-00000002",
+        metrics_path=metrics_path,
+        expected_run_identity=run_identity,
+        checkpoint_global_step=2,
+        rank=0,
+    )
+
+    assert recovered_identity == metadata.manifest.metrics_history
+    assert metrics_path.read_bytes() == committed
+    archives = tuple(
+        tmp_path.glob("metrics.jsonl.uncommitted-after-step-00000002.*.jsonl")
+    )
+    assert len(archives) == 1
+    assert archives[0].read_bytes() == observed
+
+
+def test_resume_rejects_committed_metrics_drift_without_mutating_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics_path, committed, run_identity, metadata = _checkpoint_bound_metrics_fixture(
+        tmp_path
+    )
+    drifted = b"X" + committed[1:]
+    metrics_path.write_bytes(drifted)
+    monkeypatch.setattr(
+        runner_module,
+        "load_distributed_representation_checkpoint_metadata",
+        lambda _path: metadata,
+    )
+    monkeypatch.setattr(
+        torch.distributed,
+        "broadcast_object_list",
+        lambda _values, *, src: None,
+    )
+
+    with pytest.raises(RuntimeError, match="prefix SHA256 mismatch"):
+        runner_module._recover_resume_metrics_history_collective(
+            checkpoint_path=tmp_path / "representation-step-00000002",
+            metrics_path=metrics_path,
+            expected_run_identity=run_identity,
+            checkpoint_global_step=2,
+            rank=0,
+        )
+
+    assert metrics_path.read_bytes() == drifted
+    assert not tuple(tmp_path.glob("metrics.jsonl.uncommitted-after-step-*.jsonl"))
+
+
 def test_checkpoint_retention_removes_only_current_invocation_paths(
     tmp_path: Path,
 ) -> None:
