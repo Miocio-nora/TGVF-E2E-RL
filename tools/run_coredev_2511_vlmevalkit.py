@@ -115,6 +115,7 @@ def main() -> int:
     )
     from tgvf_rl.evaluation.coredev_results import (  # noqa: PLC0415
         check_qwen25_72b_judge,
+        install_deterministic_mcq_answer_policy,
         install_fail_closed_judge_builders,
         summarize_coredev_results,
         write_json_atomic,
@@ -223,7 +224,11 @@ def main() -> int:
         write_json_atomic(work_dir / "judge-health-pre.json", preflight)
         image_mcq_module = importlib.import_module("vlmeval.dataset.image_mcq")
         image_vqa_module = importlib.import_module("vlmeval.dataset.image_vqa")
+        multiple_choice_module = importlib.import_module(
+            "vlmeval.dataset.utils.multiple_choice"
+        )
         install_fail_closed_judge_builders((image_mcq_module, image_vqa_module))
+        install_deterministic_mcq_answer_policy(multiple_choice_module)
 
     run_path = checkout / "run.py"
     sys.argv[0] = str(run_path)
