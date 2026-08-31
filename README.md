@@ -5,14 +5,14 @@ Target-Guided Visual Foveation for a Qwen reasoning policy trained with
 end-to-end reinforcement learning. Qwen3-VL-8B-Thinking is the primary target;
 `Qwen/Qwen2.5-VL-7B-Instruct` is the required secondary compatibility model.
 
-> **Status (2026-08-30):** the framework, representation trainer, multiple
-> policy-RL runs, and CoreDev-2511 evaluations exist. Their historical evidence
-> is not one uniform comparison contract: several Crop results mix native and
-> precomputed runtimes, continuation renderers, or image caps. Repository
-> stabilization is therefore active and new experiment execution is frozen
-> until the protocol, result-registry, control-plane, and CI gates in
-> [the stabilization audit](docs/REPOSITORY_STABILIZATION_AUDIT_20260830.md)
-> pass. A result is not canonical merely because its run completed.
+> **Status (2026-09-01):** the core runtime has been consolidated behind one
+> config-driven interface for NoTool, Crop, TGVF-short, TGVF-target-guide-v2,
+> and Atomic. `run-policy` is the normal experiment entry point; the former
+> token/control-plane launcher is retained only as the explicit
+> `strict-run-policy` compatibility command. Historical results still span
+> different runtime, renderer, and image-cap contracts, so a completed run is
+> not automatically a canonical comparison. GPU training and evaluation smoke
+> results are recorded separately from source promotion.
 
 The selective migration from the experiment side lineage is tracked in the
 [canonical runtime migration plan](docs/CANONICAL_RUNTIME_MIGRATION_PLAN_20260830.md).

@@ -1,8 +1,8 @@
 # TGVF End-to-End RL: Project Task
 
-Status: **repository stabilization active; experiment execution frozen**
+Status: **core runtime consolidated; config-driven GPU smoke pending**
 Recorded: **2026-07-18 JST**
-Updated: **2026-08-30 JST**
+Updated: **2026-09-01 JST**
 
 Unresolved implementation contracts and their promotion gates are tracked in
 [`OPEN_IMPLEMENTATION_CONTRACTS.md`](OPEN_IMPLEMENTATION_CONTRACTS.md). An open
@@ -14,7 +14,25 @@ Decision ID: **I8H-20260719**
 
 Accepted by: **user**, on **2026-07-19 JST**
 
-### 0S. Authoritative repository stabilization decision
+### 0S2. Config-driven execution decision
+
+Decision ID: **CONFIG-DRIVEN-EXECUTION-20260901**
+
+Accepted by: **user**, on **2026-09-01 JST**
+
+This decision supersedes the blanket freeze and mandatory one-time-token rule
+below for ordinary research development. A user-authorized run with a complete
+configuration uses `run-policy`, which resolves the method, prompt, protocol,
+resolution, training horizon, topology, reward, and output paths through the
+shared typed runtime. `strict-run-policy` retains the former authorization
+launcher only as an explicit compatibility path; it is not the default and its
+control-plane inventory is not a source-promotion gate.
+
+GPU training and evaluation still require an explicit user request, isolated
+output paths, and a post-run artifact audit. Their smoke results validate the
+runtime separately and do not block a source-only promotion to `main`.
+
+### 0S. Historical repository stabilization decision (superseded by 0S2)
 
 Decision ID: **REPOSITORY-STABILIZATION-20260830**
 
