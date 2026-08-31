@@ -688,6 +688,20 @@ def _parser() -> argparse.ArgumentParser:
             "omission is represented as an explicit launch blocker"
         ),
     )
+    dev_run_policy = subparsers.add_parser(
+        "dev-run-policy",
+        help=(
+            "run one ordinary Policy config through the sanitized development "
+            "launcher without strict launch authorization"
+        ),
+    )
+    dev_run_policy.add_argument("path", type=Path)
+    dev_run_policy.add_argument(
+        "--python",
+        type=Path,
+        default=Path(sys.executable).absolute(),
+        help="absolute Python executable for the development veRL driver",
+    )
     run_policy = subparsers.add_parser(
         "run-policy",
         help="replace this process with a launch-ready upstream veRL Policy E2E run",
@@ -935,6 +949,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 compile_prerequisite_manifest_path=(args.compile_prerequisite_manifest),
             )
             result["gpu_work_launched"] = False
+        elif args.command == "dev-run-policy":
+            from tgvf_rl.policy.dev_launch import (
+                execute_policy_dev_launch,
+                prepare_policy_dev_launch,
+            )
+
+            config_path = args.path.expanduser().absolute()
+            config = _load_policy_run_config(config_path)
+            prepared = prepare_policy_dev_launch(
+                config,
+                python_executable=args.python,
+                host_environment=os.environ,
+            )
+            execute_policy_dev_launch(prepared)
         elif args.command == "run-policy":
             assert_canonical_runtime_launch_enabled()
             config_binding = bind_canonical_config_path(

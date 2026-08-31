@@ -66,7 +66,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     scrub_policy_driver_authorization_environment(os.environ)
     arguments = tuple(sys.argv[1:] if argv is None else argv)
-    config = compose_pinned_verl_config(arguments)
+    compose_and_run_pinned_verl(arguments)
+
+
+def compose_and_run_pinned_verl(overrides: Sequence[str]) -> None:
+    """Compose and execute the shared pinned-veRL Policy orchestration core."""
+
+    config = compose_pinned_verl_config(overrides)
     from verl.trainer.main_ppo import run_ppo
     from verl.trainer.ppo.utils import need_critic
     from verl.utils.config import validate_config
@@ -125,4 +131,4 @@ if __name__ == "__main__":
     main()
 
 
-__all__ = ["compose_pinned_verl_config", "main"]
+__all__ = ["compose_and_run_pinned_verl", "compose_pinned_verl_config", "main"]
