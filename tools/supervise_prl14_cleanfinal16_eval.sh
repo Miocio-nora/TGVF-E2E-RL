@@ -11,7 +11,7 @@ task_manifest="$main_root/artifacts/evaluation/CoreDev2511-official-visible-v1/t
 source_root=/nvmesv/dredvpn009/datasets/benchmarks/coredev_2511_vlmevalkit_7055d301_v1
 mathverse_json=/nvmesv/dredvpn009/datasets/benchmarks/mathverse/snapshot/testmini.json
 contract="$eval_repo/configs/policy/runs/prl_13_a_qwen3_instruct_grpo_bs256_n16_native_crop_t1_stratified_80step_gpu0123.toml"
-run_id=T20260809-PRL14-cleanfinal16
+run_id=T20260809-144800
 judge_url=http://127.0.0.1:8012/v1
 judge_pid=
 
@@ -166,7 +166,7 @@ for step in 8 16; do
     env OPENAI_API_KEY=EMPTY \
       "$python_bin" "$eval_repo/tools/run_coredev_2511_vlmevalkit.py" \
       --data "$dataset" --model Qwen3-VL-8B-Instruct \
-      --work-dir "$work_dir" --mode eval --reuse \
+      --work-dir "$work_dir" --mode eval --reuse-aux infer \
       --judge Qwen2.5-72B-Instruct --judge-base-url "$judge_url" \
       --judge-key EMPTY --judge-api-nproc 4 --judge-retry 6 \
       --judge-timeout 600 \

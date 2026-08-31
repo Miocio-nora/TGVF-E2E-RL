@@ -103,10 +103,17 @@ def test_main_d_only_plan_owns_only_main_attention_leaves() -> None:
     assert len(plan.borrowed_buffer_names) == 4
 
 
-def test_vision_routing_plan_covers_only_routing_and_visual_value_leaves() -> None:
-    qwen, adapter = _owned_pair(
-        variant=TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING
-    )
+@pytest.mark.parametrize(
+    "variant",
+    (
+        TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING,
+        TGVFAdapterVariant.FULL_D_DEEPSTACK_VISUAL_BARYCENTRIC,
+    ),
+)
+def test_visual_routing_plans_preserve_historical_leaf_inventory(
+    variant: TGVFAdapterVariant,
+) -> None:
+    qwen, adapter = _owned_pair(variant=variant)
 
     plan = build_representation_fsdp2_plan(adapter, qwen)
     historical_qwen, historical = _owned_pair()

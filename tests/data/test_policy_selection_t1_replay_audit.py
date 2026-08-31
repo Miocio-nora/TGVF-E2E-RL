@@ -9,7 +9,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from tgvf_rl.data.policy_selection import SelectionCandidate, SelectionSource
+from tgvf_rl.data.policy_selection import (
+    POLICY_SELECTION_PRIMARY_SOURCES,
+    SelectionCandidate,
+    SelectionSource,
+)
 from tgvf_rl.data.policy_selection_runtime import native_prompt_identity_sha256
 from tgvf_rl.data.policy_selection_t1_replay_audit import (
     LocatedT1Evidence,
@@ -61,7 +65,9 @@ def test_content_hash_selection_is_order_independent_and_covers_sources() -> Non
     assert [(item.identity_sha256, score) for item, score in first] == [
         (item.identity_sha256, score) for item, score in second
     ]
-    assert {candidate.source for candidate, _ in first} == set(SelectionSource)
+    assert {candidate.source for candidate, _ in first} == set(
+        POLICY_SELECTION_PRIMARY_SOURCES
+    )
     assert len(first) == 3
 
     with pytest.raises(ValueError, match="no replay-audit candidate"):

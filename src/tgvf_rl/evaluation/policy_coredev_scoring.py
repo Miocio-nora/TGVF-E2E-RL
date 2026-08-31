@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 import csv
 from datetime import datetime
 import json
@@ -148,6 +148,7 @@ def materialize_policy_coredev_scoring_views(
     evaluation_id: str,
     run_id: str,
     mathverse_source_json: str | Path,
+    forced_invalid_indices: Collection[str] = (),
 ) -> dict[str, Any]:
     """Build seven full-count scoring TSVs with unsupported rows fail-closed."""
 
@@ -157,12 +158,18 @@ def materialize_policy_coredev_scoring_views(
     output = Path(output_root).resolve()
     if not evaluation_id or not run_id:
         raise ValueError("evaluation_id and run_id must be non-empty")
+    forced_invalid = frozenset(forced_invalid_indices)
+    if len(forced_invalid) != len(tuple(forced_invalid_indices)) or any(
+        not isinstance(index, str) or not index for index in forced_invalid
+    ):
+        raise ValueError("forced invalid indices must be unique non-empty text")
     trajectories, unsupported_count = _load_trajectories(
         inference, tasks_path=tasks
     )
     created_at = datetime.now().astimezone().isoformat()
     slices: list[dict[str, Any]] = []
     observed_total = 0
+    forced_invalid_seen: list[tuple[str, str]] = []
     for dataset in DATASETS:
         fields, source_rows = _read_tsv(source / f"{dataset}.tsv")
         if "prediction" in fields or "extra_records" in fields:
@@ -182,11 +189,22 @@ def materialize_policy_coredev_scoring_views(
                 }
             else:
                 observed += 1
-                answer = normalize_policy_final_answer(trajectory.get("final_answer"))
+                force_invalid = row["index"] in forced_invalid
+                answer = (
+                    None
+                    if force_invalid
+                    else normalize_policy_final_answer(trajectory.get("final_answer"))
+                )
+                if force_invalid:
+                    forced_invalid_seen.append((dataset, row["index"]))
                 extra = {
                     "schema_version": POLICY_SCORING_VIEW_SCHEMA,
                     "evaluation_id": evaluation_id,
-                    "coverage": "single_image_evaluated",
+                    "coverage": (
+                        "scorer_unparseable_forced_wrong"
+                        if force_invalid
+                        else "single_image_evaluated"
+                    ),
                     "ordinal": trajectory["ordinal"],
                     "trajectory_id": trajectory["trajectory_id"],
                     "trajectory_sha256": trajectory["trajectory_sha256"],
@@ -268,6 +286,12 @@ def materialize_policy_coredev_scoring_views(
         )
     if observed_total != 2240 or unsupported_count != 271:
         raise RuntimeError("CoreDev coverage boundary differs from 2,240 + 271")
+    if len(forced_invalid_seen) != len(forced_invalid) or {
+        index for _, index in forced_invalid_seen
+    } != forced_invalid:
+        raise RuntimeError(
+            "forced invalid indices must each match one evaluated CoreDev row"
+        )
     result = {
         "schema_version": POLICY_SCORING_VIEW_SCHEMA,
         "evaluation_id": evaluation_id,
@@ -275,6 +299,11 @@ def materialize_policy_coredev_scoring_views(
         "observed_single_image_count": observed_total,
         "unsupported_multi_image_count": unsupported_count,
         "official_row_count": observed_total + unsupported_count,
+        "forced_invalid_count": len(forced_invalid_seen),
+        "forced_invalid_rows": [
+            {"dataset": dataset, "index": index}
+            for dataset, index in forced_invalid_seen
+        ],
         "slices": slices,
     }
     _write_json_exclusive(output / "materialization-summary.json", result)

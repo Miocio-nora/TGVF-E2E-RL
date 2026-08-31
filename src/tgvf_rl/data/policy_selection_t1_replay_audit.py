@@ -15,7 +15,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .policy_selection import SelectionCandidate, SelectionSource
+from .policy_selection import (
+    POLICY_SELECTION_PRIMARY_SOURCES,
+    SelectionCandidate,
+    SelectionSource,
+)
 from .policy_selection_runtime import (
     T1_ATTEMPTS,
     T1RawGenerationEvidence,
@@ -202,7 +206,13 @@ def select_replay_audit_candidates(
     if type(rank) is not int or not 0 <= rank < world_size:
         raise ValueError("rank must be inside world_size")
     selected: list[tuple[SelectionCandidate, str]] = []
-    for source in SelectionSource:
+    candidate_sources = {candidate.source for candidate in candidates}
+    expected_sources = (
+        (SelectionSource.TEACHER,)
+        if candidate_sources == {SelectionSource.TEACHER}
+        else POLICY_SELECTION_PRIMARY_SOURCES
+    )
+    for source in expected_sources:
         eligible = [
             candidate
             for candidate in candidates

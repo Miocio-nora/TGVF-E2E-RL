@@ -126,6 +126,24 @@ def test_vision_routing_contract_is_isolated_from_historical_rp66() -> None:
         contract.assert_matches(_adapter(3))
 
 
+def test_visual_barycentric_contract_is_isolated_from_rp68() -> None:
+    barycentric = _adapter(
+        3,
+        TGVFAdapterVariant.FULL_D_DEEPSTACK_VISUAL_BARYCENTRIC,
+    )
+    routing = _adapter(3, TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING)
+
+    contract = representation_adapter_contract_identity(barycentric)
+
+    assert isinstance(contract, RepresentationAdapterContractIdentityV2)
+    assert contract.variant == "full_d_deepstack_visual_barycentric"
+    contract.assert_matches(barycentric)
+    with pytest.raises(IdentityMismatchError, match="variant"):
+        contract.assert_matches(routing)
+    with pytest.raises(IdentityMismatchError, match="variant"):
+        representation_adapter_contract_identity(routing).assert_matches(barycentric)
+
+
 def _run_identity(
     adapter: TGVFAdapter,
     *,

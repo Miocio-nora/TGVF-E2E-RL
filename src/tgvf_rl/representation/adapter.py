@@ -40,11 +40,16 @@ class TGVFAdapterVariant(str, Enum):
     D-DeepStack, parameter, and compute surfaces while restricting target state
     to attention routing: the second attention's values come from the first
     attention's visual context rather than enriched target state.
-    ``MAIN_D_ONLY`` remains the historical output ablation.
+    ``FULL_D_DEEPSTACK_VISUAL_BARYCENTRIC`` retains that RP68 information flow
+    and every trainable tensor, but prevents the learned residual from writing
+    arbitrary feature directions. The residual is used only as a routing query,
+    and every conditioned token is a convex combination of raw visual tokens
+    from the same image. ``MAIN_D_ONLY`` remains the historical output ablation.
     """
 
     FULL_D_DEEPSTACK = "full_d_deepstack"
     FULL_D_DEEPSTACK_VISION_ROUTING = "full_d_deepstack_vision_routing"
+    FULL_D_DEEPSTACK_VISUAL_BARYCENTRIC = "full_d_deepstack_visual_barycentric"
     MAIN_D_ONLY = "main_d_only"
 
     @property
@@ -53,7 +58,14 @@ class TGVFAdapterVariant(str, Enum):
 
     @property
     def uses_vision_routing_only(self) -> bool:
-        return self is TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING
+        return self in {
+            TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING,
+            TGVFAdapterVariant.FULL_D_DEEPSTACK_VISUAL_BARYCENTRIC,
+        }
+
+    @property
+    def uses_visual_barycentric_writer(self) -> bool:
+        return self is TGVFAdapterVariant.FULL_D_DEEPSTACK_VISUAL_BARYCENTRIC
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +162,7 @@ class TGVFBidirectionalAttention(nn.Module):
         d_v: int,
         attn_dim: int | None = None,
         vision_routing_only: bool = False,
+        visual_barycentric_writer: bool = False,
     ) -> None:
         super().__init__()
         if d_lm <= 0 or d_v <= 0:
@@ -161,7 +174,12 @@ class TGVFBidirectionalAttention(nn.Module):
         self.attn_dim = self.d_v if attn_dim is None else int(attn_dim)
         if not isinstance(vision_routing_only, bool):
             raise TypeError("vision_routing_only must be a bool")
+        if not isinstance(visual_barycentric_writer, bool):
+            raise TypeError("visual_barycentric_writer must be a bool")
+        if visual_barycentric_writer and not vision_routing_only:
+            raise ValueError("visual_barycentric_writer requires vision_routing_only")
         self.vision_routing_only = vision_routing_only
+        self.visual_barycentric_writer = visual_barycentric_writer
 
         self.target_norm = nn.LayerNorm(self.d_lm)
         self.target_proj = nn.Linear(self.d_lm, self.attn_dim)
@@ -251,7 +269,18 @@ class TGVFBidirectionalAttention(nn.Module):
             self.gate_proj(torch.cat((visual_tokens, visual_context), dim=-1))
         )
         gated_delta = gate * delta
-        conditioned = visual_raw + gated_delta
+        if self.visual_barycentric_writer:
+            # RP69: the learned delta may select visual content but cannot write
+            # its feature direction or magnitude into D. Softmax attention
+            # makes every output token a convex combination of raw tokens from
+            # this image; no RMS matching or additional objective is applied.
+            conditioned, _ = _cross_attention(
+                gated_delta,
+                visual_tokens,
+                visual_raw,
+            )
+        else:
+            conditioned = visual_raw + gated_delta
         visual_salience = torch.softmax(
             torch.linalg.vector_norm(gated_delta.float(), dim=-1), dim=-1
         ).to(dtype=gated_delta.dtype)
@@ -366,6 +395,7 @@ class TGVFAdapter(TGVFBidirectionalAttention):
             d_v=d_v,
             attn_dim=attn_dim,
             vision_routing_only=variant.uses_vision_routing_only,
+            visual_barycentric_writer=variant.uses_visual_barycentric_writer,
         )
         if not isinstance(main_projection, FrozenProjectionPort):
             raise TypeError("main_projection must be a FrozenProjectionPort")
@@ -417,6 +447,7 @@ class TGVFAdapter(TGVFBidirectionalAttention):
                     d_v=self.d_v,
                     attn_dim=self.attn_dim,
                     vision_routing_only=variant.uses_vision_routing_only,
+                    visual_barycentric_writer=(variant.uses_visual_barycentric_writer),
                 )
                 for layer in (
                     self.d_deepstack_branch_layers

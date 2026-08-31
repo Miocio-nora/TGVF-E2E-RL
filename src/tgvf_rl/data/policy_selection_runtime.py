@@ -24,6 +24,7 @@ from types import MappingProxyType
 from typing import Any
 
 from .policy_selection import (
+    POLICY_SELECTION_PRIMARY_SOURCES,
     POLICY_SELECTION_ATTEMPT_SCHEMA,
     AttemptStatus,
     SelectionBranch,
@@ -180,7 +181,7 @@ _SELECTION_FIELDS = {
     "manifest_path",
     "manifest_sha256",
 }
-_VERIFIER_FIELDS = {
+_VERIFIER_V1_FIELDS = {
     "schema",
     "answer_parser",
     "arxivqa_rule",
@@ -188,6 +189,7 @@ _VERIFIER_FIELDS = {
     "vstar_rule",
     "semantic_judge",
 }
+_VERIFIER_V2_FIELDS = _VERIFIER_V1_FIELDS | {"teacher_rule"}
 _SEMANTIC_JUDGE_FIELDS = {
     "provider",
     "repository",
@@ -827,8 +829,8 @@ def load_t1_run_config(
             source_record["rows"], field_name=f"data.sources[{index}].rows", minimum=1
         )
         sources.append(T1DataSource(source, source_path, source_sha256, rows))
-    if {item.source for item in sources} != set(SelectionSource) or len(sources) != 3:
-        raise ValueError("data.sources must contain vstar, arxivqa, and thinklite once")
+    if len({item.source for item in sources}) != len(sources):
+        raise ValueError("data.sources must not repeat a source")
     if verify_data_files:
         for source in sources:
             actual_sha256 = _sha256_file(source.path)
@@ -843,6 +845,9 @@ def load_t1_run_config(
 
     selection = _mapping(record["selection"], field_name="selection")
     _exact_fields(selection, _SELECTION_FIELDS, field_name="selection")
+    declared_selection_rows = _required_int(
+        selection["rows"], field_name="selection.rows", minimum=1
+    )
     selection_profile = (
         selection["kind"],
         selection["algorithm_version"],
@@ -852,24 +857,37 @@ def load_t1_run_config(
         "t1-canary-content-hash-v1",
     ):
         expected_selection_rows = 192
-        expected_source_counts = {source.value: 64 for source in SelectionSource}
+        expected_source_counts = {
+            source.value: 64 for source in POLICY_SELECTION_PRIMARY_SOURCES
+        }
     elif selection_profile == (
         "source_quota",
         T1_RECOMMENDED_SELECTION_ALGORITHM_VERSION,
     ):
         expected_selection_rows = T1_RECOMMENDED_SELECTION_ROWS
         expected_source_counts = dict(T1_RECOMMENDED_SOURCE_QUOTAS)
+    elif selection_profile == (
+        "teacher_full",
+        "teacher-train-source-uid-full-v1",
+    ):
+        expected_selection_rows = declared_selection_rows
+        expected_source_counts = {
+            SelectionSource.TEACHER.value: declared_selection_rows
+        }
     else:
         raise ValueError("selection kind/algorithm profile is unsupported")
+    expected_data_sources = {
+        SelectionSource(source) for source in expected_source_counts
+    }
+    if {item.source for item in sources} != expected_data_sources:
+        raise ValueError("data.sources differ from the selected T1 profile")
     candidates_path = _absolute_normal_path(
         selection["candidates_path"], field_name="selection.candidates_path"
     )
     candidates_sha256 = _required_sha256(
         selection["candidates_sha256"], field_name="selection.candidates_sha256"
     )
-    selection_rows = _required_int(
-        selection["rows"], field_name="selection.rows", minimum=1
-    )
+    selection_rows = declared_selection_rows
     if selection_rows != expected_selection_rows:
         raise ValueError(
             f"selection.rows must be {expected_selection_rows} for this profile"
@@ -926,10 +944,11 @@ def load_t1_run_config(
                 "selection candidates must have unique identities and sample IDs"
             )
         source_counts = {
-            source.value: sum(
-                candidate.source is source for candidate in selected_candidates
+            source_name: sum(
+                candidate.source is SelectionSource(source_name)
+                for candidate in selected_candidates
             )
-            for source in SelectionSource
+            for source_name in expected_source_counts
         }
         if source_counts != expected_source_counts:
             raise ValueError(
@@ -963,7 +982,7 @@ def load_t1_run_config(
                 raise ValueError(
                     "selection manifest candidate order or identity mismatch"
                 )
-        else:
+        elif selection["kind"] == "source_quota":
             if (
                 selection_manifest.get("schema_version")
                 != T1_RECOMMENDED_SELECTION_MANIFEST_SCHEMA
@@ -1020,9 +1039,40 @@ def load_t1_run_config(
                 )
                 if actual_binding != expected_binding:
                     raise ValueError("source-quota manifest source binding differs")
+        else:
+            if (
+                selection_manifest.get("schema_version")
+                != "tgvf.policy-selection.teacher-t1-candidates-manifest.v1"
+            ):
+                raise ValueError("teacher selection manifest schema is unsupported")
+            candidates_binding = _mapping(
+                selection_manifest.get("candidates"),
+                field_name="teacher selection manifest candidates",
+            )
+            if (
+                candidates_binding.get("path") != str(candidates_path)
+                or candidates_binding.get("sha256") != candidates_sha256
+                or candidates_binding.get("rows") != selection_rows
+            ):
+                raise ValueError("teacher selection candidate identity differs")
+            if selection_manifest.get("logical_attempts") != selection_rows * T1_ATTEMPTS:
+                raise ValueError("teacher selection logical attempt count differs")
+            if selection_manifest.get("source_counts") != expected_source_counts:
+                raise ValueError("teacher selection source count differs")
 
     verifier = _mapping(record["verifier"], field_name="verifier")
-    _exact_fields(verifier, _VERIFIER_FIELDS, field_name="verifier")
+    verifier_schema = verifier.get("schema")
+    if selection["kind"] != "teacher_full":
+        _exact_fields(verifier, _VERIFIER_V1_FIELDS, field_name="verifier")
+    else:
+        _exact_fields(verifier, _VERIFIER_V2_FIELDS, field_name="verifier")
+        if verifier_schema != "t1-source-verifier-v2":
+            raise ValueError("teacher T1 requires verifier schema t1-source-verifier-v2")
+        if (
+            verifier["teacher_rule"]
+            != "mcq-bounded-label-else-normalized-exact-numeric-semantic-v1"
+        ):
+            raise ValueError("verifier.teacher_rule is not accepted")
     for field in (
         "schema",
         "answer_parser",
@@ -1600,8 +1650,11 @@ def _parse_number(value: str) -> Fraction | None:
             numerator, denominator = compact.split("/", 1)
             result = Fraction(int(numerator.strip()), int(denominator.strip()))
         else:
-            result = Fraction(Decimal(compact))
-    except (InvalidOperation, ValueError, ZeroDivisionError):
+            decimal_value = Decimal(compact)
+            if not decimal_value.is_finite():
+                return None
+            result = Fraction(decimal_value)
+    except (InvalidOperation, OverflowError, ValueError, ZeroDivisionError):
         return None
     return result / 100 if percent else result
 
@@ -1727,16 +1780,34 @@ def verify_t1_answer(
         normalized_source = SelectionSource(source)
     except ValueError as exc:
         raise ValueError("source is unsupported") from exc
-    if normalized_source is SelectionSource.ARXIVQA:
-        if option_count is None:
+    if normalized_source in {SelectionSource.ARXIVQA, SelectionSource.TEACHER} and (
+        option_count is not None
+    ):
+        if normalized_source is SelectionSource.ARXIVQA and option_count is None:
             raise ValueError("ArxivQA verification requires option_count")
-        return verify_arxivqa_answer(
+        verified = verify_arxivqa_answer(
             candidate_answer, expected_answer, option_count=option_count
         )
+        if normalized_source is SelectionSource.TEACHER:
+            return DeterministicVerification(
+                verified.outcome,
+                verified.route.replace("arxivqa", "teacher_mcq"),
+                verified.evidence,
+            )
+        return verified
+    if normalized_source is SelectionSource.ARXIVQA:
+        raise ValueError("ArxivQA verification requires option_count")
     if option_count is not None:
-        raise ValueError("option_count is only valid for ArxivQA")
+        raise ValueError("option_count is valid only for ArxivQA or teacher MCQ")
     if normalized_source is SelectionSource.THINKLITE:
         return verify_thinklite_answer(candidate_answer, expected_answer)
+    if normalized_source is SelectionSource.TEACHER:
+        verified = verify_thinklite_answer(candidate_answer, expected_answer)
+        return DeterministicVerification(
+            verified.outcome,
+            verified.route.replace("thinklite", "teacher_open"),
+            verified.evidence,
+        )
     return verify_vstar_answer(candidate_answer, expected_answer)
 
 

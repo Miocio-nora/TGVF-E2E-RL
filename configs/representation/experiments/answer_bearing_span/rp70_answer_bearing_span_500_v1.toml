@@ -1,0 +1,22 @@
+schema_version = "answer-bearing-span-config-v1"
+scope = "isolated_representation_answer_bearing_span"
+run_id = "RP-70-QWEN3-INSTRUCT-ANSWER-BEARING-SPAN-500-GPU01"
+base_training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/qwen3_instruct_balanced_t1_contextual_2000step_gpu01.toml"
+base_training_config_sha256 = "37c06f4a7f2b538e668582471d4105f9c7dd93a86459d2e23d1f36e289c9d549"
+treatment_training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/experiments/answer_bearing_span/rp70_qwen3_instruct_answer_bearing_span_500_gpu01.toml"
+treatment_training_config_sha256 = "cb68542228ce3ecb4cb777b334ed89fb67e00e94e49e3b7bc9c58dcc59577ccf"
+donor_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/experiments/image_axis_grounding/rp66_train_seed42_donor_manifest_v1.json"
+donor_manifest_sha256 = "9d04f60e2d60cf9e769ac22a857133c00a417603db3126f891cc1b891abb2080"
+train_span_sidecar_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation_experiments/answer_bearing_span/sidecars/rp70_train_answer_bearing_span_component_reaudit_v4_reviewed_v1.jsonl"
+train_span_sidecar_sha256 = "6d715f4d5cf532617b06adfeec5ebb27e83bd630d570b6d4dc158fbfaf4df653"
+test_span_sidecar_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation_experiments/answer_bearing_span/sidecars/rp70_validation_answer_bearing_span_component_reaudit_v4_reviewed_v1.jsonl"
+test_span_sidecar_sha256 = "e462748f621914dd88beb141188d0b7e93d7b5c1ab0df79a95380e5b62ab4660"
+
+[span]
+schema_version = "answer_bearing_span_index_v3+answer_bearing_span_supervision_v2"
+policy = "explicit_semantic_bound_unicode_codepoint_half_open_offsets_only_v2:explicit_sidecar_offsets_only_plus_final_answer_no_separator_or_eos_v1:semantic-bound-explicit-no-unadjudicated"
+
+[objective]
+image_axis_matrix_weight = 1.0
+image_axis_temperature = 1.0
+negative_count = 1

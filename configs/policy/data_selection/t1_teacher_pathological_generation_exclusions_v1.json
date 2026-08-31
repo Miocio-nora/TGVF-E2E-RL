@@ -1,0 +1,92 @@
+{
+  "schema_version": "tgvf.policy-selection.t1-quality-exclusions.v1",
+  "exclusions": [
+    {
+      "run_id": "T1-05-QWEN3-INSTRUCT-512-TEACHER39584-GPU4567",
+      "run_manifest_sha256": "a17097ff6051576cf90356a6732ca0ef3fed267341f6bca0bb2efe7bda2d64b4",
+      "candidate_sha256": "f17033b54dd6e48602c5ba7f3ff53a41903ef49dafdc4e7b01dba412f9bc75c2",
+      "sample_id": "policy-teacher-candidate:89b111fb5bf33ccfa0d8b65aa22f871142e11817f6561cb698baa47fc2ef5532",
+      "source": "teacher",
+      "reason": "pathological_generation_length",
+      "question": "In section F, which response is marked for how much physical health or emotional problems interfered with normal social activities?\nChoices:\nA. Not at all\nB. Slightly\nC. Moderately\nD. Quite a bit",
+      "ground_truth": "A",
+      "generation_length_waivers": [
+        {
+          "run_id": "T1-05-QWEN3-INSTRUCT-512-TEACHER39584-GPU4567",
+          "run_manifest_sha256": "a17097ff6051576cf90356a6732ca0ef3fed267341f6bca0bb2efe7bda2d64b4",
+          "request_id": "qwen3-selection:ee95ecf5359a7c8b19eeca0e498d8b4f4bb9a7bc10381a754df727721859d36e",
+          "sample_id": "policy-teacher-candidate:89b111fb5bf33ccfa0d8b65aa22f871142e11817f6561cb698baa47fc2ef5532",
+          "candidate_sha256": "f17033b54dd6e48602c5ba7f3ff53a41903ef49dafdc4e7b01dba412f9bc75c2",
+          "source": "teacher",
+          "attempt_index": 0,
+          "terminal_budget_revision": 1,
+          "terminal_finish_reason": "length",
+          "terminal_evidence_sha256": "3cd0fdff3d184ba4c82b0ec8da135e1188adf9b9c8a9548e677f65ec6877bbd2",
+          "terminal_sampled_token_count": 98304
+        },
+        {
+          "run_id": "T1-05-QWEN3-INSTRUCT-512-TEACHER39584-GPU4567",
+          "run_manifest_sha256": "a17097ff6051576cf90356a6732ca0ef3fed267341f6bca0bb2efe7bda2d64b4",
+          "request_id": "qwen3-selection:f552baae3a48e48ade52c144f9a0e42e54dba48cbb05503b1c68a661c327d28c",
+          "sample_id": "policy-teacher-candidate:89b111fb5bf33ccfa0d8b65aa22f871142e11817f6561cb698baa47fc2ef5532",
+          "candidate_sha256": "f17033b54dd6e48602c5ba7f3ff53a41903ef49dafdc4e7b01dba412f9bc75c2",
+          "source": "teacher",
+          "attempt_index": 3,
+          "terminal_budget_revision": 1,
+          "terminal_finish_reason": "length",
+          "terminal_evidence_sha256": "50e6e9533916be2533678cc0daf1bbdfb2a4fa219eba031e8f106ff15c837666",
+          "terminal_sampled_token_count": 98304
+        },
+        {
+          "run_id": "T1-05-QWEN3-INSTRUCT-512-TEACHER39584-GPU4567",
+          "run_manifest_sha256": "a17097ff6051576cf90356a6732ca0ef3fed267341f6bca0bb2efe7bda2d64b4",
+          "request_id": "qwen3-selection:ca04d56fa71b932febc3360e359e1671ce18f315facf78b647ec7ea076f7033a",
+          "sample_id": "policy-teacher-candidate:89b111fb5bf33ccfa0d8b65aa22f871142e11817f6561cb698baa47fc2ef5532",
+          "candidate_sha256": "f17033b54dd6e48602c5ba7f3ff53a41903ef49dafdc4e7b01dba412f9bc75c2",
+          "source": "teacher",
+          "attempt_index": 5,
+          "terminal_budget_revision": 1,
+          "terminal_finish_reason": "length",
+          "terminal_evidence_sha256": "0d8c6554d31d5a1858664ee77c074dc931f0df35c97810084104375ad6d0723e",
+          "terminal_sampled_token_count": 98304
+        }
+      ]
+    },
+    {
+      "run_id": "T1-05-QWEN3-INSTRUCT-512-TEACHER39584-GPU4567",
+      "run_manifest_sha256": "a17097ff6051576cf90356a6732ca0ef3fed267341f6bca0bb2efe7bda2d64b4",
+      "candidate_sha256": "5d8374418612dcaf53f9829714ab865735739d4acc642b6698f7c7dbc0c57796",
+      "sample_id": "policy-teacher-candidate:7ec9fb1bb7e7fe4092bb5f517e6a9de941287e1f9b453ba486e3e44e95c87ad3",
+      "source": "teacher",
+      "reason": "pathological_generation_length",
+      "question": "How many itemized charge lines are listed in the table?\nChoices:\nA. 11\nB. 12\nC. 13\nD. 14",
+      "ground_truth": "C",
+      "generation_length_waivers": [
+        {
+          "run_id": "T1-05-QWEN3-INSTRUCT-512-TEACHER39584-GPU4567",
+          "run_manifest_sha256": "a17097ff6051576cf90356a6732ca0ef3fed267341f6bca0bb2efe7bda2d64b4",
+          "request_id": "qwen3-selection:80df2f7c9293f2898faba6535a9dd5989a4a1428ef3e59da33dd10ffe0040536",
+          "sample_id": "policy-teacher-candidate:7ec9fb1bb7e7fe4092bb5f517e6a9de941287e1f9b453ba486e3e44e95c87ad3",
+          "candidate_sha256": "5d8374418612dcaf53f9829714ab865735739d4acc642b6698f7c7dbc0c57796",
+          "source": "teacher",
+          "attempt_index": 6,
+          "terminal_budget_revision": 1,
+          "terminal_finish_reason": "length",
+          "terminal_evidence_sha256": "88c195c2909136521e73998eade2360c40a19b2421640ca50e0ab3e7dcad44bf",
+          "terminal_sampled_token_count": 98304
+        }
+      ]
+    },
+    {
+      "run_id": "T1-05-QWEN3-INSTRUCT-512-TEACHER39584-GPU4567",
+      "run_manifest_sha256": "a17097ff6051576cf90356a6732ca0ef3fed267341f6bca0bb2efe7bda2d64b4",
+      "candidate_sha256": "0dd2adaef23dddcade16b07742a65d87150d70280a90c1d907793e9956ad49d7",
+      "sample_id": "policy-teacher-candidate:84fc7ad715179185d96b70c036a364f046ec45d10374f8a7bd8ac45849f718df",
+      "source": "teacher",
+      "reason": "pathological_generation_length",
+      "question": "Which person is identified as the chairman?\nChoices:\nA. Gladys Emerson\nB. W. C. Russell\nC. B. L. Oser\nD. H. E. Robinson",
+      "ground_truth": "B",
+      "generation_length_waivers": []
+    }
+  ]
+}

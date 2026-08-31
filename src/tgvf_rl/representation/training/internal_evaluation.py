@@ -1848,8 +1848,6 @@ def _score_readout_control(
     row: RepresentationReadoutRow,
     candidate: RepresentationVisualTensorBundle | None,
 ) -> tuple[float, int]:
-    first_evidence = row.supervision.evidence_token_positions[0]
-    final_evidence = row.supervision.evidence_token_positions[-1]
     blocked_mask = build_original_image_key_block_mask(
         attention_mask=row.attention_mask,
         original_image_token_indices=torch.tensor(
@@ -1857,8 +1855,8 @@ def _score_readout_control(
             dtype=torch.long,
             device=row.attention_mask.device,
         ),
-        block_query_start=first_evidence - 1,
-        block_query_end=final_evidence,
+        block_query_start=row.source_image_block_query_start,
+        block_query_end=row.source_image_block_query_end,
         dtype=source.main.dtype,
     )
     blocks = [_injected_block("source_image", row.source_positions, source)]
@@ -1876,7 +1874,7 @@ def _score_readout_control(
             ),
         )
         labels = torch.tensor(
-            row.supervision.labels,
+            row.loss_labels,
             dtype=torch.long,
             device=result.logits.device,
         ).unsqueeze(0)

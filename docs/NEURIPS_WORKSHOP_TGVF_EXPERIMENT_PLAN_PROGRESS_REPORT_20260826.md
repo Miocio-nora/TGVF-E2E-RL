@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-26（Asia/Tokyo）
+更新时间：2026-08-29 14:38（Asia/Tokyo）
 
 状态：**实验进行中；RP67 三臂验证、广义 full-prompt stress test、严格 target-only matched
 prompt 与 No-Tool RL S0/S8/S16/S32 matched no-tool 评测均已闭合。事前冻结的 No-Tool S32
@@ -10,11 +10,13 @@ control”，文章据此收缩总体工具优势 claim，并把工具价值限�
 sub-benchmark 和策略行为。协议复核同时发现：历史 Original raw direct 的图像上限为
 `262,144` pixels，而 PRL25 matched 各臂为 `1,003,520` pixels。冻结 S32 的 raw-direct@512
 Macro* 为 `54.3543`，比同合同 Original 低 `1.0013 pp`；这进一步否定“32-step RL 在原始
-raw-direct 合同上带来普遍增益”的解释。为隔离分辨率因素，Crop S80、TGVF S64 和 Atomic S16
-的 matched 工具协议 `@512` 控制也已冻结；Crop S80 与 TGVF S64 已完成推理和评分，Atomic
-S16 已完成 2,240 条单图推理并进入评分。下一步完成 Atomic 的
-`@512` 对照、正式 Atomic matched/target-only 盲审、target-only
-调用行为对照与英文 Experiments/Discussion 初稿。**
+raw-direct 合同上带来普遍增益”的解释。历史工具 checkpoint 的 corrected matched@512 控制已全部
+闭合：Crop S80 / TGVF S64 / Atomic S16 的 Macro* 分别为 `62.0967 / 55.4067 / 57.2762`；
+Crop 旧 V1 因 `</tool_call>` action-boundary 缺失作废。新一轮 PRL26 统一 Train@512/Eval@512
+fresh-S0 对照正在执行：No-Tool 已完成 S32，Crop 已通过 S16 深审计并继续向 S32 训练；两臂
+CoreDev-2511 评测已自动排队。其后自动启动 Pure TGVF Short 与仅增加 teacher-aligned Target
+定义/案例的 Target-guide-v2，各自从 Original S0 训练至 S32，并做 prompt-axis paired Eval@512。
+正式 Atomic 盲审与英文 Experiments/Discussion 初稿仍保留在后续写作队列。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
@@ -67,7 +69,7 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 |---|---|---:|---|
 | Original raw-direct@512 | 无 system prompt、无工具、direct generation | 262,144 | 历史端到端参考；也是 S32 raw-direct@512 的严格 base comparator |
 | Crop S80 / TGVF S64 / Atomic S16 matched | 各自训练匹配的工具 prompt 与 agent loop | 1,003,520 | 三个 PRL25 工具方法之间的像素上限对齐比较 |
-| Crop S80 / TGVF S64 / Atomic S16 matched@512 | 与上一行逐方法相同，只降低 evaluator 像素上限 | 262,144 | Crop、TGVF 已闭合；Atomic 评分中；分别测量每个工具方法的纯评测分辨率敏感性 |
+| Crop S80 / TGVF S64 / Atomic S16 matched@512 | 与上一行逐方法相同，只降低 evaluator 像素上限 | 262,144 | 三臂 corrected 结果均已闭合；分别测量每个工具方法的纯评测分辨率敏感性 |
 | No-Tool S0/S8/S16/S32 matched | 训练匹配的 no-tool prompt 与 direct-only loop | 1,003,520 | S0→S32 的同协议 RL 动态；与三个 PRL25 工具臂像素上限对齐 |
 | No-Tool S32 raw-direct@512 | 与历史 Original 相同的 raw-direct 配置，只替换 model path | 262,144 | 已完成；Macro* `54.3543`，比 Original 低 `1.0013 pp` |
 
@@ -893,7 +895,7 @@ Vision Dominant `50.0`。
 |---|---|---|---|---|
 | Crop | S80 | native Crop prompt、tool schema、agent loop、temperature 1、seed42、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | **已完成** |
 | TGVF | S64 | matched TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | **已完成** |
-| Atomic | S16 | matched Crop+TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | 推理完成，评分中 |
+| Atomic | S16 | matched Crop+TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | **已完成** |
 
 三个 arm 的推理按两组 GPU 流水并行，72B judge 评分按 arm 串行以避免同一输出根并发写入。每臂必须完成 2,240 个支持的单图 trajectory、
 271 个显式 fail-closed 多图条目、七个官方 slice、Macro*、完整 sub-benchmark 以及逐 set 工具调用
@@ -905,15 +907,19 @@ No-Tool RL，且不得把 `@512` 评测回退解释为训练像素设置的因�
 | Arm / pixel cap | Macro* | Δ vs own matched@1M | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | Crop S80 / 1,003,520 | 62.2288 | reference | 81.6754 | 74.5000 | 58.8889 | 55.3358 | 46.4684 | 67.3333 | 51.4000 |
-| Crop S80 / 262,144 | **61.5591** | **−0.6697** | 75.3927 | 75.0000 | 63.3333 | 53.1455 | 49.4424 | 63.0000 | 51.6000 |
+| Crop S80 / 262,144 boundary-fix V2 | **62.0967** | **−0.1321** | 86.9110 | 65.5000 | 64.4444 | 54.4299 | 45.7249 | 65.6667 | 52.0000 |
 | TGVF S64 / 1,003,520 | 59.8086 | reference | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
 | TGVF S64 / 262,144 | **55.4067** | **−4.4019** | 53.4031 | 60.5000 | 62.7778 | 40.7642 | 46.4684 | 72.3333 | 51.6000 |
+| Atomic S16 / 1,003,520 | 63.0827 | reference | 71.7277 | 73.5000 | 66.1111 | 54.2720 | 51.3011 | 69.6667 | 55.0000 |
+| Atomic S16 / 262,144 | **57.2762** | **−5.8065** | 57.0681 | 59.5000 | 61.6667 | 47.7713 | 48.3271 | 71.0000 | 55.6000 |
 
-Crop 的分辨率回退不是逐项一致下降：VStar 和 MathVista 分别下降 `6.2827 / 4.3333 pp`，OCR
-mean 下降 `2.1903 pp`；但 BLINK-180、MMMU-269 和 HR 分别上升 `4.4444 / 2.9740 /
-0.5000 pp`。因此当前只支持小幅 Macro* 敏感性，不能把单次 deterministic eval 的各分项波动
-都解释为像素预算因果效应。Crop@512 比 Original raw-direct@512 高 `6.2035 pp`，但该差值仍
-跨 prompt/agent 协议，只能作为同像素端到端观察。
+Crop 旧 V1 `61.5591` 使用了错误的 action-boundary，不能再引用；V2 在生成侧保留完整
+`</tool_call>` 后得到 `62.0967`。corrected Crop 的 Macro* 对像素上限只回退 `0.1321 pp`，但
+分项并非一致：VStar、BLINK-180 与 MathVerse 分别上升 `5.2356 / 5.5556 / 0.6000 pp`，HR、
+MathVista、OCR mean 与 MMMU-269 分别下降 `9.0000 / 1.6667 / 0.9059 / 0.7435 pp`。因此只能
+支持 Crop 总体对测试分辨率较稳健，不能把单次采样的各项波动逐一解释为像素因果效应。
+Crop@512 比 Original raw-direct@512 高 `6.7411 pp`，但仍跨 prompt/agent 协议，只是同像素的
+端到端观察。
 
 TGVF 的分辨率敏感性明显强于 Crop：主要回退来自 VStar `−20.9424 pp`、HR `−6.0000 pp`、
 OCR mean `−3.7804 pp` 和 BLINK-180 `−2.7778 pp`；MathVista 不变，MMMU-269 与 MathVerse
@@ -921,6 +927,57 @@ OCR mean `−3.7804 pp` 和 BLINK-180 `−2.7778 pp`；MathVista 不变，MMMU-2
 `0.0511 pp`，而二者仍跨 agent/tool 协议，不能据此声称显著优于 Original。OCR scorer 还暴露
 出低分辨率下的生成病态：个别 final answer 达 `117,574` 字符，导致官方本地字符串指标耗时
 显著增加；这些回答被原样评分，没有后处理截断。
+
+Atomic 的 @512 回退与 TGVF 同样明显：Macro* 下降 `5.8065 pp`，主要来自 VStar
+`−14.6596 pp`、HR `−14.0000 pp`、OCR mean `−6.5007 pp` 和 BLINK-180 `−4.4444 pp`；
+MathVista 与 MathVerse 分别上升 `1.3333 / 0.6000 pp`。因此历史冻结 checkpoint 的证据支持
+“TGVF 系列对训练—测试像素尺度一致性更敏感”这一工作假设，但尚不能把尺度错配认定为唯一原因。
+
+### 5.6 PRL26：统一 Train@512/Eval@512 fresh-S0 对照
+
+历史 checkpoint 的 matched@512 只改变测试分辨率，不能回答“从一开始就在 @512 下 RL 会怎样”。
+PRL26 因此冻结四条独立 fresh-Original-S0、32-step 线路，训练和评测均使用
+`max_pixels=262144`：
+
+| Arm | 当前状态（2026-08-29 14:38 JST） | 唯一方法变量 | 后续 |
+|---|---|---|---|
+| No-Tool | **S32 完成；permanent receipt 已审计** | 无工具、无 RP67 | 等待 Crop S32 后做 matched Eval@512 |
+| Crop | **S16 深审计通过，训练中** | corrected native Crop | S32 后自动与 No-Tool 4+4 GPU 推理、七项评分 |
+| TGVF Short | **配置和执行门已冻结，尚未启动** | frozen RP67 + 既有 Short prompt | A/B 评测闭合、GPU/Ray 连续两次空闲后启动 |
+| TGVF Target-guide-v2 | **配置和执行门已冻结，尚未启动** | 只比 Short 增加 Target 定义与 teacher-aligned 视觉案例 | Short S32 后启动，再做 prompt-axis paired eval |
+
+四臂保留相同 Qwen3-VL-8B-Instruct full-model update、Teacher25 行序、BS16×n16、seed42、
+temperature 1、constant LR `1e-6` 与 S0/S8/S16/S24/S32 保存点。这里的“稀疏”只表示运行监控
+仅在 S16/S24/S32 和异常时汇报；训练监督、reward、数据和 sampling 均未稀疏化或修改。
+
+No-Tool 的 8,192 条训练 trajectory 全部为零工具调用/零 observation。Crop S16 单步记录 answer
+reward `0.6328125`、工具尝试题率 `86.328%`、289/289 次成功调用、format error `1.5625%`，
+没有 incomplete-tool-call、action-boundary 或 parse/execution error；累计 S1–S16 为 5,620/5,723
+次调用成功。rolling/permanent 的 26/26 必需文件、project state、pair 与 receipt 均一致。这些只
+是训练健康诊断，不提前作为 benchmark 结果。
+
+Target-guide-v2 保留 Short 的 user suffix、`<think>...</think>`、plain final、Hermes parser、
+observation 文本、工具 schema、最多 6 次调用及 `</tool_call>` include-stop action boundary；唯一
+处理是加入与 teacher 数据风格一致的 Target 定义和视觉描述案例，例如
+`small circular gauge, its needle position, and surrounding scale markings`。删除该处理后 Short
+prompt 逐字恢复。Short / Full bundle SHA256 分别为
+`e74bb5e1253af107ff27badfcfaca747b94574e19677d22cfe42b0b1c0ba5633` 与
+`77ed3a597d2a58e748b70bafe37882760944e293723a28008818a96aad025d0d`。
+
+两臂评测使用正式 V6 `target_prompt_pair_v1`：逐题逐轮 RNG 仅投影实验变量 `prompt_sha256`，
+tool schema、call cap、@512 像素、temperature 1、seed42 与 checkpoint 身份仍受约束；共享 seed
+protocol SHA256 为
+`4cbfd3cf698cb47b0c9594ca9f9e146ca09932d62bdb93d0877e59f9a85bee9c`。推理使用 Short GPU0–3 / Full
+GPU4–7；评分固定 Short→Full，分别绑定 GPU0–1 / GPU2–3 的 TP=2 judge，Short 任一 subset 失败
+则不启动 Full。最终自动发布七项 Macro*、完整 subset 表，以及每个 set 的工具使用题率、调用
+次数、平均调用强度、成功 observation、错误、stop 分布和输出 token p50/p95/p99，并核对 2,240
+个样本的 RNG stream identity 逐题一致。
+
+实现、164 项综合测试与文档在远端
+`origin/neurips-notool-rl-s32@efeaf1b48a18dc7481732712d326d2da8cdf2338`。当前常驻链路为：
+`prl26-train512-s32-eval` 等待 Crop S32 并接管 A/B；
+`prl26-cd-tgvf-prompt-s32` 等待 A/B 完成，再执行 C0 Short/Full → Short S32 → Full S32 → paired
+Eval@512。两条 supervisor 均已启动，C/D 不会提前占用当前 Crop 的 GPU。
 
 ## 6. Atomic 纳入正文的决策门槛
 
@@ -980,13 +1037,17 @@ Atomic 进入正文核心方法必须同时满足：
 4. [已完成] TGVF S64、Atomic S16 target-only matched prompt 推理与七套官方评分；
 5. [已完成] No-Tool RL：合同、实现、CPU 回归、真实 canary、正式 S32 训练、S0/S8/S16/S32
    matched no-tool 推理、28 个 slice 评分、四臂汇总与文章结果回填均已闭合；
-6. [运行中] S32 raw-direct@512、Crop S80 与 TGVF S64 matched@512 已闭合；Atomic S16
-   推理完成、评分中，随后回填完整 sub-benchmark 与调用行为；
-7. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
+6. [已完成] S32 raw-direct@512 及 Crop S80 / TGVF S64 / Atomic S16 corrected matched@512
+   全部闭合；Crop 旧 action-boundary V1 作废；
+7. [运行中] PRL26 No-Tool Train@512 S32 已完成，Crop 已通过 S16 并继续向 S32；A/B Eval@512
+   supervisor 已排队；
+8. [已排队] A/B 评测闭合后自动执行 TGVF Short / Target-guide-v2 的 C0、两个独立 S32 训练和
+   prompt-axis paired Eval@512；
+9. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
-8. [待回填] target-only 调用行为对照与正式 audit；
-9. [待写作] 形成英文 Experiments/Discussion 初稿；
-10. [明确不做] Crop seed43。
+10. [待回填] target-only 调用行为对照与正式 audit；
+11. [待写作] 形成英文 Experiments/Discussion 初稿；
+12. [明确不做] Crop seed43。
 
 ## 10. 证据来源
 
@@ -1008,6 +1069,13 @@ Atomic 进入正文核心方法必须同时满足：
 - `@512` 执行计划：
   `configs/evaluation/prl25_{b_crop_exact_step80,c_frozen_rp67_tfree_teacher25_s64_matched,d_atomic_crop_tgvf_s16_matched}_pixel512_coredev2511_plan.json`；
   并行、可恢复 supervisor 为 `tools/supervise_prl25_bcd_selected_pixel512_evaluation.sh`。
+- corrected Crop S80 @512：
+  `artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-B-CROP-EXACT-COREDEV2511-STEP80-PIXEL512-TEMP1-SEED42-TOOL-BOUNDARY-FIX-V2/step80/scoring/coredev-official-v1/coredev-2511-eval-summary.json`；
+  Atomic S16 @512：对应
+  `PRL25-D-ATOMIC-CROP-TGVF-RP67-TFREE-TEACHER25-S16-MATCHED-PIXEL512-COREDEV2511-SEED42-V1/step16/scoring/coredev-official-v1/coredev-2511-eval-summary.json`。
+- PRL26 Train@512 与 target-prompt V6 合同：
+  `origin/neurips-notool-rl-s32@efeaf1b48a18dc7481732712d326d2da8cdf2338`；正式 plan 为
+  `configs/evaluation/prl26_cd_tgvf_target_prompt_pair_s32_pixel512_coredev2511_plan.json`。
 - No-Tool S32 raw-direct@512 accepted summary：
   `artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-RAW-DIRECT-512-S32-V1/scoring/coredev-2511-eval-summary.json`。
 

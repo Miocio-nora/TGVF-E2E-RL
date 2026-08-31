@@ -306,6 +306,69 @@ def test_vision_routing_variant_retains_full_outputs_without_target_value_path()
     assert main_visual.grad is not None
 
 
+def test_visual_barycentric_variant_retains_parameters_but_only_routes_raw_visuals() -> (
+    None
+):
+    adapter = _adapter(TGVFAdapterVariant.FULL_D_DEEPSTACK_VISUAL_BARYCENTRIC)
+    historical = _adapter()
+    target = torch.randn(3, 6, requires_grad=True)
+    main_visual = torch.randn(8, 4, requires_grad=True)
+    branch_visual = tuple(torch.randn(8, 4, requires_grad=True) for _ in range(3))
+    captured_delta: list[torch.Tensor] = []
+    hook = adapter.context_to_delta.register_forward_hook(
+        lambda _module, _inputs, output: captured_delta.append(output.detach().clone())
+    )
+    try:
+        output = adapter(
+            target_hidden_states=target,
+            pre_merge_visual_tokens=main_visual,
+            deepstack_pre_merge_visual_tokens=branch_visual,
+        )
+    finally:
+        hook.remove()
+
+    assert output.metadata.variant is (
+        TGVFAdapterVariant.FULL_D_DEEPSTACK_VISUAL_BARYCENTRIC
+    )
+    assert adapter.vision_routing_only
+    assert adapter.visual_barycentric_writer
+    assert all(
+        branch.visual_barycentric_writer
+        for branch in adapter.d_deepstack_branch_adapters.values()
+    )
+    assert len(adapter.artifact_state_dict()) == 104
+    assert (
+        adapter.artifact_state_dict().keys() == historical.artifact_state_dict().keys()
+    )
+
+    assert len(captured_delta) == 1
+    query = output.main_attention.gate.detach() * captured_delta[0]
+    keys = adapter.visual_norm(main_visual.detach())
+    weights = torch.softmax(
+        torch.matmul(query, keys.transpose(-2, -1)) / adapter.d_v**0.5,
+        dim=-1,
+    )
+    expected = torch.matmul(weights, main_visual.detach())
+    torch.testing.assert_close(
+        output.conditioned_pre_merge_visual_tokens.detach(),
+        expected,
+    )
+    torch.testing.assert_close(weights.sum(dim=-1), torch.ones(8))
+    lower = main_visual.detach().amin(dim=-2)
+    upper = main_visual.detach().amax(dim=-2)
+    assert torch.all(output.conditioned_pre_merge_visual_tokens.detach() >= lower)
+    assert torch.all(output.conditioned_pre_merge_visual_tokens.detach() <= upper)
+
+    loss = output.main_d.sum() + sum(
+        branch.sum() for branch in output.deepstack_visual_embeds
+    )
+    loss.backward()
+    assert all(
+        parameter.grad is not None
+        for parameter in adapter.artifact_state_dict(keep_vars=True).values()
+    )
+
+
 def test_vision_routing_target_affects_only_scalar_visual_routing() -> None:
     adapter = _adapter(TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING).eval()
     visual = torch.randn(8, 4)
@@ -362,10 +425,17 @@ def test_vision_routing_target_affects_only_scalar_visual_routing() -> None:
     )
 
 
-def test_vision_routing_cannot_encode_target_when_visual_tokens_are_indistinguishable() -> (
-    None
-):
-    adapter = _adapter(TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING).eval()
+@pytest.mark.parametrize(
+    "variant",
+    (
+        TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING,
+        TGVFAdapterVariant.FULL_D_DEEPSTACK_VISUAL_BARYCENTRIC,
+    ),
+)
+def test_vision_routing_cannot_encode_target_when_visual_tokens_are_indistinguishable(
+    variant: TGVFAdapterVariant,
+) -> None:
+    adapter = _adapter(variant).eval()
     repeated_main = torch.randn(1, 4).expand(8, -1).clone()
     repeated_branches = tuple(torch.randn(1, 4).expand(8, -1).clone() for _ in range(3))
 

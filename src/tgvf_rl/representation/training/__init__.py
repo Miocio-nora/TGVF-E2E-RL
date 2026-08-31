@@ -63,6 +63,7 @@ from .objective import (
 from .readout import (
     RepresentationAttentionTensorBundle,
     RepresentationCandidateObservation,
+    RepresentationReadoutLossSupervision,
     RepresentationReadoutRow,
     RepresentationVisualTensorBundle,
     SameImageReadoutGroup,
@@ -408,6 +409,7 @@ __all__ = [
     "RepresentationObjectiveConfigV3",
     "RepresentationObjectiveKind",
     "RepresentationObjectiveValue",
+    "RepresentationReadoutLossSupervision",
     "RepresentationReadoutRow",
     "RepresentationReadoutControlIdentity",
     "RepresentationReadoutExecutionContract",

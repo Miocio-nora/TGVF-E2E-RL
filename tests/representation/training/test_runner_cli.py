@@ -38,10 +38,13 @@ def _launch_config(
     physical_gpu_ids: tuple[int, ...] = (2, 3),
 ) -> SimpleNamespace:
     return SimpleNamespace(
+        objective=SimpleNamespace(
+            objective=SimpleNamespace(identity="balanced-matrix-ce-l-gen-norm-v1")
+        ),
         fsdp2=SimpleNamespace(
             world_size=len(physical_gpu_ids),
             physical_gpu_ids=physical_gpu_ids,
-        )
+        ),
     )
 
 
@@ -159,9 +162,7 @@ def test_global_matrix_count_uses_optimizer_step_group_identity(
     )
 
     assert (
-        runner_module._optimizer_step_global_matrix_count(
-            config, world_size=world_size
-        )
+        runner_module._optimizer_step_global_matrix_count(config, world_size=world_size)
         == expected
     )
 
@@ -181,6 +182,11 @@ def test_public_runner_lifecycle_can_be_wired_without_starting_distributed(
         runner_module,
         "_require_launch_environment",
         lambda value: calls.append(("environment", value)),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_require_experiment_driver_attestation",
+        lambda value: calls.append(("attestation", value)),
     )
     monkeypatch.setattr(
         runner_module,
@@ -218,6 +224,7 @@ def test_public_runner_lifecycle_can_be_wired_without_starting_distributed(
     assert result == {"status": "synthetic", "rank": 0}
     assert [call[0] for call in calls if isinstance(call, tuple)] == [
         "load",
+        "attestation",
         "environment",
         "code",
         "init",
@@ -237,6 +244,11 @@ def test_public_runner_aborts_process_group_on_rank_local_failure(
         runner_module, "load_representation_training_config", lambda _path: config
     )
     monkeypatch.setattr(runner_module, "_validate_invocation_stop", lambda *_args: None)
+    monkeypatch.setattr(
+        runner_module,
+        "_require_experiment_driver_attestation",
+        lambda _value: None,
+    )
     monkeypatch.setattr(
         runner_module, "_require_launch_environment", lambda _value: None
     )

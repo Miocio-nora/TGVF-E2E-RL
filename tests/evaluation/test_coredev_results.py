@@ -12,8 +12,10 @@ from tgvf_rl.evaluation.coredev_materialize import (
 )
 from tgvf_rl.evaluation.coredev_results import (
     COREDEV_BASELINE_MODEL,
+    DETERMINISTIC_JUDGE_PARSE_FAILURE_MARKER,
     FailClosedJudge,
     check_qwen25_72b_judge,
+    install_deterministic_mcq_answer_policy,
     install_fail_closed_judge_builders,
     summarize_coredev_results,
 )
@@ -21,6 +23,7 @@ from tgvf_rl.evaluation.vlmevalkit import COREDEV_2511
 
 
 JUDGE_BASE_URL = "http://127.0.0.1:8012/v1"
+POLICY_SCORING_MODEL = "Qwen3-VL-8B-Instruct"
 
 
 class _Response:
@@ -120,6 +123,33 @@ def test_fail_closed_judge_is_multiprocessing_pickle_safe() -> None:
     assert restored.model == "judge"
 
 
+def test_mcq_answer_policy_handles_a_to_j_and_never_uses_random_fallback() -> None:
+    module = SimpleNamespace()
+    module.rd = SimpleNamespace(choice=lambda _population: "A")
+    module.can_infer = lambda _answer, _choices: False
+
+    def extract_answer_from_item(*_args: object, **_kwargs: object) -> dict[str, str]:
+        return {
+            "opt": module.rd.choice(tuple("ABCDEFGHIJ") + ("Z",)),
+            "log": "Failed to predict, thus randomly generate one. ",
+        }
+
+    module.extract_answer_from_item = extract_answer_from_item
+    install_deterministic_mcq_answer_policy(module)
+    installed_extract = module.extract_answer_from_item
+    install_deterministic_mcq_answer_policy(module)
+
+    choices = {label: f"option-{label}" for label in "ABCDEFGHIJ"}
+    assert module.can_infer("The correct answer is **H**.", choices) == "H"
+    assert module.can_infer("Therefore, the correct output is Z.", choices) == "Z"
+    assert module.rd.choice(tuple("ABCDEFGHIJ") + ("Z",)) == "Z"
+    assert module.extract_answer_from_item(None, {}) == {
+        "opt": "Z",
+        "log": DETERMINISTIC_JUDGE_PARSE_FAILURE_MARKER,
+    }
+    assert module.extract_answer_from_item is installed_extract
+
+
 @pytest.mark.parametrize(
     ("response", "expected"),
     (
@@ -167,19 +197,25 @@ def _write_health(path: Path) -> None:
     )
 
 
-def _materialize_eval_fixture(root: Path) -> dict[str, Path]:
+def _materialize_eval_fixture(
+    root: Path,
+    *,
+    model: str = COREDEV_BASELINE_MODEL,
+) -> dict[str, Path]:
     artifacts = {}
     for spec in COREDEV_2511.slices:
         dataset_root = root / spec.vlmeval_dataset
-        run_dir = dataset_root / COREDEV_BASELINE_MODEL / "T20260721-150000"
+        run_dir = dataset_root / model / "T20260721-150000"
         run_dir.mkdir(parents=True)
-        prediction = run_dir / f"{COREDEV_BASELINE_MODEL}_{spec.vlmeval_dataset}.tsv"
+        prediction = run_dir / f"{model}_{spec.vlmeval_dataset}.tsv"
         rows = ["index\tprediction"]
         rows.extend(f"{index}\tanswer-{index}" for index in range(spec.sample_count))
         prediction.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
         judge_contract = COREDEV_JUDGE_CONTRACTS[spec.vlmeval_dataset]
-        judge_model = "" if judge_contract == "none_rule_based" else COREDEV_LLM_JUDGE_MODEL
+        judge_model = (
+            "" if judge_contract == "none_rule_based" else COREDEV_LLM_JUDGE_MODEL
+        )
         entry = {
             "status": "done",
             "prediction_file": str(prediction),
@@ -190,22 +226,25 @@ def _materialize_eval_fixture(root: Path) -> dict[str, Path]:
         status = {
             "schema_version": "1.0",
             "eval_id": "T20260721-150000",
-            "model_name": COREDEV_BASELINE_MODEL,
+            "model_name": model,
             "commit": "7055d301",
             "mode": "eval",
             "datasets": {spec.vlmeval_dataset: entry},
         }
-        (run_dir / "status.json").write_text(
-            json.dumps(status), encoding="utf-8"
-        )
+        (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
         if judge_contract != "none_rule_based":
             _write_health(dataset_root / "judge-health-pre.json")
             _write_health(dataset_root / "judge-health-post.json")
             artifact = run_dir / (
-                f"{COREDEV_BASELINE_MODEL}_{spec.vlmeval_dataset}_"
-                f"{COREDEV_LLM_JUDGE_MODEL}_result.tsv"
+                f"{model}_{spec.vlmeval_dataset}_{COREDEV_LLM_JUDGE_MODEL}_result.tsv"
             )
-            artifact.write_text("index\tlog\n0\tSucceed\n", encoding="utf-8")
+            if judge_contract == "qwen2_5_72b_fallback_or_exact_matching":
+                result_rows = ["index\thit\tlog"] + [
+                    f"{index}\t0\tSucceed" for index in range(spec.sample_count)
+                ]
+                artifact.write_text("\n".join(result_rows) + "\n", encoding="utf-8")
+            else:
+                artifact.write_text("index\tlog\n0\tSucceed\n", encoding="utf-8")
             artifacts[spec.vlmeval_dataset] = artifact
     return artifacts
 
@@ -230,6 +269,35 @@ def test_seven_slice_aggregate_requires_complete_status_rows_and_judge_evidence(
     )
 
 
+def test_aggregate_preserves_instruct_policy_scoring_identity(tmp_path: Path) -> None:
+    _materialize_eval_fixture(tmp_path, model=POLICY_SCORING_MODEL)
+
+    result = summarize_coredev_results(
+        work_dir=tmp_path,
+        repository_root=tmp_path,
+        phase="eval",
+        expected_judge_base_url=JUDGE_BASE_URL,
+        expected_model=POLICY_SCORING_MODEL,
+    )
+
+    assert result["model"] == POLICY_SCORING_MODEL
+    assert all(POLICY_SCORING_MODEL in item["status_path"] for item in result["slices"])
+
+
+def test_aggregate_does_not_disguise_instruct_results_as_thinking(
+    tmp_path: Path,
+) -> None:
+    _materialize_eval_fixture(tmp_path, model=POLICY_SCORING_MODEL)
+
+    with pytest.raises(RuntimeError, match="no eval status"):
+        summarize_coredev_results(
+            work_dir=tmp_path,
+            repository_root=tmp_path,
+            phase="eval",
+            expected_judge_base_url=JUDGE_BASE_URL,
+        )
+
+
 def test_aggregate_rejects_silent_exact_or_random_judge_fallback(
     tmp_path: Path,
 ) -> None:
@@ -248,16 +316,100 @@ def test_aggregate_rejects_silent_exact_or_random_judge_fallback(
         )
 
 
+def test_aggregate_accepts_isolated_deterministic_parse_failure_as_wrong(
+    tmp_path: Path,
+) -> None:
+    artifacts = _materialize_eval_fixture(tmp_path)
+    rows = ["index\thit\tlog"] + [
+        (
+            f"{index}\t0\t{DETERMINISTIC_JUDGE_PARSE_FAILURE_MARKER}"
+            if index == 17
+            else f"{index}\t0\tSucceed"
+        )
+        for index in range(191)
+    ]
+    artifacts["VStarBench"].write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    result = summarize_coredev_results(
+        work_dir=tmp_path,
+        repository_root=tmp_path,
+        phase="eval",
+        expected_judge_base_url=JUDGE_BASE_URL,
+    )
+
+    vstar = next(item for item in result["slices"] if item["dataset"] == "VStarBench")
+    assert result["judge_parse_failure_policy"] == "deterministic_incorrect"
+    assert result["judge_parse_failure_count"] == 1
+    assert vstar["judge_parse_failure_count"] == 1
+    assert vstar["judge_parse_failure_sample_ids"] == ["17"]
+
+
+def test_aggregate_still_rejects_systemic_deterministic_parse_failures(
+    tmp_path: Path,
+) -> None:
+    artifacts = _materialize_eval_fixture(tmp_path)
+    rows = ["index\thit\tlog"] + [
+        (
+            f"{index}\t0\t{DETERMINISTIC_JUDGE_PARSE_FAILURE_MARKER}"
+            if index < 11
+            else f"{index}\t0\tSucceed"
+        )
+        for index in range(191)
+    ]
+    artifacts["VStarBench"].write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="systemic judge parse failure rate"):
+        summarize_coredev_results(
+            work_dir=tmp_path,
+            repository_root=tmp_path,
+            phase="eval",
+            expected_judge_base_url=JUDGE_BASE_URL,
+        )
+
+
+def test_aggregate_rejects_parse_failure_that_was_counted_correct(
+    tmp_path: Path,
+) -> None:
+    artifacts = _materialize_eval_fixture(tmp_path)
+    rows = ["index\thit\tlog"] + [
+        (
+            f"{index}\t1\t{DETERMINISTIC_JUDGE_PARSE_FAILURE_MARKER}"
+            if index == 17
+            else f"{index}\t0\tSucceed"
+        )
+        for index in range(191)
+    ]
+    artifacts["VStarBench"].write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="was not scored incorrect"):
+        summarize_coredev_results(
+            work_dir=tmp_path,
+            repository_root=tmp_path,
+            phase="eval",
+            expected_judge_base_url=JUDGE_BASE_URL,
+        )
+
+
+def test_aggregate_rejects_incomplete_mcq_result_coverage(tmp_path: Path) -> None:
+    artifacts = _materialize_eval_fixture(tmp_path)
+    artifacts["VStarBench"].write_text(
+        "index\thit\tlog\n0\t0\tSucceed\n", encoding="utf-8"
+    )
+
+    with pytest.raises(RuntimeError, match="judge result row identity mismatch"):
+        summarize_coredev_results(
+            work_dir=tmp_path,
+            repository_root=tmp_path,
+            phase="eval",
+            expected_judge_base_url=JUDGE_BASE_URL,
+        )
+
+
 def test_aggregate_never_falls_back_to_an_older_success_after_new_failure(
     tmp_path: Path,
 ) -> None:
     _materialize_eval_fixture(tmp_path)
-    failed_dir = (
-        tmp_path
-        / "VStarBench"
-        / COREDEV_BASELINE_MODEL
-        / "T20260721-160000"
-    )
+    failed_dir = tmp_path / "VStarBench" / COREDEV_BASELINE_MODEL / "T20260721-160000"
     failed_dir.mkdir()
     (failed_dir / "status.json").write_text(
         json.dumps(

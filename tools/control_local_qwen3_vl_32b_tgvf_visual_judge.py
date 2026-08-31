@@ -72,7 +72,13 @@ def _bound_config(path: Path):
     )
 
 
-def _server_command(model_path: Path) -> list[str]:
+def _server_command(
+    model_path: Path,
+    *,
+    gpu_memory_utilization: float,
+    max_num_batched_tokens: int,
+    max_num_seqs: int,
+) -> list[str]:
     return [
         sys.executable,
         "-m",
@@ -92,11 +98,11 @@ def _server_command(model_path: Path) -> list[str]:
         "--max-model-len",
         "4096",
         "--gpu-memory-utilization",
-        "0.80",
+        str(gpu_memory_utilization),
         "--max-num-batched-tokens",
-        "32768",
+        str(max_num_batched_tokens),
         "--max-num-seqs",
-        "64",
+        str(max_num_seqs),
         "--seed",
         "42",
         "--generation-config",
@@ -181,6 +187,10 @@ def _preflight(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError("local visual judge base URL differs from controller")
     if bound.config.model_name != SERVED_MODEL:
         raise RuntimeError("local visual judge served model differs from controller")
+    if not 0.0 < args.gpu_memory_utilization < 1.0:
+        raise ValueError("GPU memory utilization must be between zero and one")
+    if args.max_num_batched_tokens <= 0 or args.max_num_seqs <= 0:
+        raise ValueError("vLLM batch limits must be positive")
     if not model_path.is_dir():
         raise RuntimeError(f"local visual judge model is missing: {model_path}")
     shards = sorted(model_path.glob("model-*-of-*.safetensors"))
@@ -214,7 +224,12 @@ def _preflight(args: argparse.Namespace) -> dict[str, object]:
         "weight_bytes": sum(path.stat().st_size for path in shards),
         "versions": versions,
         "physical_gpu": args.physical_gpu,
-        "command": _server_command(model_path),
+        "command": _server_command(
+            model_path,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            max_num_batched_tokens=args.max_num_batched_tokens,
+            max_num_seqs=args.max_num_seqs,
+        ),
         "environment": {
             name: _server_environment(args.physical_gpu)[name]
             for name in (
@@ -234,7 +249,12 @@ def _launch(args: argparse.Namespace) -> dict[str, object]:
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = output_dir / "server.log"
-    command = _server_command(args.model.resolve())
+    command = _server_command(
+        args.model.resolve(),
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        max_num_batched_tokens=args.max_num_batched_tokens,
+        max_num_seqs=args.max_num_seqs,
+    )
     environment = _server_environment(args.physical_gpu)
     with log_path.open("ab", buffering=0) as log_handle:
         process = subprocess.Popen(
@@ -254,7 +274,22 @@ def _launch(args: argparse.Namespace) -> dict[str, object]:
         "started_at": datetime.now(timezone.utc).isoformat(),
         "log_path": str(log_path),
     }
-    _write_json_atomic(output_dir / "server-process.json", result)
+    try:
+        _write_json_atomic(output_dir / "server-process.json", result)
+    except BaseException:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=30.0)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=10.0)
+        raise
     return result
 
 
@@ -405,6 +440,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--physical-gpu", type=int, default=7)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.80)
+    parser.add_argument("--max-num-batched-tokens", type=int, default=32768)
+    parser.add_argument("--max-num-seqs", type=int, default=64)
     parser.add_argument("--wait-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--canary-image", type=Path, default=DEFAULT_CANARY_IMAGE)
     return parser

@@ -1,0 +1,16 @@
+{
+  "schema_version": "tgvf-policy-coredev-evaluation-v1",
+  "evaluation_id": "PRL-09-R2-TGVF-SHAPED-T1MIXED-V2-STEP80-COREDEV2511-GPU0123",
+  "policy_config_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl09-tgvf-shaped/configs/policy/runs/prl_09_r2_qwen3_instruct_grpo_bs16_tgvf_shaped_t1mixed_v2_80step_gpu0123.toml",
+  "lora_pointer_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-09-R2-qwen3-instruct-grpo-bs16-tgvf-shaped-t1mixed-v2-80step-gpu0123/runtime-policy-state/step80-lora-snapshot-pointer.json",
+  "output_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/PRL-09-R2-tgvf-shaped-t1mixed-v2-step80-coredev2511-gpu0123",
+  "gpu_ids": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "inference_concurrency_per_gpu": 8,
+  "max_model_len": 16384,
+  "gpu_memory_utilization": 0.9
+}

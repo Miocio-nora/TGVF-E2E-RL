@@ -1,0 +1,130 @@
+{
+  "schema_version": "tgvf.policy-selection.t1-run.v1",
+  "run_id": "T1-05-QWEN3-INSTRUCT-512-TEACHER39584-GPU4567",
+  "model": {
+    "repository": "Qwen/Qwen3-VL-8B-Instruct",
+    "path": "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct",
+    "dtype": "bfloat16",
+    "config_sha256": "5cd452860dc1e9c29dd71cc3cef7f39b338b7a40793f7a260655c2d3568f3661",
+    "generation_config_sha256": "8469742d1fce0de951c8909b26a2c0c0d8490837ce476efb114da9e0cefc4d44",
+    "tokenizer_config_sha256": "c2da771801886ad9ae98181793ffd3dfb7f1af30f6f7c6a4e15d7dbba52e2399",
+    "tokenizer_json_sha256": "a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7",
+    "preprocessor_config_sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+    "chat_template_sha256": "3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4",
+    "tokenizer_length": 151669,
+    "eos_token_id": 151645,
+    "generation_eos_token_ids": [151645, 151643],
+    "trust_remote_code": true,
+    "quantization": null
+  },
+  "prompt": {
+    "schema": "qwen-native-user-image-question-v1",
+    "user_content_order": ["image", "question"],
+    "no_system": true,
+    "no_tools": true,
+    "add_generation_prompt": true
+  },
+  "image": {
+    "min_pixels": 65536,
+    "max_pixels": 262144,
+    "resize_factor": 32,
+    "resample": "transformers-fast-bicubic",
+    "pre_resize": false,
+    "processor_do_resize": true,
+    "preserve_aspect_ratio": true,
+    "limit_image_per_prompt": 1,
+    "color_mode": "RGB",
+    "alpha_handling": "pil-convert-rgb-discard-alpha-v1",
+    "source_pixel_hash_schema": "tgvf.policy-selection.source-rgb-pixels.v1"
+  },
+  "sampling": {
+    "attempts": 8,
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "top_k": -1,
+    "min_p": 0.0,
+    "repetition_penalty": 1.0,
+    "presence_penalty": 0.0,
+    "frequency_penalty": 0.0,
+    "logit_processors": [],
+    "seed_root": 42,
+    "seed_namespace": "qwen3-instruct-policy-selection-t1-teacher39584-v1",
+    "do_sample": true,
+    "ignore_eos": false,
+    "stop_token_ids": [151645],
+    "effective_stop_token_ids": [151645, 151643],
+    "stop_strings": [],
+    "include_stop_str_in_output": false,
+    "detokenize": true,
+    "skip_special_tokens": false,
+    "spaces_between_special_tokens": false
+  },
+  "response_budgets": [
+    {"revision": 0, "max_model_len": 65536, "max_new_tokens": 40960},
+    {"revision": 1, "max_model_len": 131072, "max_new_tokens": 98304},
+    {"revision": 2, "max_model_len": 262144, "max_new_tokens": 196608}
+  ],
+  "runtime": {
+    "backend": "vllm",
+    "version": "0.12.0",
+    "python": "3.12.3",
+    "torch": "2.9.0+cu128",
+    "transformers": "4.57.6",
+    "pillow": "12.3.0",
+    "flashinfer": "0.5.3",
+    "world_size": 4,
+    "tensor_parallel_size": 1,
+    "max_num_seqs": 32,
+    "gpu_memory_utilization": 0.9,
+    "mm_encoder_attn_backend": "TORCH_SDPA",
+    "decoder_attn_backend": "FLASHINFER",
+    "max_num_batched_tokens": 65536,
+    "enable_prefix_caching": true,
+    "enable_chunked_prefill": true,
+    "mm_processor_cache_gb": 4.0,
+    "engine_seed": 42,
+    "chunk_candidates": 4,
+    "max_inflight": 64,
+    "retain_token_ids": true,
+    "generation_config_mode": "auto"
+  },
+  "data": {
+    "sources": [
+      {
+        "source": "teacher",
+        "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/teacher/tgvf-v4-rp66-rp67-train-t1-candidates-v1/candidates.jsonl",
+        "sha256": "69e6e6761add4783b77a6ed0a60978ff274048e7f20681951b3a07527d7fa0d6",
+        "rows": 39584
+      }
+    ]
+  },
+  "selection": {
+    "kind": "teacher_full",
+    "algorithm_version": "teacher-train-source-uid-full-v1",
+    "candidates_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/teacher/tgvf-v4-rp66-rp67-train-t1-candidates-v1/candidates.jsonl",
+    "candidates_sha256": "69e6e6761add4783b77a6ed0a60978ff274048e7f20681951b3a07527d7fa0d6",
+    "rows": 39584,
+    "manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/teacher/tgvf-v4-rp66-rp67-train-t1-candidates-v1/manifest.json",
+    "manifest_sha256": "1dbd8c0a91e7237f5492da0d238983b986b7666055be17f7dff6522aa5480871"
+  },
+  "verifier": {
+    "schema": "t1-source-verifier-v2",
+    "answer_parser": "direct-completion-v1",
+    "arxivqa_rule": "canonical-row-bounded-a-z-v1",
+    "thinklite_rule": "normalized-exact-numeric-symbolic-v1",
+    "vstar_rule": "normalized-exact-then-local-semantic-v1",
+    "teacher_rule": "mcq-bounded-label-else-normalized-exact-numeric-semantic-v1",
+    "semantic_judge": {
+      "provider": "local-openai-compatible",
+      "repository": "Qwen/Qwen2.5-72B-Instruct",
+      "path": "/nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct",
+      "served_name": "Qwen2.5-72B-Instruct",
+      "prompt_sha256": "2fa039d7add954b9d6a457687e73c0b3141b17d711cbe5e24a99ae35d03e86d2",
+      "config_sha256": "3737504858912a6392679d2c9720597cde58dd7d3218aa6f75b67ad00a769573",
+      "temperature": 0.0,
+      "max_tokens": 256,
+      "remote": false
+    }
+  },
+  "output_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/t1/T1-05-QWEN3-INSTRUCT-512-TEACHER39584-GPU4567"
+}

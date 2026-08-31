@@ -26,6 +26,7 @@ def main() -> int:
     parser.add_argument("--evaluation-id", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--mathverse-source-json", type=Path, required=True)
+    parser.add_argument("--force-invalid-index", action="append", default=[])
     args = parser.parse_args()
     result = materialize_policy_coredev_scoring_views(
         inference_root=args.inference_root,
@@ -35,6 +36,7 @@ def main() -> int:
         evaluation_id=args.evaluation_id,
         run_id=args.run_id,
         mathverse_source_json=args.mathverse_source_json,
+        forced_invalid_indices=args.force_invalid_index,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))
     return 0

@@ -57,6 +57,7 @@ from tgvf_rl.representation.adapter import (
 from .readout import (
     RepresentationAttentionTensorBundle,
     RepresentationCandidateObservation,
+    RepresentationReadoutLossSupervision,
     RepresentationReadoutRow,
     RepresentationVisualTensorBundle,
     SameImageReadoutGroup,
@@ -71,6 +72,7 @@ from .schema import RepresentationTrainingSample
 from .transcript import (
     CanonicalEvidenceSupervision,
     CanonicalToModelTokenExpansion,
+    ModelEvidenceSupervision,
     NATIVE_REPRESENTATION_PRE_REASONING,
     _build_visual_token_expansion,
     _render_native_evidence_labels_batch,
@@ -423,6 +425,15 @@ class Qwen3NativeRepresentationGroupBuilder:
         image_loader: Callable[[str], Any],
         image_max_pixels: int | None = None,
         reuse_preencoded_vision_for_contextual_conditioning: bool = False,
+        readout_loss_supervision_factory: Callable[
+            [
+                RepresentationTrainingSample,
+                CanonicalEvidenceSupervision,
+                ModelEvidenceSupervision,
+            ],
+            RepresentationReadoutLossSupervision,
+        ]
+        | None = None,
     ) -> None:
         if not isinstance(runtime, Qwen3RepresentationRuntime):
             raise TypeError("runtime must be Qwen3RepresentationRuntime")
@@ -444,9 +455,7 @@ class Qwen3NativeRepresentationGroupBuilder:
             )
             if image_max_pixels <= 0:
                 raise ValueError("image_max_pixels must be positive")
-        if not isinstance(
-            reuse_preencoded_vision_for_contextual_conditioning, bool
-        ):
+        if not isinstance(reuse_preencoded_vision_for_contextual_conditioning, bool):
             raise TypeError(
                 "reuse_preencoded_vision_for_contextual_conditioning must be bool"
             )
@@ -458,6 +467,10 @@ class Qwen3NativeRepresentationGroupBuilder:
             raise ValueError(
                 "preencoded contextual conditioning requires the final hidden layer"
             )
+        if readout_loss_supervision_factory is not None and not callable(
+            readout_loss_supervision_factory
+        ):
+            raise TypeError("readout loss-supervision factory must be callable")
         self.runtime = runtime
         self.family_adapter = family_adapter
         self.prompt = prompt
@@ -466,6 +479,7 @@ class Qwen3NativeRepresentationGroupBuilder:
         self.reuse_preencoded_vision_for_contextual_conditioning = (
             reuse_preencoded_vision_for_contextual_conditioning
         )
+        self.readout_loss_supervision_factory = readout_loss_supervision_factory
 
     def __call__(
         self,
@@ -744,9 +758,7 @@ class Qwen3NativeRepresentationGroupBuilder:
             raise RuntimeError(
                 "preencoded contextual conditioning only exposes the final layer"
             )
-        visual_token_id = self.runtime.tokenizer.convert_tokens_to_ids(
-            "<|image_pad|>"
-        )
+        visual_token_id = self.runtime.tokenizer.convert_tokens_to_ids("<|image_pad|>")
         if isinstance(visual_token_id, bool) or not isinstance(visual_token_id, int):
             raise TypeError("Qwen image placeholder did not resolve to an integer ID")
         positions = tuple(
@@ -816,6 +828,20 @@ class Qwen3NativeRepresentationGroupBuilder:
             canonical,
             cpu_input_ids,
         )
+        loss_supervision = None
+        if self.readout_loss_supervision_factory is not None:
+            loss_supervision = self.readout_loss_supervision_factory(
+                sample,
+                canonical,
+                supervision,
+            )
+            if not isinstance(
+                loss_supervision,
+                RepresentationReadoutLossSupervision,
+            ):
+                raise TypeError(
+                    "readout loss-supervision factory returned an invalid value"
+                )
         # Qwen's native M-RoPE helper is device-agnostic and dominated by
         # Python scalar/list indexing.  Feeding it CUDA IDs forces many tiny
         # GPU kernels and host synchronizations (`tolist`, `item`, argwhere)
@@ -854,6 +880,7 @@ class Qwen3NativeRepresentationGroupBuilder:
                 input_ids,
                 (supervision.model_token_ids,),
             ),
+            loss_supervision=loss_supervision,
         )
 
 

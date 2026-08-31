@@ -91,6 +91,12 @@ _CODE_IDENTITY_PATHS = (
     "requirements/compatibility-torch211-cu129.lock",
     "uv.lock",
 )
+_ANSWER_BEARING_SPAN_OBJECTIVE_PREFIX = (
+    "answer-bearing-span-balanced-matrix-ce-l-gen-norm-plus-image-axis-v1:"
+)
+_ANSWER_BEARING_SPAN_REQUIRED_DRIVER = "answer-bearing-span-runner-v1"
+_ANSWER_BEARING_SPAN_DRIVER_SEAL = object()
+_ACTIVE_EXPERIMENT_DRIVER_SEAL: object | None = None
 
 
 def run_representation_training(
@@ -105,6 +111,7 @@ def run_representation_training(
     """
 
     config = load_representation_training_config(config_path)
+    _require_experiment_driver_attestation(config)
     _validate_invocation_stop(config, stop_after_global_step)
     _require_launch_environment(config)
     _verify_live_code_identity(config)
@@ -133,6 +140,21 @@ def run_representation_training(
         if torch.distributed.is_initialized():
             torch.distributed.destroy_process_group()
         return result
+
+
+def _require_experiment_driver_attestation(
+    config: RepresentationTrainingConfig,
+) -> None:
+    """Reject treatment TOMLs whose executable experiment wrapper was bypassed."""
+
+    objective_identity = config.objective.objective.identity
+    if objective_identity.startswith(_ANSWER_BEARING_SPAN_OBJECTIVE_PREFIX) and (
+        _ACTIVE_EXPERIMENT_DRIVER_SEAL is not _ANSWER_BEARING_SPAN_DRIVER_SEAL
+    ):
+        raise RuntimeError(
+            "RP70 treatment config requires the answer-bearing-span experiment "
+            "runner; direct core representation launch is forbidden"
+        )
 
 
 def _abort_distributed_process_group() -> None:
@@ -477,9 +499,7 @@ def _run_initialized(
                 family_adapter=family_adapter,
                 samples=validation_data.samples,
                 group_builder=group_builder,
-                validation_manifest_sha256=(
-                    validation_data.manifest.manifest_sha256
-                ),
+                validation_manifest_sha256=(validation_data.manifest.manifest_sha256),
                 validation_event_index=validation_event_index,
             )
             binding.assert_optimizer_ownership(optimizer)
@@ -1488,8 +1508,7 @@ def _verify_live_code_identity(config: RepresentationTrainingConfig) -> None:
                 config.resume.enabled
                 and config.resume.code_compatibility
                 == VALIDATED_NON_TRAINING_CODE_TRANSITION
-                and live_digest
-                == config.resume.compatible_live_dirty_state_sha256
+                and live_digest == config.resume.compatible_live_dirty_state_sha256
             )
             if not compatible_resume:
                 raise ValueError(

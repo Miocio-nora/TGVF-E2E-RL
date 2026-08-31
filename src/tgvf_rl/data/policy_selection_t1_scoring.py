@@ -10,11 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from .policy_selection import (
+    POLICY_SELECTION_TASK_KIND_POLICY,
     AttemptStatus,
     SelectionBranch,
     SelectionCandidate,
     SelectionSource,
     canonical_json_line,
+    policy_selection_semantic_judge_task_kind,
     reduce_selection_attempts,
     stable_selection_request_id,
     summarize_selection_decisions,
@@ -40,11 +42,41 @@ from .policy_selection_vllm_retry import (
 T1_EFFECTIVE_GENERATION_SCHEMA = "tgvf.policy-selection.t1-effective-generation.v1"
 T1_SEMANTIC_JUDGE_REQUEST_SCHEMA = "tgvf.policy-selection.t1-semantic-judge-request.v1"
 T1_DETERMINISTIC_SCORING_MANIFEST_SCHEMA = (
-    "tgvf.policy-selection.t1-deterministic-scoring-manifest.v2"
+    "tgvf.policy-selection.t1-deterministic-scoring-manifest.v3"
 )
-T1_SCORING_DIRECTORY = Path("scoring") / "deterministic-v2"
+T1_SCORING_DIRECTORY = Path("scoring") / "deterministic-v3"
 T1_UNRETRIED_LENGTH_WAIVER_RUN_IDS = frozenset(
     {"T1-04-QWEN3-INSTRUCT-512-FULLIMAGE-271842-GPU0123"}
+)
+T1_PATHOLOGICAL_GENERATION_LENGTH_REASON = "pathological_generation_length"
+T1_PATHOLOGICAL_GENERATION_MIN_TOKENS = 98_000
+_T1_PATHOLOGICAL_EXCLUSION_FIELDS = frozenset(
+    {
+        "run_id",
+        "run_manifest_sha256",
+        "candidate_sha256",
+        "sample_id",
+        "source",
+        "reason",
+        "question",
+        "ground_truth",
+        "generation_length_waivers",
+    }
+)
+_T1_PATHOLOGICAL_WAIVER_FIELDS = frozenset(
+    {
+        "run_id",
+        "run_manifest_sha256",
+        "request_id",
+        "sample_id",
+        "candidate_sha256",
+        "source",
+        "attempt_index",
+        "terminal_budget_revision",
+        "terminal_finish_reason",
+        "terminal_evidence_sha256",
+        "terminal_sampled_token_count",
+    }
 )
 
 
@@ -77,6 +109,196 @@ def _file_record(relative: Path, payload: bytes, *, rows: int | None) -> dict[st
     return record
 
 
+def _required_lower_sha256(value: object, *, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{field} must be a lowercase SHA-256")
+    return value
+
+
+def _parse_quality_exclusions(
+    quality_config: object,
+    *,
+    run: T1RunConfig,
+    candidates_by_sha: Mapping[str, SelectionCandidate],
+) -> tuple[
+    dict[str, Mapping[str, Any]],
+    dict[str, Mapping[str, Any]],
+    tuple[dict[str, Any], ...],
+]:
+    """Bind candidate exclusions and exact rev1-length waiver declarations."""
+
+    if (
+        not isinstance(quality_config, Mapping)
+        or quality_config.get("schema_version")
+        != "tgvf.policy-selection.t1-quality-exclusions.v1"
+        or not isinstance(quality_config.get("exclusions"), list)
+    ):
+        raise ValueError("T1 quality-exclusion config schema differs")
+    quality_exclusions: dict[str, Mapping[str, Any]] = {}
+    length_waivers: dict[str, Mapping[str, Any]] = {}
+    waiver_records: list[dict[str, Any]] = []
+    for exclusion in quality_config["exclusions"]:
+        if not isinstance(exclusion, Mapping):
+            raise ValueError("T1 quality exclusion must be an object")
+        candidate_sha256 = exclusion.get("candidate_sha256")
+        candidate = candidates_by_sha.get(str(candidate_sha256))
+        if candidate is None:
+            raise ValueError("T1 quality exclusion refers to an unknown candidate")
+        if (
+            exclusion.get("sample_id") != candidate.sample_id
+            or exclusion.get("source") != candidate.source.value
+            or exclusion.get("question") != candidate.question
+            or exclusion.get("ground_truth") != candidate.ground_truth
+        ):
+            raise ValueError("T1 quality exclusion evidence differs from candidate")
+        reason = exclusion.get("reason")
+        if reason == "source_ground_truth_truncated":
+            if "generation_length_waivers" in exclusion:
+                raise ValueError(
+                    "source-ground-truth exclusion cannot declare length waivers"
+                )
+        elif reason == T1_PATHOLOGICAL_GENERATION_LENGTH_REASON:
+            if set(exclusion) != _T1_PATHOLOGICAL_EXCLUSION_FIELDS:
+                raise ValueError(
+                    "pathological-generation exclusion fields differ"
+                )
+            if (
+                run.selection.get("kind") != "teacher_full"
+                or candidate.source is not SelectionSource.TEACHER
+                or exclusion.get("run_id") != run.run_id
+                or exclusion.get("run_manifest_sha256") != run.manifest_sha256
+            ):
+                raise ValueError(
+                    "pathological-generation exclusion is outside its teacher run"
+                )
+            waivers = exclusion.get("generation_length_waivers")
+            if not isinstance(waivers, list):
+                raise ValueError(
+                    "pathological-generation request waivers must be a list"
+                )
+            for waiver in waivers:
+                if (
+                    not isinstance(waiver, Mapping)
+                    or set(waiver) != _T1_PATHOLOGICAL_WAIVER_FIELDS
+                ):
+                    raise ValueError(
+                        "pathological-generation request waiver fields differ"
+                    )
+                attempt_index = waiver.get("attempt_index")
+                if type(attempt_index) is not int or not 0 <= attempt_index < T1_ATTEMPTS:
+                    raise ValueError(
+                        "pathological-generation waiver attempt_index is invalid"
+                    )
+                expected_request_id = stable_selection_request_id(
+                    candidate_sha256=candidate.identity_sha256,
+                    branch=SelectionBranch.FULL_IMAGE,
+                    attempt_index=attempt_index,
+                )
+                token_count = waiver.get("terminal_sampled_token_count")
+                if (
+                    waiver.get("run_id") != run.run_id
+                    or waiver.get("run_manifest_sha256") != run.manifest_sha256
+                    or waiver.get("request_id") != expected_request_id
+                    or waiver.get("sample_id") != candidate.sample_id
+                    or waiver.get("candidate_sha256") != candidate.identity_sha256
+                    or waiver.get("source") != SelectionSource.TEACHER.value
+                    or waiver.get("terminal_budget_revision") != 1
+                    or waiver.get("terminal_finish_reason") != "length"
+                    or type(token_count) is not int
+                    or token_count <= T1_PATHOLOGICAL_GENERATION_MIN_TOKENS
+                ):
+                    raise ValueError(
+                        "pathological-generation request waiver identity differs"
+                    )
+                _required_lower_sha256(
+                    waiver.get("terminal_evidence_sha256"),
+                    field="terminal_evidence_sha256",
+                )
+                if expected_request_id in length_waivers:
+                    raise ValueError(
+                        "duplicate pathological-generation request waiver"
+                    )
+                waiver_record = dict(waiver)
+                length_waivers[expected_request_id] = waiver_record
+                waiver_records.append(waiver_record)
+        else:
+            raise ValueError("T1 quality exclusion reason is unsupported")
+        if str(candidate_sha256) in quality_exclusions:
+            raise ValueError("duplicate T1 quality exclusion")
+        quality_exclusions[str(candidate_sha256)] = exclusion
+    waiver_records.sort(key=lambda item: str(item["request_id"]))
+    return quality_exclusions, length_waivers, tuple(waiver_records)
+
+
+def _validate_pathological_length_waiver(
+    waiver: Mapping[str, Any],
+    *,
+    run: T1RunConfig,
+    candidate: SelectionCandidate,
+    evidence: T1RawGenerationEvidence,
+    terminal_revision: int,
+) -> None:
+    """Prove that one declared waiver is the observed rev1 98k+ length finish."""
+
+    if (
+        run.selection.get("kind") != "teacher_full"
+        or candidate.source is not SelectionSource.TEACHER
+        or waiver.get("run_id") != run.run_id
+        or waiver.get("run_manifest_sha256") != run.manifest_sha256
+        or waiver.get("request_id") != evidence.request_id
+        or waiver.get("sample_id") != candidate.sample_id
+        or waiver.get("candidate_sha256") != candidate.identity_sha256
+        or waiver.get("source") != candidate.source.value
+        or waiver.get("attempt_index") != evidence.attempt_index
+        or waiver.get("terminal_budget_revision") != terminal_revision
+        or terminal_revision != 1
+        or evidence.budget_revision != terminal_revision
+        or waiver.get("terminal_finish_reason") != "length"
+        or evidence.finish_reason != "length"
+        or waiver.get("terminal_evidence_sha256") != evidence.evidence_sha256
+        or waiver.get("terminal_sampled_token_count")
+        != evidence.sampled_token_count
+        or type(evidence.sampled_token_count) is not int
+        or evidence.sampled_token_count <= T1_PATHOLOGICAL_GENERATION_MIN_TOKENS
+    ):
+        raise ValueError("pathological-generation waiver evidence identity differs")
+
+
+def _apply_quality_exclusion(
+    attempt: Mapping[str, Any], exclusion: Mapping[str, Any]
+) -> dict[str, Any]:
+    reason = str(exclusion["reason"])
+    route = {
+        "source_ground_truth_truncated": "source_ground_truth_invalid",
+        T1_PATHOLOGICAL_GENERATION_LENGTH_REASON: (
+            "source_generation_anomaly_invalid"
+        ),
+    }[reason]
+    return {
+        **attempt,
+        "status": AttemptStatus.VERIFIER_ERROR.value,
+        "correct": None,
+        "verification_route": route,
+        "verification_evidence": reason,
+        "semantic_required": False,
+        "semantic_judge_evidence_sha256": None,
+    }
+
+
+def _pathological_waiver_binding(
+    waiver_records: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    payload = _records_payload(waiver_records)
+    return {
+        "pathological_generation_length_waiver_count": len(waiver_records),
+        "pathological_generation_length_waivers_sha256": _sha256_bytes(payload),
+    }
+
+
 def _expected_requests(
     candidates: Sequence[SelectionCandidate],
 ) -> dict[str, tuple[SelectionCandidate, int]]:
@@ -97,10 +319,16 @@ def _expected_requests(
 def _effective_generations(
     run: T1RunConfig,
     candidates: Sequence[SelectionCandidate],
+    *,
+    pathological_length_waivers: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[
     tuple[tuple[SelectionCandidate, T1RawGenerationEvidence, bool], ...],
     tuple[dict[str, Any], ...],
 ]:
+    length_waivers = (
+        {} if pathological_length_waivers is None else pathological_length_waivers
+    )
+    consumed_length_waivers: set[str] = set()
     expected = _expected_requests(candidates)
     located = _load_validated_evidence(run)
     histories: dict[str, dict[int, tuple[Any, T1RawGenerationEvidence]]] = {
@@ -142,16 +370,23 @@ def _effective_generations(
         terminal_revision = revisions[-1]
         manifest, evidence = history[terminal_revision]
         if evidence.finish_reason == "length":
-            if (
-                terminal_revision < maximum_revision
-                and run.run_id not in T1_UNRETRIED_LENGTH_WAIVER_RUN_IDS
-            ):
-                raise ValueError(
-                    "a length finish still requires a response-budget retry"
-                )
-            # T1-04 explicitly waives its 194 revision-0 length retries.  They
-            # remain truncated/unscoreable, so the reducer rejects only the 161
-            # affected candidates rather than blocking all 271,842 candidates.
+            if terminal_revision < maximum_revision:
+                waiver = length_waivers.get(request_id)
+                if waiver is not None:
+                    _validate_pathological_length_waiver(
+                        waiver,
+                        run=run,
+                        candidate=candidate,
+                        evidence=evidence,
+                        terminal_revision=terminal_revision,
+                    )
+                    consumed_length_waivers.add(request_id)
+                elif run.run_id not in T1_UNRETRIED_LENGTH_WAIVER_RUN_IDS:
+                    raise ValueError(
+                        "a length finish still requires a response-budget retry"
+                    )
+            # Accepted historical or exact pathological cases remain
+            # truncated/unscoreable.  No later revision is synthesized.
             budget_exhausted = True
         else:
             budget_exhausted = False
@@ -172,18 +407,33 @@ def _effective_generations(
                 "chunk_manifest_sha256": manifest.manifest_sha256,
             }
         )
+    unconsumed = set(length_waivers) - consumed_length_waivers
+    if unconsumed:
+        raise ValueError(
+            "pathological-generation request waiver was not consumed: "
+            f"{min(unconsumed)}"
+        )
     return tuple(selected), tuple(pointers)
 
 
 def _option_count(candidate: SelectionCandidate) -> int | None:
-    if candidate.source is not SelectionSource.ARXIVQA:
+    if candidate.source not in {
+        SelectionSource.ARXIVQA,
+        SelectionSource.TEACHER,
+    }:
         return None
     metadata = candidate.canonical_record.get("selection_metadata")
     if not isinstance(metadata, Mapping):
-        raise ValueError("ArxivQA candidate has no selection_metadata")
+        raise ValueError("MCQ-capable candidate has no selection_metadata")
+    if candidate.source is SelectionSource.TEACHER:
+        task_kind = metadata.get("task_kind")
+        if task_kind == "open":
+            return None
+        if task_kind != "mcq":
+            raise ValueError("teacher candidate task_kind is invalid")
     option_count = metadata.get("option_count")
     if type(option_count) is not int or not 2 <= option_count <= 26:
-        raise ValueError("ArxivQA option_count is invalid")
+        raise ValueError("candidate option_count is invalid")
     return option_count
 
 
@@ -213,8 +463,10 @@ def _judge_queue(
             raise ValueError("semantic judge candidate answer must be non-empty")
         if not isinstance(candidate.ground_truth, str):
             raise ValueError("semantic judge reference answer must be a string")
-        task_kind = (
-            "math" if candidate.source is SelectionSource.THINKLITE else "open_vqa"
+        task_kind = policy_selection_semantic_judge_task_kind(
+            source=candidate.source,
+            question=candidate.question,
+            ground_truth=candidate.ground_truth,
         )
         payload = {
             "task_kind": task_kind,
@@ -295,35 +547,20 @@ def materialize_t1_deterministic_scoring(
     quality_payload = quality_path.read_bytes()
     quality_sha256 = _sha256_bytes(quality_payload)
     quality_config = json.loads(quality_payload)
-    if (
-        not isinstance(quality_config, Mapping)
-        or quality_config.get("schema_version")
-        != "tgvf.policy-selection.t1-quality-exclusions.v1"
-        or not isinstance(quality_config.get("exclusions"), list)
-    ):
-        raise ValueError("T1 quality-exclusion config schema differs")
-    quality_exclusions: dict[str, Mapping[str, Any]] = {}
-    for exclusion in quality_config["exclusions"]:
-        if not isinstance(exclusion, Mapping):
-            raise ValueError("T1 quality exclusion must be an object")
-        candidate_sha256 = exclusion.get("candidate_sha256")
-        candidate = candidates_by_sha.get(candidate_sha256)
-        if candidate is None:
-            raise ValueError("T1 quality exclusion refers to an unknown candidate")
-        if (
-            exclusion.get("sample_id") != candidate.sample_id
-            or exclusion.get("source") != candidate.source.value
-            or exclusion.get("question") != candidate.question
-            or exclusion.get("ground_truth") != candidate.ground_truth
-        ):
-            raise ValueError("T1 quality exclusion evidence differs from candidate")
-        reason = exclusion.get("reason")
-        if reason != "source_ground_truth_truncated":
-            raise ValueError("T1 quality exclusion reason is unsupported")
-        if candidate_sha256 in quality_exclusions:
-            raise ValueError("duplicate T1 quality exclusion")
-        quality_exclusions[candidate_sha256] = exclusion
-    selected, effective_records = _effective_generations(run, candidates)
+    (
+        quality_exclusions,
+        pathological_length_waivers,
+        pathological_waiver_records,
+    ) = _parse_quality_exclusions(
+        quality_config,
+        run=run,
+        candidates_by_sha=candidates_by_sha,
+    )
+    selected, effective_records = _effective_generations(
+        run,
+        candidates,
+        pathological_length_waivers=pathological_length_waivers,
+    )
 
     attempts: list[dict[str, Any]] = []
     for candidate, evidence, budget_exhausted in selected:
@@ -340,15 +577,7 @@ def materialize_t1_deterministic_scoring(
             )
         exclusion = quality_exclusions.get(candidate.identity_sha256)
         if exclusion is not None:
-            attempt = {
-                **attempt,
-                "status": AttemptStatus.VERIFIER_ERROR.value,
-                "correct": None,
-                "verification_route": "source_ground_truth_invalid",
-                "verification_evidence": str(exclusion["reason"]),
-                "semantic_required": False,
-                "semantic_judge_evidence_sha256": None,
-            }
+            attempt = _apply_quality_exclusion(attempt, exclusion)
         attempts.append(attempt)
     attempts.sort(key=lambda item: (item["sample_id"], item["attempt_index"]))
     judge_requests = _judge_queue(
@@ -371,10 +600,20 @@ def materialize_t1_deterministic_scoring(
         for request in judge_requests
         for consumer in request["consumers"]
     )
+    pathological_candidate_count = sum(
+        exclusion.get("reason") == T1_PATHOLOGICAL_GENERATION_LENGTH_REASON
+        for exclusion in quality_exclusions.values()
+    )
+    pathological_waiver_binding = (
+        _pathological_waiver_binding(pathological_waiver_records)
+        if pathological_candidate_count
+        else {}
+    )
     report = {
-        "schema_version": "tgvf.policy-selection.t1-deterministic-report.v2",
+        "schema_version": "tgvf.policy-selection.t1-deterministic-report.v3",
         "run_id": run.run_id,
         "run_manifest_sha256": run.manifest_sha256,
+        "task_kind_policy": POLICY_SELECTION_TASK_KIND_POLICY,
         "candidate_count": len(candidates),
         "logical_attempt_count": len(attempts),
         "effective_generation_count": len(effective_records),
@@ -387,12 +626,30 @@ def materialize_t1_deterministic_scoring(
         "arxivqa_judge_calls": source_semantic[SelectionSource.ARXIVQA.value],
         "quality_exclusion_candidate_count": len(quality_exclusions),
         "quality_exclusion_attempt_count": sum(
-            item["verification_route"] == "source_ground_truth_invalid"
+            item["verification_route"]
+            in {
+                "source_ground_truth_invalid",
+                "source_generation_anomaly_invalid",
+            }
             for item in attempts
         ),
         "quality_exclusions_sha256": quality_sha256,
         "provisional_selection_summary": summary,
+        **pathological_waiver_binding,
     }
+    if pathological_candidate_count:
+        report.update(
+            {
+                "pathological_generation_exclusion_candidate_count": (
+                    pathological_candidate_count
+                ),
+                "pathological_generation_exclusion_attempt_count": sum(
+                    item["verification_route"]
+                    == "source_generation_anomaly_invalid"
+                    for item in attempts
+                ),
+            }
+        )
 
     output_root = run.output_root / T1_SCORING_DIRECTORY
     payloads: dict[str, tuple[Path, bytes, int | None]] = {
@@ -430,10 +687,12 @@ def materialize_t1_deterministic_scoring(
         "schema_version": T1_DETERMINISTIC_SCORING_MANIFEST_SCHEMA,
         "run_id": run.run_id,
         "run_manifest_sha256": run.manifest_sha256,
+        "task_kind_policy": POLICY_SELECTION_TASK_KIND_POLICY,
         "selection_candidates_sha256": run.selection["candidates_sha256"],
         "judge_config_sha256": judge_config_sha256,
         "quality_exclusions_sha256": quality_sha256,
         "files": files,
+        **pathological_waiver_binding,
     }
     manifest_sha256 = _sha256_bytes(_canonical_json_bytes(manifest_identity))
     manifest = {**manifest_identity, "manifest_sha256": manifest_sha256}

@@ -16,7 +16,11 @@ import json
 import re
 from typing import Any
 
-from .policy_selection import SelectionCandidate, SelectionSource
+from .policy_selection import (
+    POLICY_SELECTION_PRIMARY_SOURCES,
+    SelectionCandidate,
+    SelectionSource,
+)
 
 
 POLICY_SELECTION_CANARY_MANIFEST_SCHEMA = "tgvf.policy-selection.t1-canary-manifest.v1"
@@ -464,6 +468,8 @@ def build_t1_canary_selection(
 
     for record in candidates:
         candidate = SelectionCandidate.from_record(record)
+        if candidate.source not in POLICY_SELECTION_PRIMARY_SOURCES:
+            raise ValueError("T1 canary accepts only the frozen three-source pool")
         if candidate.sample_id in sample_ids:
             raise ValueError(f"duplicate candidate sample_id: {candidate.sample_id}")
         if candidate.identity_sha256 in candidate_hashes:
@@ -510,7 +516,7 @@ def build_t1_canary_selection(
 
     missing_sources = [
         source.value
-        for source in SelectionSource
+        for source in POLICY_SELECTION_PRIMARY_SOURCES
         if input_counts[source.value] < T1_CANARY_PER_SOURCE
     ]
     if missing_sources:
@@ -585,7 +591,10 @@ def build_t1_canary_selection(
         raise AssertionError("internal duplicate canary candidate")
 
     selected_counts = Counter(item.candidate.source.value for item in selected)
-    expected_counts = {source.value: T1_CANARY_PER_SOURCE for source in SelectionSource}
+    expected_counts = {
+        source.value: T1_CANARY_PER_SOURCE
+        for source in POLICY_SELECTION_PRIMARY_SOURCES
+    }
     if dict(selected_counts) != expected_counts:
         raise AssertionError("internal per-source canary quota mismatch")
 
@@ -635,7 +644,7 @@ def build_t1_canary_selection(
                 "available": input_counts[source.value],
                 "selected": selected_counts[source.value],
             }
-            for source in SelectionSource
+            for source in POLICY_SELECTION_PRIMARY_SOURCES
         },
         "candidate_population_sha256": _sha256(sorted(candidate_hashes)),
         "strata": strata_records,

@@ -569,6 +569,9 @@ def test_thinklite_exact_numeric_and_semantic_boundaries() -> None:
     assert verify_thinklite_answer(
         "two blue objects", "there are two blue objects"
     ).outcome is (VerificationOutcome.SEMANTIC_REQUIRED)
+    assert verify_thinklite_answer("the infinity symbol", "Infinity").outcome is (
+        VerificationOutcome.SEMANTIC_REQUIRED
+    )
 
 
 def test_vstar_exact_mismatch_requires_semantics_instead_of_becoming_wrong() -> None:

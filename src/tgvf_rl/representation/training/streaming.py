@@ -1138,7 +1138,7 @@ def _forward_cell_batch_losses(
     )
     result = family_adapter.forward_injected(model, batched_request)
     labels = _materialize_native_causal_evidence_labels(
-        tuple(cell.row.supervision.labels for cell in cells),
+        tuple(cell.row.loss_labels for cell in cells),
         maximum_sequence,
         device=result.logits.device,
         vocabulary_size=int(result.logits.shape[-1]),
@@ -1332,15 +1332,15 @@ def _blocked_evidence_attention_mask(
 ) -> torch.Tensor:
     if len(row.source_positions) != source.main.shape[1]:
         raise ValueError("source visual positions do not match source tokens")
-    first_evidence = row.supervision.evidence_token_positions[0]
-    final_evidence = row.supervision.evidence_token_positions[-1]
-    if first_evidence <= 0:
+    block_query_start = row.source_image_block_query_start
+    block_query_end = row.source_image_block_query_end
+    if block_query_start < 0:
         raise ValueError("evidence must have a preceding causal prediction query")
     return _build_original_image_key_block_mask_from_positions(
         attention_mask=row.attention_mask,
         original_image_token_positions=row.source_positions,
-        block_query_start=first_evidence - 1,
-        block_query_end=final_evidence,
+        block_query_start=block_query_start,
+        block_query_end=block_query_end,
         dtype=source.main.dtype,
     )
 
@@ -1379,7 +1379,7 @@ def _forward_cell_losses(
         ),
     )
     labels = torch.tensor(
-        row.supervision.labels,
+        row.loss_labels,
         dtype=torch.long,
         device=result.logits.device,
     ).unsqueeze(0)

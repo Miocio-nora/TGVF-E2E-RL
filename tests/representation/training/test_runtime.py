@@ -273,6 +273,29 @@ def test_factory_builds_isolated_full_vision_routing_variant() -> None:
     assert len(runtime.adapter.artifact_state_dict()) == 104
 
 
+def test_factory_builds_isolated_visual_barycentric_variant() -> None:
+    identity = _identity()
+    model = _TinyQwen3(name_or_path=identity.revision_or_path)
+
+    runtime = create_qwen3_representation_runtime(
+        model=model,
+        processor=_processor(),
+        model_identity=identity,
+        conditioning_config=_context_config(),
+        adapter_dtype=torch.float32,
+        adapter_variant=(TGVFAdapterVariant.FULL_D_DEEPSTACK_VISUAL_BARYCENTRIC),
+        fixture_mode=True,
+    )
+
+    assert runtime.adapter.variant is (
+        TGVFAdapterVariant.FULL_D_DEEPSTACK_VISUAL_BARYCENTRIC
+    )
+    assert runtime.adapter.vision_routing_only
+    assert runtime.adapter.visual_barycentric_writer
+    assert len(runtime.adapter.d_deepstack_branch_adapters) == 3
+    assert len(runtime.adapter.artifact_state_dict()) == 104
+
+
 def test_patch_embed_linear_fast_path_preserves_state_and_parameter_identity() -> None:
     torch.manual_seed(803)
     vision = _ProductionGeometryVisionShell().eval()
@@ -391,7 +414,9 @@ def test_runtime_rejects_qwen25_and_tiny_model_outside_fixture_mode() -> None:
         )
 
     tiny = _identity()
-    with pytest.raises(ValueError, match="production runtime requires a pinned Qwen3 edition"):
+    with pytest.raises(
+        ValueError, match="production runtime requires a pinned Qwen3 edition"
+    ):
         create_qwen3_representation_runtime(
             model=_TinyQwen3(name_or_path=tiny.revision_or_path),
             processor=_processor(),

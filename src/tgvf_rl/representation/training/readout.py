@@ -20,6 +20,7 @@ from tgvf_rl.qwen.base import (
 )
 
 from .losses import (
+    EVIDENCE_IGNORE_INDEX,
     EvidenceReadabilityLossTerms,
     MatrixCEScoreMode,
     SameImageMatrixCELossTerms,
@@ -28,6 +29,115 @@ from .losses import (
     same_image_matrix_ce_loss_terms,
 )
 from .transcript import ModelEvidenceSupervision
+
+
+@dataclass(frozen=True, slots=True)
+class RepresentationReadoutLossSupervision:
+    """One explicit override of the historical evidence-only loss view.
+
+    ``labels`` remains aligned to the unchanged native readout transcript.  The
+    two component position fields make a sparse answer-bearing objective
+    auditable without changing the transcript, candidate observations, or the
+    historical :class:`ModelEvidenceSupervision`.  The source-image query range
+    is half open and describes which causal queries must not attend to original
+    image keys while scoring these labels.
+    """
+
+    identity: str
+    labels: tuple[int, ...]
+    supervised_token_positions: tuple[int, ...]
+    evidence_value_token_positions: tuple[int, ...]
+    answer_token_positions: tuple[int, ...]
+    source_image_block_query_start: int
+    source_image_block_query_end: int
+
+    def __post_init__(self) -> None:
+        _require_non_empty_text(self.identity, field_name="loss supervision identity")
+        if not isinstance(self.labels, tuple) or not self.labels:
+            raise ValueError("loss supervision labels must be a non-empty tuple")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in self.labels
+        ):
+            raise TypeError("loss supervision labels must contain integers")
+        if any(value != EVIDENCE_IGNORE_INDEX and value < 0 for value in self.labels):
+            raise ValueError(
+                "loss supervision labels must be token IDs or the ignore index"
+            )
+        _validate_ordered_token_positions(
+            self.supervised_token_positions,
+            allow_empty=False,
+            require_contiguous=False,
+            name="supervised token",
+        )
+        _validate_ordered_token_positions(
+            self.evidence_value_token_positions,
+            allow_empty=True,
+            require_contiguous=False,
+            name="evidence-value token",
+        )
+        _validate_ordered_token_positions(
+            self.answer_token_positions,
+            allow_empty=False,
+            require_contiguous=True,
+            name="answer token",
+        )
+        if self.evidence_value_token_positions and (
+            self.evidence_value_token_positions[-1] >= self.answer_token_positions[0]
+        ):
+            raise ValueError("evidence-value tokens must precede answer tokens")
+        components = tuple(
+            sorted(
+                (
+                    *self.evidence_value_token_positions,
+                    *self.answer_token_positions,
+                )
+            )
+        )
+        if len(set(components)) != len(components):
+            raise ValueError("loss supervision components must be disjoint")
+        if components != self.supervised_token_positions:
+            raise ValueError(
+                "loss supervision component union must equal supervised positions"
+            )
+        realized = tuple(
+            position
+            for position, label in enumerate(self.labels)
+            if label != EVIDENCE_IGNORE_INDEX
+        )
+        if realized != self.supervised_token_positions:
+            raise ValueError(
+                "loss supervision labels must own exactly the supervised positions"
+            )
+        if self.supervised_token_positions[0] == 0:
+            raise ValueError("the first sequence token cannot receive a causal label")
+        for field_name in (
+            "source_image_block_query_start",
+            "source_image_block_query_end",
+        ):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{field_name} must be an integer")
+        if not (
+            0
+            <= self.source_image_block_query_start
+            < self.source_image_block_query_end
+            <= len(self.labels)
+        ):
+            raise ValueError(
+                "source-image block query range must be non-empty and within labels"
+            )
+        if any(
+            not (
+                self.source_image_block_query_start
+                <= position - 1
+                < self.source_image_block_query_end
+            )
+            for position in self.supervised_token_positions
+        ):
+            raise ValueError(
+                "source-image block query range must cover every supervised prediction"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +225,7 @@ class RepresentationReadoutRow:
     source_positions: tuple[int, ...]
     d_positions: tuple[int, ...]
     canonical_input_ids_proof: _CanonicalInputIdsProof | None = None
+    loss_supervision: RepresentationReadoutLossSupervision | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("sample_id", "image_group_key", "source_visual_identity"):
@@ -157,6 +268,87 @@ class RepresentationReadoutRow:
             )
         if any(position < 0 or position >= sequence for position in combined):
             raise ValueError("readout visual position is outside the model sequence")
+        self._validate_loss_supervision(sequence)
+
+    @property
+    def loss_labels(self) -> tuple[int, ...]:
+        """Effective labels, preserving historical RP66 behavior by default."""
+
+        if self.loss_supervision is None:
+            return self.supervision.labels
+        return self.loss_supervision.labels
+
+    @property
+    def loss_supervised_token_positions(self) -> tuple[int, ...]:
+        """Effective causal-label positions for loss accounting and diagnostics."""
+
+        if self.loss_supervision is None:
+            return self.supervision.evidence_token_positions
+        return self.loss_supervision.supervised_token_positions
+
+    @property
+    def source_image_block_query_start(self) -> int:
+        """Inclusive first query whose original-image keys are blocked."""
+
+        if self.loss_supervision is None:
+            return self.supervision.evidence_token_positions[0] - 1
+        return self.loss_supervision.source_image_block_query_start
+
+    @property
+    def source_image_block_query_end(self) -> int:
+        """Exclusive end of original-image key blocking for the loss view."""
+
+        if self.loss_supervision is None:
+            return self.supervision.evidence_token_positions[-1]
+        return self.loss_supervision.source_image_block_query_end
+
+    def _validate_loss_supervision(self, sequence: int) -> None:
+        override = self.loss_supervision
+        if override is None:
+            return
+        if not isinstance(override, RepresentationReadoutLossSupervision):
+            raise TypeError(
+                "loss_supervision must be RepresentationReadoutLossSupervision"
+            )
+        if len(override.labels) != sequence:
+            raise ValueError(
+                "loss supervision labels must align with readout input IDs"
+            )
+        supervised = set(override.supervised_token_positions)
+        expected_labels = tuple(
+            token_id if position in supervised else EVIDENCE_IGNORE_INDEX
+            for position, token_id in enumerate(self.supervision.model_token_ids)
+        )
+        if override.labels != expected_labels:
+            raise ValueError(
+                "loss supervision labels differ from readout token IDs or positions"
+            )
+        evidence_positions = set(self.supervision.evidence_token_positions)
+        if not set(override.evidence_value_token_positions).issubset(
+            evidence_positions
+        ):
+            raise ValueError(
+                "evidence-value supervision must stay inside the complete evidence span"
+            )
+        final_evidence = self.supervision.evidence_token_positions[-1]
+        if override.answer_token_positions[0] <= final_evidence:
+            raise ValueError(
+                "answer supervision must follow the complete evidence span"
+            )
+        if set(override.supervised_token_positions).intersection(
+            (*self.source_positions, *self.d_positions)
+        ):
+            raise ValueError("loss supervision cannot own visual model positions")
+        expected_block_start = self.supervision.evidence_token_positions[0] - 1
+        if override.source_image_block_query_start != expected_block_start:
+            raise ValueError(
+                "loss supervision must block source-image keys from the complete "
+                "evidence prediction boundary"
+            )
+        if override.source_image_block_query_end != override.answer_token_positions[-1]:
+            raise ValueError(
+                "source-image block query end must equal the final answer token position"
+            )
 
     def assert_input_ids_authority(self) -> None:
         """Revalidate the exact input tensor without reading bound CUDA content."""
@@ -398,7 +590,7 @@ def synthetic_same_image_layout_readout_terms(
             request = _cell_request(group.source_visual, row, candidate.visual)
             result = family_adapter.forward_injected(model, request)
             labels = torch.tensor(
-                row.supervision.labels,
+                row.loss_labels,
                 dtype=torch.long,
                 device=result.logits.device,
             ).unsqueeze(0)
@@ -505,6 +697,34 @@ def _validate_attention_tensor(value: object, *, name: str) -> None:
         raise ValueError(f"{name} must have non-empty rank two or three shape")
     if not value.dtype.is_floating_point:
         raise TypeError(f"{name} must use a floating dtype")
+
+
+def _validate_ordered_token_positions(
+    positions: object,
+    *,
+    allow_empty: bool,
+    require_contiguous: bool,
+    name: str,
+) -> None:
+    if not isinstance(positions, tuple):
+        raise TypeError(f"{name} positions must be a tuple")
+    if not positions and not allow_empty:
+        raise ValueError(f"{name} positions must be non-empty")
+    if any(
+        isinstance(position, bool) or not isinstance(position, int)
+        for position in positions
+    ):
+        raise TypeError(f"{name} positions must contain integers")
+    if any(position < 0 for position in positions):
+        raise ValueError(f"{name} positions cannot be negative")
+    if tuple(sorted(set(positions))) != positions:
+        raise ValueError(f"{name} positions must be ordered and unique")
+    if (
+        require_contiguous
+        and positions
+        and positions != tuple(range(positions[0], positions[-1] + 1))
+    ):
+        raise ValueError(f"{name} positions must be contiguous")
 
 
 def _require_non_empty_text(value: object, *, field_name: str) -> None:

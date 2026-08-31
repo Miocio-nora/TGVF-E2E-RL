@@ -12,6 +12,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 from tgvf_rl.evaluation.coredev_results import (  # noqa: E402
+    COREDEV_BASELINE_MODEL,
     summarize_coredev_results,
     write_json_atomic,
 )
@@ -23,6 +24,7 @@ def main() -> int:
     parser.add_argument("--phase", choices=("infer", "eval"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--judge-base-url")
+    parser.add_argument("--expected-model", default=COREDEV_BASELINE_MODEL)
     args = parser.parse_args()
 
     summary = summarize_coredev_results(
@@ -30,6 +32,7 @@ def main() -> int:
         repository_root=REPOSITORY_ROOT,
         phase=args.phase,
         expected_judge_base_url=args.judge_base_url,
+        expected_model=args.expected_model,
     )
     write_json_atomic(args.output.resolve(), summary)
     print(json.dumps(summary, indent=2, ensure_ascii=False))

@@ -364,10 +364,7 @@ def test_world4_ga2_config_preserves_eight_global_matrices(
     assert config.fsdp2.mesh_shape == (4,)
     assert config.training.gradient_accumulation_steps == 2
     assert config.accumulation_identity.data_parallel_world_size == 4
-    assert (
-        config.training.gradient_accumulation_steps * config.fsdp2.world_size
-        == 8
-    )
+    assert config.training.gradient_accumulation_steps * config.fsdp2.world_size == 8
 
 
 def test_representation_topology_rejects_unsupported_world3(
@@ -376,12 +373,8 @@ def test_representation_topology_rejects_unsupported_world3(
     path = _write_config(tmp_path)
     text = path.read_text(encoding="utf-8")
     text = text.replace("world_size = 2", "world_size = 3", 1)
-    text = text.replace(
-        "physical_gpu_ids = [2, 3]", "physical_gpu_ids = [0, 1, 2]", 1
-    )
-    text = text.replace(
-        "logical_gpu_ids = [0, 1]", "logical_gpu_ids = [0, 1, 2]", 1
-    )
+    text = text.replace("physical_gpu_ids = [2, 3]", "physical_gpu_ids = [0, 1, 2]", 1)
+    text = text.replace("logical_gpu_ids = [0, 1]", "logical_gpu_ids = [0, 1, 2]", 1)
     text = text.replace("mesh_shape = [2]", "mesh_shape = [3]", 1)
     path.write_text(text, encoding="utf-8")
 
@@ -661,6 +654,24 @@ def test_v5_content_binds_vision_routing_adapter_variant(tmp_path: Path) -> None
     assert (
         config.validation_payload()["adapter_variant"]
         == "full_d_deepstack_vision_routing"
+    )
+
+
+def test_v5_content_binds_visual_barycentric_adapter_variant(tmp_path: Path) -> None:
+    path = _upgrade_config_to_v5(
+        _write_config(tmp_path),
+        variant="full_d_deepstack_visual_barycentric",
+    )
+
+    config = load_representation_training_config(path, verify_external_files=False)
+
+    assert config.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5
+    assert config.adapter_variant is (
+        TGVFAdapterVariant.FULL_D_DEEPSTACK_VISUAL_BARYCENTRIC
+    )
+    assert (
+        config.validation_payload()["adapter_variant"]
+        == "full_d_deepstack_visual_barycentric"
     )
 
 

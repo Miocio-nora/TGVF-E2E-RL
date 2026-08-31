@@ -1,0 +1,173 @@
+# Materialize this file without the `.template` suffix only after replacing
+# every __FILL_*__ token.  The internal schema/profile names are retained for
+# compatibility with the isolated reward implementation; the experiment,
+# output, W&B, and evaluation identities are independently TGVF-shaped.
+schema_version = "policy-e2e-stage3-shaped-run-config-v1"
+formal_pilot = false
+run_id = "PRL-09-R2-QWEN3-INSTRUCT-GRPO-BS16-TGVF-SHAPED-T1MIXED-V2-80STEP-GPU0123"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "9276a4fc1f3308084d8c142401bbae304fb0248d"
+dirty = false
+
+[model]
+family = "qwen3_vl"
+name = "Qwen3-VL-8B-Instruct"
+path = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
+tokenizer_length = 151669
+chat_template_sha256 = "3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4"
+native_deepstack_enabled = true
+image_max_pixels = 262144
+
+[dataset]
+kind = "policy_t1_retained_mixed"
+root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_rl/T1-04-INSTRUCT-FULL-MIXED-T1-RETAINED-FINAL-v2"
+decision_stage = "final"
+sample_count = 77541
+manifest_file_sha256 = "752ebe9ea5fced48773b9bc0babfbb6bc57a335dd1b580455f6962053d29fddf"
+content_sha256 = "5ab99622a2698a7c52c45795215fa5c467b741c103827a1a7dbe3800ff052934"
+samples_sha256 = "06e5b1b9039680111df5ef01f7f969b9cf3d8d0eaefa5774fd8d16169428611a"
+iteration_identity_sha256 = "00487767040b6a04abe94679813b41ef76342e93b5dfa65cb6290c45002f96c9"
+shuffle_seed = 42
+
+[representation]
+artifact_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-66-qwen3-instruct-balanced-t1-contextual-2000-gpu01/adapter.pt"
+artifact_file_sha256 = "3429dc83880d48d623f3dcdbea48eb5219be6031b206e53c8286c4b1c65ce5c9"
+artifact_manifest_sha256 = "425d57108b60b2a2bc65144eaded0b1d25f763f3d347aa16396394dccae2b89c"
+artifact_namespace = "tgvf-representation"
+artifact_name = "qwen3-instruct-balanced-t1-contextual"
+artifact_version = "rp66-step2000"
+expected_run_id = "RP-66-QWEN3-INSTRUCT-REP-BALANCED-T1-CONTEXTUAL-2000-GPU01"
+expected_run_identity_sha256 = "97ccfd849e1d66cdd57be805c27524fa97ca60973e5be45d6d060acd5bc54e53"
+
+[representation.conditioning]
+provider = "contextual_hidden_state"
+hidden_layer = -1
+
+[protocol]
+prompt_sha256 = "04b575554c80a08b7db081ea87cd113e09396ab576479b01493acbcfa06a932d"
+cap_error_sha256 = "5ec4646774e22733f4fff8876159104f80b85e1622e635867feb9735d7cfb134"
+tool_profile = "tgvf_only"
+tool_schema_sha256 = "f33f61d48bc4341f88077e90afca941819769b6209eb54893a9ed6b44856aba5"
+enabled_tool_names = ["tgvf_focus_tool"]
+maximum_tool_calls = 1
+
+[sampling]
+trajectories_per_prompt = 8
+temperature = 1.0
+top_p = 1.0
+top_k = -1
+min_p = 0.0
+repetition_penalty = 1.0
+presence_penalty = 0.0
+frequency_penalty = 0.0
+max_response_length = 8192
+asynchronous_staleness_steps = 0
+do_sample = true
+backend = "vllm"
+backend_version = "0.12.0"
+logit_processors = []
+logprob_measurement = "after_sampling_transforms"
+stop_token_ids = [151645]
+stop_strings = ["</tool_call>"]
+include_stop_str_in_output = true
+ignore_eos = false
+rollout_master_seed = 42
+seed_derivation_name = "content-addressed-vllm-turn-rng-v1"
+seed_derivation_sha256 = "fe8d2da92471dcf97ff195f9c1e085fe422673e3b0a4b863ad28ca528ace867e"
+
+[reward]
+task_kind = "mixed"
+answer_verifier = "rule_first_qwen25_72b"
+answer_verifier_sha256 = "2d7b4da3add10fd6ca8f45aa146731634163a1b39bb4e7952a74b8e649248b97"
+judge_mode = "qwen25_72b_semantic_fallback"
+judge_reason = "independent TGVF-shaped reward experiment informed by the previously successful reward semantics and implemented on the current runtime"
+judge_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl09-tgvf-shaped/configs/policy/judges/openrouter_qwen25_72b_formal_pilot_judge_v4.json"
+judge_config_sha256 = "1ec38f640f943702ad812dc367fc66edf843a663a1c1048ebb39a0d25fac18a9"
+# Internal compatibility profile; this is not a Stage3 training run.
+profile = "stage3-shaped-v1"
+tool_utility_sidecar_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_rl/TGVF-80-SHAPED-UTILITY-SIDECAR-v2-8gpu/tool-utility.jsonl"
+tool_utility_sidecar_sha256 = "1344a279f2709e84d1819e783ff78af8e0fc09771a59d9c3f713d9303d1877d2"
+tool_utility_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_rl/TGVF-80-SHAPED-UTILITY-SIDECAR-v2-8gpu/manifest.json"
+tool_utility_manifest_sha256 = "edaecee046724ac51355b43544e02dbf5dff6d14b56a7c31b9a607333da1445b"
+visual_quality_judge_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl09-tgvf-shaped/configs/policy/judges/local_qwen3_vl_32b_tgvf_visual_quality_v1.json"
+visual_quality_judge_config_sha256 = "d05a0e91554eaef7f700732d78d392b9ebec04be1012104af3a6d27d9e3be331"
+
+[optimizer]
+name = "adamw"
+learning_rate = 0.000001
+beta1 = 0.9
+beta2 = 0.999
+epsilon = 0.00000001
+weight_decay = 0.01
+maximum_gradient_norm = 1.0
+
+[scheduler]
+name = "cosine"
+warmup_steps = 0
+total_steps = 80
+minimum_learning_rate_ratio = 0.1
+
+[precision]
+parameter_dtype = "bfloat16"
+reduce_dtype = "float32"
+optimizer_state_dtype = "float32"
+autocast_dtype = "bfloat16"
+gradient_scaler_enabled = false
+allow_tf32 = true
+
+[accumulation]
+global_prompt_batch_size = 16
+prompt_micro_batch_size_per_rank = 1
+rollout_prompt_micro_batch_size_per_engine = 1
+gradient_accumulation_steps = 4
+
+[distributed]
+physical_gpu_ids = [0, 1, 2, 3]
+logical_gpu_ids = [0, 1, 2, 3]
+world_size = 4
+actor_logical_gpu_ids = [0, 1, 2, 3]
+rollout_logical_gpu_ids = [0, 1, 2, 3]
+fsdp_strategy = "fsdp2"
+fsdp_reshard_after_forward = false
+rollout_backend = "vllm"
+vllm_tensor_parallel_size = 1
+placement = "colocated"
+weight_sync_mode = "nccl_lora_state_v1"
+weight_sync_interval_optimizer_steps = 1
+
+[capacity]
+max_prompt_length = 4096
+actor_ppo_max_token_len_per_gpu = 98304
+rollout_log_prob_max_token_len_per_gpu = 98304
+reference_log_prob_max_token_len_per_gpu = 98304
+vllm_gpu_memory_utilization = 0.45
+vllm_max_num_batched_tokens = 16384
+vllm_max_model_len = 16384
+vllm_max_num_seqs = 32
+vllm_enable_chunked_prefill = true
+vllm_enforce_eager = false
+
+[framework]
+agent_loop_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl09-tgvf-shaped/configs/policy/agent_loops/tgvf_native_policy_v1.yaml"
+agent_loop_config_sha256 = "388eba9b43687bc9bcde894697203cf2cdec265f07acc5606a7af0b3154c351e"
+runtime_invocation_factory_fqn = "tgvf_rl.framework.verl.policy_runtime.PolicyE2ERuntimeInvocationFactory"
+server_timeout_seconds = 2400.0
+
+[training]
+total_training_epochs = 1
+maximum_optimizer_steps = 80
+checkpoint_steps = [0, 1, 5, 10, 20, 40, 60, 80]
+logger = ["console", "wandb"]
+project_name = "tgvf-policy-rl"
+validation_before_training = false
+validation_frequency = -1
+resume_mode = "disable"
+resume_from_path = ""
+maximum_actor_checkpoints_to_keep = 8
+
+[output]
+root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-09-R2-qwen3-instruct-grpo-bs16-tgvf-shaped-t1mixed-v2-80step-gpu0123"
+checkpoint_directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-09-R2-qwen3-instruct-grpo-bs16-tgvf-shaped-t1mixed-v2-80step-gpu0123/checkpoints"
+metrics_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-09-R2-qwen3-instruct-grpo-bs16-tgvf-shaped-t1mixed-v2-80step-gpu0123/metrics.jsonl"
