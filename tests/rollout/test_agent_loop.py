@@ -1049,3 +1049,93 @@ def test_typed_pilot_sampling_rejects_backend_probability_mismatch() -> None:
                 sampling_contract,
             )
         )
+
+
+class _UnreachableNoToolDependency:
+    def execute(self, parsed_call, context):
+        raise AssertionError("NoTool attempted tool execution")
+
+    def append(
+        self,
+        prompt_token_ids,
+        sampled_turn,
+        observation,
+        *,
+        call_index,
+        parsed_call,
+    ):
+        raise AssertionError("NoTool attempted an environment append")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_stop", "expected_answer"),
+    (
+        ("reason</think>B", TrajectoryStop.DIRECT_ANSWER, "B"),
+        (
+            "reason</think><tool_call>"
+            '{"name":"tgvf_focus_tool","arguments":{"target":"label"}}'
+            "</tool_call>",
+            TrajectoryStop.INVALID_FORMAT,
+            None,
+        ),
+    ),
+)
+def test_direct_only_empty_tool_loop_never_parses_appends_or_executes(
+    text: str,
+    expected_stop: TrajectoryStop,
+    expected_answer: str | None,
+) -> None:
+    version = PolicyVersion("no-tool", 0, SHA)
+    sampled = _sample(text, _pilot_fixture_sampling(version))
+    unreachable = _UnreachableNoToolDependency()
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((sampled,)),
+        tool_runtime=unreachable,
+        appender=unreachable,
+        parser=StrictToolCallParser(
+            enabled_tool_names=(),
+            allow_empty_tool_names=True,
+        ),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=1,
+        enabled_tool_names=(),
+        direct_only=True,
+        allow_no_tools=True,
+    )
+
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("no-tool", "fixture", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+
+    assert trajectory.stop is expected_stop
+    assert trajectory.final_answer == expected_answer
+    assert trajectory.tool_calls == ()
+    assert trajectory.observations == ()
+    assert trajectory.tool_errors == ()
+
+
+def test_empty_agent_tool_surface_requires_direct_only_opt_in() -> None:
+    dependency = _UnreachableNoToolDependency()
+    parser = StrictToolCallParser(
+        enabled_tool_names=(),
+        allow_empty_tool_names=True,
+    )
+    with pytest.raises(ValueError, match="requires direct_only"):
+        FrameworkNeutralAgentLoop(
+            sampler=Sampler(()),
+            tool_runtime=dependency,
+            appender=dependency,
+            parser=parser,
+            behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+            max_tool_calls=1,
+            enabled_tool_names=(),
+            allow_no_tools=True,
+        )

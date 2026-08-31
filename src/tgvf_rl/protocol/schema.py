@@ -237,11 +237,15 @@ TGVF_CROP_TOOL_SCHEMA_CANONICAL_JSON = json.dumps(
 TGVF_CROP_TOOL_SCHEMA_SHA256 = sha256(
     TGVF_CROP_TOOL_SCHEMA_CANONICAL_JSON.encode("utf-8")
 ).hexdigest()
+# Bind the exact empty schema list for the NoTool control without relaxing the
+# native schema builders, which continue to reject accidentally empty inputs.
+NO_NATIVE_TOOL_SET_SHA256 = sha256(b"[]").hexdigest()
 
 
 class NativeToolCapabilityProfile(str, Enum):
     """One separately identified visual-tool capability surface."""
 
+    NO_TOOL = "no_tool"
     CROP_ONLY = "crop_only"
     TGVF_ONLY = "tgvf_only"
     CROP_TGVF = "crop_tgvf"
@@ -249,6 +253,7 @@ class NativeToolCapabilityProfile(str, Enum):
     @property
     def tool_names(self) -> tuple[str, ...]:
         return {
+            NativeToolCapabilityProfile.NO_TOOL: (),
             NativeToolCapabilityProfile.CROP_ONLY: (IMAGE_ZOOM_IN_TOOL_NAME,),
             NativeToolCapabilityProfile.TGVF_ONLY: (TGVF_FOCUS_TOOL_NAME,),
             NativeToolCapabilityProfile.CROP_TGVF: (TGVF_CROP_TOOL_NAME,),
@@ -256,6 +261,8 @@ class NativeToolCapabilityProfile(str, Enum):
 
     @property
     def tool_set_sha256(self) -> str:
+        if self is NativeToolCapabilityProfile.NO_TOOL:
+            return NO_NATIVE_TOOL_SET_SHA256
         return native_tool_set_sha256(self.tool_names)
 
 

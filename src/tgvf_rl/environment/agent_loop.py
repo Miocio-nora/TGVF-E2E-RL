@@ -218,6 +218,8 @@ class FrameworkNeutralAgentLoop:
         assistant_dialect: NativeAssistantDialect = (
             NativeAssistantDialect.QWEN3_VL_THINKING
         ),
+        direct_only: bool = False,
+        allow_no_tools: bool = False,
     ) -> None:
         self.sampler = sampler
         self.tool_runtime = tool_runtime
@@ -226,10 +228,19 @@ class FrameworkNeutralAgentLoop:
         self.behavior_recorder = behavior_recorder
         if not isinstance(assistant_dialect, NativeAssistantDialect):
             raise TypeError("assistant_dialect must be NativeAssistantDialect")
+        if type(direct_only) is not bool:
+            raise TypeError("direct_only must be a bool")
+        if type(allow_no_tools) is not bool:
+            raise TypeError("allow_no_tools must be a bool")
+        if allow_no_tools and not direct_only:
+            raise ValueError("an empty tool surface requires direct_only mode")
         self.assistant_dialect = assistant_dialect
+        self.direct_only = direct_only
         names = tuple(enabled_tool_names)
-        if not names or len(names) != len(set(names)):
-            raise ValueError("enabled tool names must be non-empty and unique")
+        if (not names and not allow_no_tools) or len(names) != len(set(names)):
+            raise ValueError(
+                "enabled tool names must be unique and non-empty unless tools are disabled"
+            )
         unknown = set(names) - set(POLICY_RL_TOOL_NAMES)
         if unknown:
             raise ValueError(f"unknown enabled tools: {sorted(unknown)!r}")
@@ -316,6 +327,11 @@ class FrameworkNeutralAgentLoop:
                     stop_reason=sampled.stop_reason,
                 )
             )
+            if self.direct_only and has_tool_marker:
+                # Preserve the exact sampled behavior row for replay, but a
+                # direct-only arm must never parse, append, or execute a tool.
+                stop = TrajectoryStop.INVALID_FORMAT
+                break
             if not has_tool_marker:
                 final_answer = _extract_final_answer(
                     sampled.text,

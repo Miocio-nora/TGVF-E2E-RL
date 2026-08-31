@@ -120,7 +120,14 @@ def test_direct_answer_prompt_identity_is_fixed_per_assistant_dialect() -> None:
         direct_answer_prompt_identity(assistant_dialect="thinking")  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("profile", tuple(NativeToolCapabilityProfile))
+@pytest.mark.parametrize(
+    "profile",
+    (
+        NativeToolCapabilityProfile.CROP_ONLY,
+        NativeToolCapabilityProfile.TGVF_ONLY,
+        NativeToolCapabilityProfile.CROP_TGVF,
+    ),
+)
 def test_all_profiles_use_exact_system_and_shared_native_user_message(
     profile: NativeToolCapabilityProfile,
 ) -> None:

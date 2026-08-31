@@ -149,6 +149,25 @@ QWEN3_POLICY_E2E_LIVE_RUNTIME_SCHEMA = "tgvf-qwen3-policy-e2e-live-runtime-v1"
 _BRANCH_LAYERS = (8, 16, 24)
 
 
+def _required_server_methods_for_profile(
+    profile: NativeToolCapabilityProfile,
+) -> tuple[str, ...]:
+    """Return the minimal RPC surface for one currently supported profile."""
+
+    if not isinstance(profile, NativeToolCapabilityProfile):
+        raise TypeError("tool profile must be NativeToolCapabilityProfile")
+    methods = ["materialize_source", "generate"]
+    if profile is NativeToolCapabilityProfile.NO_TOOL:
+        pass
+    elif profile is NativeToolCapabilityProfile.TGVF_ONLY:
+        methods.append("materialize_focus")
+    elif profile is NativeToolCapabilityProfile.CROP_ONLY:
+        methods.append("materialize_crop")
+    else:
+        raise ValueError("atomic crop+TGVF is not wired into this live runtime")
+    return tuple(methods)
+
+
 def _success_observation_contract(
     *,
     protocol_id: NativeSuccessObservationProtocolId,
@@ -249,13 +268,9 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
             assistant_dialect=assistant_dialect,
         )
         server_client = context.server_manager
-        required_methods = ["materialize_source", "generate"]
-        if config.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
-            required_methods.append("materialize_focus")
-        elif config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_ONLY:
-            required_methods.append("materialize_crop")
-        else:
-            raise ValueError("atomic crop+TGVF is not wired into this live runtime")
+        required_methods = _required_server_methods_for_profile(
+            config.protocol.tool_profile
+        )
         for method in required_methods:
             if not callable(getattr(server_client, method, None)):
                 raise TypeError(
@@ -504,10 +519,16 @@ class _Qwen3PolicyTrajectoryComponents:
             observation_contract=observation_contract,
             visual_token_count_resolver=_VisualTokenCountResolver(self.store),
         )
-        parser = StrictToolCallParser(
-            enabled_tool_names=self.config.protocol.enabled_tool_names
+        no_tool = (
+            self.config.protocol.tool_profile is NativeToolCapabilityProfile.NO_TOOL
         )
-        if self.config.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
+        parser = StrictToolCallParser(
+            enabled_tool_names=self.config.protocol.enabled_tool_names,
+            allow_empty_tool_names=no_tool,
+        )
+        if no_tool:
+            tool_runtime = _DisabledNoToolRuntime()
+        elif self.config.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
             tool_runtime = _RemoteTGVFFocusToolRuntime(
                 event_loop=asyncio.get_running_loop(),
                 server_client=self.server_client,
@@ -576,6 +597,8 @@ class _Qwen3PolicyTrajectoryComponents:
                 enabled_tool_names=self.config.protocol.enabled_tool_names,
                 cap_error_behavior=CapErrorBehavior.ONE_FINAL_ANSWER_TURN,
                 assistant_dialect=assistant_dialect,
+                direct_only=no_tool,
+                allow_no_tools=no_tool,
             )
 
         reward_context = _BoundRewardContextProvider(
@@ -647,6 +670,14 @@ class _IdentityOnlyLoRASnapshotConsumer:
         if digest != snapshot.policy_version.weights_sha256:
             raise ReplayMismatchError("LoRA snapshot tensor identity differs")
         return snapshot.policy_version
+
+
+class _DisabledNoToolRuntime:
+    """Unreachable fail-closed runtime for a direct-only NoTool trajectory."""
+
+    def execute(self, parsed_call: object, context: object) -> ObservationHandle:
+        del parsed_call, context
+        raise RuntimeError("NoTool RL cannot execute a visual tool")
 
 
 class _RemoteTGVFFocusToolRuntime:

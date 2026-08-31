@@ -14,6 +14,7 @@ from tgvf_rl.protocol import (
     IMAGE_ZOOM_IN_TOOL_SCHEMA,
     IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256,
     NativeToolCapabilityProfile,
+    NO_NATIVE_TOOL_SET_SHA256,
     ParseErrorCode,
     REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA,
     REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA_SHA256,
@@ -152,6 +153,11 @@ def test_atomic_crop_tgvf_schema_hash_and_capability_profiles_are_exact() -> Non
     )
     first["function"]["name"] = "mutated"
     assert second["function"]["name"] == TGVF_CROP_TOOL_NAME
+    assert NativeToolCapabilityProfile.NO_TOOL.tool_names == ()
+    assert NativeToolCapabilityProfile.NO_TOOL.tool_set_sha256 == (
+        NO_NATIVE_TOOL_SET_SHA256
+    )
+    assert NO_NATIVE_TOOL_SET_SHA256 == hashlib.sha256(b"[]").hexdigest()
     assert NativeToolCapabilityProfile.CROP_ONLY.tool_names == (
         IMAGE_ZOOM_IN_TOOL_NAME,
     )
@@ -499,3 +505,21 @@ def test_sampled_turn_requires_exact_byte_coverage_without_tokenizer_calls() -> 
             token_ids=(1,),
             token_byte_spans=(TokenByteSpan(0, 1, 0, 2),),
         )
+
+
+def test_empty_tool_surface_requires_explicit_disabled_binding() -> None:
+    with pytest.raises(ValueError, match="non-empty unless explicitly disabled"):
+        StrictToolCallParser(enabled_tool_names=())
+
+    parser = StrictToolCallParser(
+        enabled_tool_names=(),
+        allow_empty_tool_names=True,
+    )
+    with pytest.raises(ToolCallParseError, match=r"expected one of \(\)") as error:
+        parser.parse(
+            _character_token_turn(
+                '<tool_call>{"name":"tgvf_focus_tool","arguments":'
+                '{"target":"needle"}}</tool_call>'
+            )
+        )
+    assert error.value.code is ParseErrorCode.INVALID_TOOL_NAME

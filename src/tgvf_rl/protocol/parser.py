@@ -232,6 +232,7 @@ class StrictToolCallParser:
 
     allowed_terminal_suffixes: tuple[str, ...] = ()
     enabled_tool_names: tuple[str, ...] = POLICY_RL_TOOL_NAMES
+    allow_empty_tool_names: bool = False
 
     def __post_init__(self) -> None:
         suffixes = tuple(self.allowed_terminal_suffixes)
@@ -242,9 +243,15 @@ class StrictToolCallParser:
                 "allowed terminal suffixes must be unique non-empty strings"
             )
         object.__setattr__(self, "allowed_terminal_suffixes", suffixes)
+        if type(self.allow_empty_tool_names) is not bool:
+            raise TypeError("allow_empty_tool_names must be a bool")
         names = tuple(self.enabled_tool_names)
-        if not names or len(set(names)) != len(names):
-            raise ValueError("enabled tool names must be non-empty and unique")
+        if (not names and not self.allow_empty_tool_names) or len(set(names)) != len(
+            names
+        ):
+            raise ValueError(
+                "enabled tool names must be unique and non-empty unless explicitly disabled"
+            )
         unknown = set(names) - set(POLICY_RL_TOOL_NAMES)
         if unknown:
             raise ValueError(f"unknown enabled tool names: {sorted(unknown)!r}")

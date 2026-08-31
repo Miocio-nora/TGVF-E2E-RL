@@ -27,12 +27,14 @@ from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.framework.verl.policy_live_runtime import (
     Qwen3PolicyE2ELiveRuntimeBuilder,
+    _DisabledNoToolRuntime,
     _RemoteTGVFFocusToolRuntime,
     _BoundTGVFVisualQualityRuntimeJudge,
     _build_reward_pipeline,
     _default_metrics_factory,
     _required_success_observation_protocol_id,
     _required_action_boundary_protocol_id,
+    _required_server_methods_for_profile,
     _success_observation_contract,
 )
 from tgvf_rl.judges import (
@@ -77,6 +79,21 @@ def test_live_builder_has_no_agent_loop_model_loader_surface() -> None:
     assert "model_loader" not in signature.parameters
     assert "success_observation_protocol_id" not in signature.parameters
     assert "action_boundary_protocol_id" not in signature.parameters
+
+
+def test_no_tool_live_profile_requires_no_tool_rpc_and_runtime_fails_closed() -> None:
+    assert _required_server_methods_for_profile(
+        NativeToolCapabilityProfile.NO_TOOL
+    ) == ("materialize_source", "generate")
+    assert _required_server_methods_for_profile(
+        NativeToolCapabilityProfile.CROP_ONLY
+    ) == ("materialize_source", "generate", "materialize_crop")
+    assert _required_server_methods_for_profile(
+        NativeToolCapabilityProfile.TGVF_ONLY
+    ) == ("materialize_source", "generate", "materialize_focus")
+
+    with pytest.raises(RuntimeError, match="cannot execute"):
+        _DisabledNoToolRuntime().execute(object(), object())
 
 
 def test_live_observation_contract_never_infers_crop_renderer() -> None:

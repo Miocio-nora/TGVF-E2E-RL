@@ -27,6 +27,9 @@ POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA = (
 POLICY_TGVF_STAGE3_EXPERIMENT_CONFIG_SCHEMA = (
     "policy-tgvf-stage3-shaped-experiment-v1-20260806"
 )
+POLICY_NO_TOOL_MATCHED_EXPERIMENT_CONFIG_SCHEMA = (
+    "policy-no-tool-deepeyes-matched-experiment-v1"
+)
 POLICY_PILOT_V1_MODEL_PATH = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
 POLICY_PILOT_V1_MODEL_FAMILY = "qwen3_vl"
 POLICY_PILOT_V1_MODEL_NAME = "Qwen3-VL-8B-Instruct"
@@ -561,6 +564,10 @@ class PolicyVisualToolExperimentConfig(PolicyPilotV1Config):
             raise TypeError("tool_profile must be NativeToolCapabilityProfile")
         if self.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
             raise ValueError("TGVF-only runs must use PolicyPilotV1Config")
+        if self.tool_profile is NativeToolCapabilityProfile.NO_TOOL:
+            raise ValueError(
+                "NoTool runs must use PolicyNoToolMatchedExperimentConfig"
+            )
         expected_image_max_pixels = (
             1_003_520 if self.sampling.trajectories_per_prompt == 16 else 512 * 512
         )
@@ -639,8 +646,53 @@ class PolicyTGVFStage3ExperimentConfig(PolicyPilotV1Config):
             raise TypeError("grpo must be PilotGRPOConfig")
 
 
+@dataclass(frozen=True, slots=True)
+class PolicyNoToolMatchedExperimentConfig(PolicyPilotV1Config):
+    """Full-Qwen direct-only control under the matched optimizer envelope."""
+
+    schema_version: str = POLICY_NO_TOOL_MATCHED_EXPERIMENT_CONFIG_SCHEMA
+    tool_profile: NativeToolCapabilityProfile = NativeToolCapabilityProfile.NO_TOOL
+    enabled_tool_names: tuple[str, ...] = ()
+    # Shared transports require a positive cap; direct-only makes it unreachable.
+    max_tgvf_call_attempts: int = 1
+    image_max_pixels: int = 1_003_520
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "enabled_tool_names", tuple(self.enabled_tool_names))
+        expected = {
+            "schema_version": (
+                self.schema_version,
+                POLICY_NO_TOOL_MATCHED_EXPERIMENT_CONFIG_SCHEMA,
+            ),
+            "model_family": (self.model_family, POLICY_PILOT_V1_MODEL_FAMILY),
+            "native_deepstack_enabled": (self.native_deepstack_enabled, True),
+            "tool_profile": (
+                self.tool_profile,
+                NativeToolCapabilityProfile.NO_TOOL,
+            ),
+            "enabled_tool_names": (self.enabled_tool_names, ()),
+            "max_tgvf_call_attempts": (self.max_tgvf_call_attempts, 1),
+            "image_max_pixels": (self.image_max_pixels, 1_003_520),
+        }
+        for name, (actual, required) in expected.items():
+            if actual != required:
+                raise ValueError(
+                    "matched NoTool experiment requires "
+                    f"{name}={required!r}, got {actual!r}"
+                )
+        if self.model_path not in POLICY_PILOT_V1_SUPPORTED_MODEL_PATHS:
+            raise ValueError("matched NoTool model_path is not supported")
+        if not isinstance(self.sampling, PilotSamplingConfig):
+            raise TypeError("sampling must be PilotSamplingConfig")
+        if not isinstance(self.lora, DecoderLoRAConfig):
+            raise TypeError("lora must be DecoderLoRAConfig")
+        if not isinstance(self.grpo, PilotGRPOConfig):
+            raise TypeError("grpo must be PilotGRPOConfig")
+
+
 __all__ = [
     "POLICY_PILOT_ACCEPTED_SAMPLING_SCALES",
+    "POLICY_NO_TOOL_MATCHED_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_PILOT_V1_CONFIG_SCHEMA",
     "POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_TGVF_STAGE3_EXPERIMENT_CONFIG_SCHEMA",
@@ -666,6 +718,7 @@ __all__ = [
     "DecoderLoRAConfig",
     "PilotGRPOConfig",
     "PilotSamplingConfig",
+    "PolicyNoToolMatchedExperimentConfig",
     "PolicyPilotV1Config",
     "PolicyTGVFStage3ExperimentConfig",
     "PolicyVisualToolExperimentConfig",

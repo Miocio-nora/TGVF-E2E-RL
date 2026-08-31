@@ -137,7 +137,11 @@ def test_prompt_group_and_reward_vertical_slice_is_prompt_free(tmp_path: Path) -
     assert tuple(schema["function"]["name"] for schema in prompt.tool_schemas) == (
         TGVF_FOCUS_TOOL_NAME,
     )
-    for profile in NativeToolCapabilityProfile:
+    for profile in (
+        NativeToolCapabilityProfile.CROP_ONLY,
+        NativeToolCapabilityProfile.TGVF_ONLY,
+        NativeToolCapabilityProfile.CROP_TGVF,
+    ):
         selected = build_qwen_policy_user_prompt(sample, tool_profile=profile)
         assert selected.messages == build_visual_tool_prompt_messages(
             sample.question,

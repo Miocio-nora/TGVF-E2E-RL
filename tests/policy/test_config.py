@@ -11,6 +11,7 @@ from tgvf_rl.policy import (
     DecoderLoRAConfig,
     PilotGRPOConfig,
     PilotSamplingConfig,
+    PolicyNoToolMatchedExperimentConfig,
     PolicyPilotV1Config,
     PolicyTGVFStage3ExperimentConfig,
     PolicyVisualToolExperimentConfig,
@@ -178,6 +179,12 @@ def test_visual_tool_experiment_accepts_crop_without_relaxing_formal_pilot() -> 
     assert crop.image_max_pixels == 512 * 512
     with pytest.raises(ValueError, match="TGVF-only"):
         PolicyVisualToolExperimentConfig(sampling=_bound_sampling())
+    with pytest.raises(ValueError, match="NoTool runs"):
+        PolicyVisualToolExperimentConfig(
+            tool_profile=NativeToolCapabilityProfile.NO_TOOL,
+            enabled_tool_names=(),
+            sampling=_bound_sampling(),
+        )
 
     deepeyes_sampling = PilotSamplingConfig(
         trajectories_per_prompt=16,
@@ -196,6 +203,22 @@ def test_visual_tool_experiment_accepts_crop_without_relaxing_formal_pilot() -> 
         sampling=deepeyes_sampling,
     )
     assert deepeyes_crop.image_max_pixels == 1_003_520
+
+
+def test_matched_no_tool_experiment_has_an_explicit_empty_capability_surface() -> None:
+    no_tool = PolicyNoToolMatchedExperimentConfig(sampling=_bound_sampling())
+
+    assert no_tool.tool_profile is NativeToolCapabilityProfile.NO_TOOL
+    assert no_tool.enabled_tool_names == ()
+    assert no_tool.max_tgvf_call_attempts == 1
+    assert no_tool.image_max_pixels == 1_003_520
+    assert len(no_tool.identity_sha256) == 64
+
+    with pytest.raises(ValueError, match="enabled_tool_names"):
+        PolicyNoToolMatchedExperimentConfig(
+            enabled_tool_names=("tgvf_focus_tool",),
+            sampling=_bound_sampling(),
+        )
 
 
 def test_stage3_tgvf_experiment_owns_an_exact_one_call_cap() -> None:

@@ -26,6 +26,7 @@ from .checkpoint import (
     validate_pilot_project_checkpoint_restore,
 )
 from .config import (
+    POLICY_NO_TOOL_MATCHED_EXPERIMENT_CONFIG_SCHEMA,
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
     POLICY_PILOT_V1_CONFIG_SCHEMA,
     POLICY_PILOT_V1_MODEL_FAMILY,
@@ -40,6 +41,7 @@ from .config import (
     DecoderLoRAConfig,
     PilotGRPOConfig,
     PilotSamplingConfig,
+    PolicyNoToolMatchedExperimentConfig,
     PolicyPilotV1Config,
     PolicyTGVFStage3ExperimentConfig,
     PolicyVisualToolExperimentConfig,
@@ -142,6 +144,7 @@ __all__ = [
     "POLICY_EXECUTION_GROUP_UID_PREFIX",
     "POLICY_EXECUTION_GROUP_UID_SCHEMA",
     "POLICY_NATIVE_PROMPT_INPUT_SCHEMA",
+    "POLICY_NO_TOOL_MATCHED_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256",
     "POLICY_PILOT_V1_CONFIG_SCHEMA",
     "POLICY_PILOT_V1_GROUP_BATCH_SCHEMA",
@@ -191,6 +194,7 @@ __all__ = [
     "PilotRunIdentityHashes",
     "PilotSamplingConfig",
     "PilotTrajectoryMetricsObservation",
+    "PolicyNoToolMatchedExperimentConfig",
     "PolicyBatchLifecycle",
     "PolicyBatchLifecycleManager",
     "PolicyBatchMilestone",
