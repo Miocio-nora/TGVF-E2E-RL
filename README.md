@@ -12,7 +12,8 @@ end-to-end reinforcement learning. Qwen3-VL-8B-Thinking is the primary target;
 > `strict-run-policy` compatibility command. Historical results still span
 > different runtime, renderer, and image-cap contracts, so a completed run is
 > not automatically a canonical comparison. GPU training and evaluation smoke
-> results are recorded separately from source promotion.
+> were explicitly deferred on 2026-09-01 and are not implied by source
+> promotion.
 
 The selective migration from the experiment side lineage is tracked in the
 [canonical runtime migration plan](docs/CANONICAL_RUNTIME_MIGRATION_PLAN_20260830.md).

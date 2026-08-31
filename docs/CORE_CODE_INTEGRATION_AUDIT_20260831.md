@@ -4,8 +4,11 @@
 
 - 分支：`stabilize/protocol-contract-v1-20260830`
 - 实现代码提交：`d1e8bbe658217371bbe571e3217c00ca94950043`
+- 稀疏监督 native-pipeline 收口：`b8917f5`
 - 五臂共享配置指纹：`f3bf6a38ba36efd66537c211c05853d3c64001e923bd9247c0ac7018ebb49392`
-- 当前状态：CPU 合约与组合闭环已完成；普通 `run-policy` 已成为无需仓库令牌的统一配置入口。尚未启动新的训练，GPU/Ray canary 作为实验运行验收单独推进，不阻塞源码晋升 `main`。
+- 当前状态：主代码与默认配置入口已完成 CPU 收口；最终整合候选为
+  `2381 passed, 4 skipped` 且 Ruff 通过。2026-09-01 用户明确暂缓 GPU
+  训练与评测，因此没有 GPU/Ray 通过结论。
 
 ## 结论
 
@@ -120,7 +123,7 @@ veRL level-2 rollout sleep 会丢弃已同步的完整模型权重。checkpoint 
 | 范围 | 结果 |
 |---|---:|
 | 五臂 config/matrix、action/observation、exact replay、behavior/checkpoint focused core | 137 passed |
-| 默认 Python 3.12 CPU suite | 2336 passed, 4 skipped |
+| 默认 Python 3.12 CPU suite | 2381 passed, 4 skipped |
 | Ruff（`src tools spikes tests`） | passed |
 
 在收缩默认测试面之前，全量历史 collection 实测为 2963 passed、4 skipped、57 failed。其中 56 个 failure 属于已经暂停的 token/freeze/runtime-locator/worker-bootstrap/control-plane 系统，另 1 个是专用 CUDA FlexAttention parity 在本机 Triton 编译环境下失败；这与“仅有 3 个历史 failure”的旧记录不一致，旧数字不再作为依据。
@@ -129,10 +132,14 @@ veRL level-2 rollout sleep 会丢弃已同步的完整模型权重。checkpoint 
 
 ## 尚未完成与下一步
 
-CPU 闭环足以完成源码晋升，但不等于新的训练结果可以直接宣称 golden。实验运行验收按优先级为：
+CPU 闭环足以完成源码晋升，但不等于新的训练结果可以直接宣称 golden。当前非阻塞后续为：
 
-1. **GPU/Ray step-0 canary**：验证真实初始化顺序确实为 `init_workers -> initial update_weights -> AgentLoop factory`，确保第一个 rollout 前 behavior pointer 已存在；同时验证 FSDP、vLLM、native DeepStack 开关和 matched runtime 的真实组合。
-2. **step-1 checkpoint/resume canary**：在 GPU 上覆盖 rollout、level-2 sleep、checkpoint、同 step resync、teardown/resume 和下一步 rollout，确认 CPU mock 所证明的生命周期与 pinned veRL 一致。
+1. **GPU/Ray training canary（已准备、暂缓执行）**：Crop 与 Atomic 的
+   @512 S1-to-S2 配置、checkpoint/resume materializer 和命令记录在
+   `docs/PRL28_GPU_TRAINING_CANARY_20260901.md`；其状态仍是未运行。
+2. **full-Qwen eval canary（尚未实现）**：需要非破坏的 Qwen-only merger
+   与来源 receipt，机械证明 merged model 来自目标 checkpoint；Atomic 还需
+   严格剥离 `tgvf_adapter.*`。未满足这些条件前不保留看似可运行的入口。
 3. **完整 Qwen content proof（如论文需要）**：若要声称 tensor-level exact identity，需要在上游 transport 增加可验证的 tensor digest/manifest；当前 receipt 只能声称 accepted sync，不应过度解释。
 4. **Original matched eval**：为未 RL 的 Original Qwen 建立独立 eval provenance，在相同 resolution、七个 subset、scorer、prompt edition 和统计代码下与五臂比较；它仍不进入训练矩阵。
-前两项 canary 是新 @512 S32 训练矩阵的运行验收，不是源码进入 `main` 的条件。通过后再把新的训练结果升级为可用于论文的 golden evidence。以后切换 1M、S16/S80、不同 n、reward 或 DeepStack/Adapter ablation 时，复用同一个 schema/launcher/runtime，通过 config 和矩阵指纹建立新实验，不再复制 PR 项目或新增专用分支入口。
+GPU canary 是新 @512 S32 训练矩阵的运行验收，不是源码进入 `main` 的条件。通过后再把新的训练结果升级为可用于论文的 golden evidence。以后切换 1M、S16/S80、不同 n、reward 或 DeepStack/Adapter ablation 时，复用同一个 schema/launcher/runtime，通过 config 和矩阵指纹建立新实验，不再复制 PR 项目或新增专用分支入口。

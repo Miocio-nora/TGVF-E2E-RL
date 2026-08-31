@@ -1,6 +1,6 @@
 # TGVF End-to-End RL: Project Task
 
-Status: **core runtime consolidated; config-driven GPU smoke pending**
+Status: **core runtime consolidated; GPU smoke explicitly deferred**
 Recorded: **2026-07-18 JST**
 Updated: **2026-09-01 JST**
 
