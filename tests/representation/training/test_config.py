@@ -364,10 +364,7 @@ def test_world4_ga2_config_preserves_eight_global_matrices(
     assert config.fsdp2.mesh_shape == (4,)
     assert config.training.gradient_accumulation_steps == 2
     assert config.accumulation_identity.data_parallel_world_size == 4
-    assert (
-        config.training.gradient_accumulation_steps * config.fsdp2.world_size
-        == 8
-    )
+    assert config.training.gradient_accumulation_steps * config.fsdp2.world_size == 8
 
 
 def test_representation_topology_rejects_unsupported_world3(
@@ -376,12 +373,8 @@ def test_representation_topology_rejects_unsupported_world3(
     path = _write_config(tmp_path)
     text = path.read_text(encoding="utf-8")
     text = text.replace("world_size = 2", "world_size = 3", 1)
-    text = text.replace(
-        "physical_gpu_ids = [2, 3]", "physical_gpu_ids = [0, 1, 2]", 1
-    )
-    text = text.replace(
-        "logical_gpu_ids = [0, 1]", "logical_gpu_ids = [0, 1, 2]", 1
-    )
+    text = text.replace("physical_gpu_ids = [2, 3]", "physical_gpu_ids = [0, 1, 2]", 1)
+    text = text.replace("logical_gpu_ids = [0, 1]", "logical_gpu_ids = [0, 1, 2]", 1)
     text = text.replace("mesh_shape = [2]", "mesh_shape = [3]", 1)
     path.write_text(text, encoding="utf-8")
 
@@ -665,9 +658,7 @@ def test_v5_content_binds_vision_routing_adapter_variant(tmp_path: Path) -> None
 
 
 def test_v5_parses_named_no_matrix_ce_ablation(tmp_path: Path) -> None:
-    path = _upgrade_config_to_v5(
-        _write_config(tmp_path), variant="full_d_deepstack"
-    )
+    path = _upgrade_config_to_v5(_write_config(tmp_path), variant="full_d_deepstack")
     text = path.read_text(encoding="utf-8")
     text = text.replace(
         'kind = "matrix_ce_l_gen_and_norm"',
@@ -979,3 +970,33 @@ def test_validation_cli_emits_identity_without_starting_training(
     assert payload["conditioning_provider"] == "contextual_hidden_state"
     assert payload["physical_gpu_ids"] == [2, 3]
     assert payload["gpu_work_launched"] is False
+
+
+def test_validation_cli_allows_an_existing_post_training_report(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple[Path, bool]] = []
+
+    class _Config:
+        @staticmethod
+        def validation_payload() -> dict[str, object]:
+            return {"gpu_work_launched": False}
+
+    def _load(
+        path: Path,
+        *,
+        allow_existing_post_training_report: bool = False,
+    ) -> _Config:
+        calls.append((path, allow_existing_post_training_report))
+        return _Config()
+
+    monkeypatch.setattr(
+        "tgvf_rl.cli.load_representation_training_config",
+        _load,
+    )
+
+    path = Path("/completed/representation.toml")
+    assert main(["validate-representation-config", str(path)]) == 0
+    assert calls == [(path, True)]
+    assert json.loads(capsys.readouterr().out) == {"gpu_work_launched": False}

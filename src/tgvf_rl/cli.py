@@ -742,7 +742,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "validate-smoke-config":
             result = dict(validate_smoke_config(args.path, stack_selector=args.stack))
         elif args.command == "validate-representation-config":
-            result = load_representation_training_config(args.path).validation_payload()
+            # Validation is read-only and must remain useful after a completed
+            # run has already published its internal-evaluation report.  The
+            # launch and worker paths keep the default fail-if-present check so
+            # a fresh run cannot silently overwrite an existing report.
+            result = load_representation_training_config(
+                args.path,
+                allow_existing_post_training_report=True,
+            ).validation_payload()
         elif args.command == "launch-representation":
             assert_canonical_runtime_launch_enabled()
             config_binding = bind_canonical_config_path(
