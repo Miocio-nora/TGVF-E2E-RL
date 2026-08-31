@@ -239,6 +239,7 @@ def _group_with_loss_override() -> SameImageReadoutGroup:
                 source_positions=row.source_positions,
                 d_positions=row.d_positions,
                 loss_supervision=RepresentationReadoutLossSupervision(
+                    policy_identity="answer-bearing-span-test-policy-v1",
                     identity="answer-bearing-span-test-v1",
                     labels=labels,
                     supervised_token_positions=supervised_positions,
@@ -328,6 +329,26 @@ def test_readout_loss_supervision_fails_closed_on_component_or_row_drift() -> No
         changed = list(override.labels)
         changed[override.answer_token_positions[-1]] = 0
         replace(row, loss_supervision=replace(override, labels=tuple(changed)))
+
+
+def test_same_image_group_rejects_mixed_loss_supervision_policies() -> None:
+    group = _group_with_loss_override()
+    second = group.rows[1]
+    assert second.loss_supervision is not None
+    with pytest.raises(ValueError, match="mix loss-supervision policy identities"):
+        replace(
+            group,
+            rows=(
+                group.rows[0],
+                replace(
+                    second,
+                    loss_supervision=replace(
+                        second.loss_supervision,
+                        policy_identity="different-readout-policy-v1",
+                    ),
+                ),
+            ),
+        )
 
 
 def _mixed_length_group(*, group_id: str) -> SameImageReadoutGroup:

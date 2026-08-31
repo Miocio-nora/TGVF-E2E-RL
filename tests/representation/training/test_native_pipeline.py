@@ -27,6 +27,7 @@ from tgvf_rl.representation.training.native_pipeline import (
     REPRESENTATION_PROMPT_SCHEMA_VERSION,
     Qwen3NativeRepresentationGroupBuilder,
     RepresentationPromptConfig,
+    RepresentationReadoutLossSupervisionBinding,
     _bind_all_ones_attention_mask,
     _expand_native_visual_placeholders,
     _processor_batch,
@@ -36,6 +37,11 @@ from tgvf_rl.representation.training.native_pipeline import (
     _validate_single_input,
     build_native_representation_messages,
     render_native_action_target,
+)
+from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
+from tgvf_rl.representation.training.readout import (
+    HISTORICAL_READOUT_LOSS_SUPERVISION_POLICY_IDENTITY,
+    RepresentationReadoutLossSupervision,
 )
 from tgvf_rl.representation.training.runtime import (
     QWEN3_REPRESENTATION_BRANCH_LAYERS,
@@ -54,6 +60,8 @@ from tgvf_rl.representation.training.streaming import (
     score_streaming_same_image_group,
 )
 from tgvf_rl.representation.training.transcript import (
+    CanonicalEvidenceSupervision,
+    ModelEvidenceSupervision,
     NATIVE_REPRESENTATION_PRE_REASONING,
     render_native_evidence_labels,
 )
@@ -515,6 +523,70 @@ def _prompt() -> RepresentationPromptConfig:
     )
 
 
+class _SparseAnswerBearingReadoutFactory:
+    identity = "test-explicit-answer-bearing-readout-policy-v1"
+
+    def __init__(self) -> None:
+        self.sample_ids: list[str] = []
+
+    def __call__(
+        self,
+        sample: RepresentationTrainingSample,
+        canonical: CanonicalEvidenceSupervision,
+        model: ModelEvidenceSupervision,
+    ) -> RepresentationReadoutLossSupervision:
+        self.sample_ids.append(sample.sample_id)
+        value_start = canonical.evidence_char_start + sample.evidence_description.index(
+            sample.short_answer
+        )
+        value_end = value_start + len(sample.short_answer)
+        answer_start = canonical.transcript.text.index(
+            sample.short_answer,
+            canonical.evidence_char_end,
+        )
+        answer_end = answer_start + len(sample.short_answer)
+        value_canonical_positions = _minimal_overlapping_token_positions(
+            canonical.transcript.text,
+            canonical.token_offsets,
+            span_start=value_start,
+            span_end=value_end,
+            name="test evidence value",
+        )
+        answer_canonical_positions = _minimal_overlapping_token_positions(
+            canonical.transcript.text,
+            canonical.token_offsets,
+            span_start=answer_start,
+            span_end=answer_end,
+            name="test final answer",
+        )
+        value_positions = tuple(
+            position
+            for canonical_position in value_canonical_positions
+            for position in model.canonical_to_model_positions[canonical_position]
+        )
+        answer_positions = tuple(
+            position
+            for canonical_position in answer_canonical_positions
+            for position in model.canonical_to_model_positions[canonical_position]
+        )
+        supervised_positions = tuple(sorted((*value_positions, *answer_positions)))
+        supervised = set(supervised_positions)
+        labels = tuple(
+            token_id if position in supervised else EVIDENCE_IGNORE_INDEX
+            for position, token_id in enumerate(model.model_token_ids)
+        )
+        return RepresentationReadoutLossSupervision(
+            policy_identity=self.identity,
+            identity=f"{self.identity}:{sample.sample_id}",
+            labels=labels,
+            supervised_token_positions=supervised_positions,
+            evidence_value_token_positions=value_positions,
+            answer_token_positions=answer_positions,
+            source_image_block_query_start=model.evidence_token_positions[0] - 1,
+            source_image_block_query_end=answer_positions[-1],
+        )
+
+
 def _runtime(provider: TargetConditioningProviderKind):
     tokenizer = _Tokenizer()
     processor = _Processor(tokenizer)
@@ -818,6 +890,11 @@ def test_real_group_builder_contract_supports_both_providers(
         for candidate in group.candidates
     )
     assert group.collective_candidate_count == 3
+    assert (
+        group.loss_supervision_policy_identity
+        == HISTORICAL_READOUT_LOSS_SUPERVISION_POLICY_IDENTITY
+    )
+    assert all(row.loss_supervision is None for row in group.rows)
     assert len(group.collective_padding) == 1
     assert all(
         tensor.requires_grad
@@ -829,6 +906,97 @@ def test_real_group_builder_contract_supports_both_providers(
 
     scores = score_streaming_same_image_group(family, runtime.model, group)
     assert scores.score_matrix.shape == (2, 2)
+
+
+def test_explicit_sparse_readout_binding_materializes_real_native_rows(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"immutable-image-fixture")
+    runtime = _runtime(TargetConditioningProviderKind.TARGET_TOKEN_EMBEDDING)
+    family = Qwen3VLAdapter()
+    samples = (_sample(image, 0), _sample(image, 1))
+    factory = _SparseAnswerBearingReadoutFactory()
+    binding = RepresentationReadoutLossSupervisionBinding(
+        identity=factory.identity,
+        factory=factory,
+    )
+    builder = Qwen3NativeRepresentationGroupBuilder(
+        runtime=runtime,
+        family_adapter=family,
+        prompt=_prompt(),
+        image_loader=lambda path: Path(path).read_bytes(),
+        readout_loss_supervision=binding,
+    )
+
+    group = builder(
+        samples,
+        runtime.adapter,
+        collective_candidate_count=len(samples),
+    )
+
+    assert factory.sample_ids == [sample.sample_id for sample in samples]
+    assert group.loss_supervision_policy_identity == factory.identity
+    for row in group.rows:
+        sparse = row.loss_supervision
+        assert sparse is not None
+        assert sparse.policy_identity == factory.identity
+        assert sparse.identity == f"{factory.identity}:{row.sample_id}"
+        assert len(sparse.evidence_value_token_positions) == len("OPEN")
+        assert len(sparse.answer_token_positions) == len("OPEN")
+        assert row.loss_labels == sparse.labels
+        assert row.loss_supervised_token_positions == sparse.supervised_token_positions
+        assert len(row.loss_supervised_token_positions) == 2 * len("OPEN")
+
+    scores = score_streaming_same_image_group(family, runtime.model, group)
+    assert torch.equal(scores.evidence_token_counts, torch.tensor([8, 8]))
+
+
+def test_sparse_readout_binding_rejects_policy_identity_drift(tmp_path: Path) -> None:
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"immutable-image-fixture")
+    runtime = _runtime(TargetConditioningProviderKind.TARGET_TOKEN_EMBEDDING)
+    factory = _SparseAnswerBearingReadoutFactory()
+
+    def mismatched_factory(
+        sample: RepresentationTrainingSample,
+        canonical: CanonicalEvidenceSupervision,
+        model: ModelEvidenceSupervision,
+    ) -> RepresentationReadoutLossSupervision:
+        return replace(
+            factory(sample, canonical, model),
+            policy_identity="different-policy-v1",
+        )
+
+    builder = Qwen3NativeRepresentationGroupBuilder(
+        runtime=runtime,
+        family_adapter=Qwen3VLAdapter(),
+        prompt=_prompt(),
+        image_loader=lambda path: Path(path).read_bytes(),
+        readout_loss_supervision=RepresentationReadoutLossSupervisionBinding(
+            identity=factory.identity,
+            factory=mismatched_factory,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="configured policy identity"):
+        builder(
+            (_sample(image, 0), _sample(image, 1)),
+            runtime.adapter,
+            collective_candidate_count=2,
+        )
+
+
+def test_sparse_readout_requires_an_explicit_typed_binding() -> None:
+    runtime = _runtime(TargetConditioningProviderKind.TARGET_TOKEN_EMBEDDING)
+    with pytest.raises(TypeError, match="explicit typed binding"):
+        Qwen3NativeRepresentationGroupBuilder(
+            runtime=runtime,
+            family_adapter=Qwen3VLAdapter(),
+            prompt=_prompt(),
+            image_loader=lambda _path: b"image",
+            readout_loss_supervision=lambda *_args: None,  # type: ignore[arg-type]
+        )
 
 
 def test_contextual_builder_reuses_preencoded_vision_with_exact_output(

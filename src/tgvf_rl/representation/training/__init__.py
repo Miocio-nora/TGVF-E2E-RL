@@ -61,6 +61,7 @@ from .objective import (
     resolve_matrix_ce_score_config,
 )
 from .readout import (
+    HISTORICAL_READOUT_LOSS_SUPERVISION_POLICY_IDENTITY,
     RepresentationAttentionTensorBundle,
     RepresentationCandidateObservation,
     RepresentationReadoutLossSupervision,
@@ -193,6 +194,7 @@ from .native_pipeline import (
     REPRESENTATION_PROMPT_SCHEMA_VERSION,
     Qwen3NativeRepresentationGroupBuilder,
     RepresentationPromptConfig,
+    RepresentationReadoutLossSupervisionBinding,
     build_native_representation_messages,
     render_native_action_target,
 )
@@ -300,6 +302,7 @@ from .qwen3_grounding import (
 )
 
 __all__ = [
+    "HISTORICAL_READOUT_LOSS_SUPERVISION_POLICY_IDENTITY",
     "ATTENTION_TOPK",
     "CAUSAL_VALUE_FLIP_LOG_ODDS_CONTRACT",
     "DETERMINISTIC_RANDOM_D_ALGORITHM",
@@ -410,6 +413,7 @@ __all__ = [
     "RepresentationObjectiveKind",
     "RepresentationObjectiveValue",
     "RepresentationReadoutLossSupervision",
+    "RepresentationReadoutLossSupervisionBinding",
     "RepresentationReadoutRow",
     "RepresentationReadoutControlIdentity",
     "RepresentationReadoutExecutionContract",

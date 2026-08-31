@@ -31,6 +31,11 @@ from .losses import (
 from .transcript import ModelEvidenceSupervision
 
 
+HISTORICAL_READOUT_LOSS_SUPERVISION_POLICY_IDENTITY = (
+    "historical-complete-evidence-only-v1"
+)
+
+
 @dataclass(frozen=True, slots=True)
 class RepresentationReadoutLossSupervision:
     """Explicit sparse loss view over an unchanged native readout transcript.
@@ -42,6 +47,7 @@ class RepresentationReadoutLossSupervision:
     cannot attend to original-image keys while scoring these labels.
     """
 
+    policy_identity: str
     identity: str
     labels: tuple[int, ...]
     supervised_token_positions: tuple[int, ...]
@@ -51,6 +57,10 @@ class RepresentationReadoutLossSupervision:
     source_image_block_query_end: int
 
     def __post_init__(self) -> None:
+        _require_non_empty_text(
+            self.policy_identity,
+            field_name="loss supervision policy identity",
+        )
         _require_non_empty_text(self.identity, field_name="loss supervision identity")
         if not isinstance(self.labels, tuple) or not self.labels:
             raise ValueError("loss supervision labels must be a non-empty tuple")
@@ -278,6 +288,14 @@ class RepresentationReadoutRow:
         return self.loss_supervision.labels
 
     @property
+    def loss_supervision_policy_identity(self) -> str:
+        """Identity of the effective historical or explicitly bound loss view."""
+
+        if self.loss_supervision is None:
+            return HISTORICAL_READOUT_LOSS_SUPERVISION_POLICY_IDENTITY
+        return self.loss_supervision.policy_identity
+
+    @property
     def loss_supervised_token_positions(self) -> tuple[int, ...]:
         """Effective causal-label positions for loss accounting."""
 
@@ -462,6 +480,13 @@ class SameImageReadoutGroup:
             raise ValueError(
                 "row/candidate order must define a unique diagonal identity"
             )
+        loss_supervision_policies = {
+            row.loss_supervision_policy_identity for row in self.rows
+        }
+        if len(loss_supervision_policies) != 1:
+            raise ValueError(
+                "one readout group cannot mix loss-supervision policy identities"
+            )
         providers = {
             candidate.target_conditioning_provider for candidate in self.candidates
         }
@@ -528,6 +553,12 @@ class SameImageReadoutGroup:
         """Number of Adapter forwards/backwards every rank must execute."""
 
         return len(self.candidates) + len(self.collective_padding)
+
+    @property
+    def loss_supervision_policy_identity(self) -> str:
+        """One group-wide historical or explicitly configured loss policy."""
+
+        return self.rows[0].loss_supervision_policy_identity
 
 
 @dataclass(frozen=True, slots=True)

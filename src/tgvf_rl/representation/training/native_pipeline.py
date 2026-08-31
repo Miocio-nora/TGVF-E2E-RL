@@ -57,6 +57,7 @@ from tgvf_rl.representation.adapter import (
 from .readout import (
     RepresentationAttentionTensorBundle,
     RepresentationCandidateObservation,
+    RepresentationReadoutLossSupervision,
     RepresentationReadoutRow,
     RepresentationVisualTensorBundle,
     SameImageReadoutGroup,
@@ -71,6 +72,7 @@ from .schema import RepresentationTrainingSample
 from .transcript import (
     CanonicalEvidenceSupervision,
     CanonicalToModelTokenExpansion,
+    ModelEvidenceSupervision,
     NATIVE_REPRESENTATION_PRE_REASONING,
     _build_visual_token_expansion,
     _render_native_evidence_labels_batch,
@@ -82,6 +84,50 @@ REPRESENTATION_PROMPT_IDENTITY = "qwen3-representation-image-question-v1"
 NATIVE_ACTION_TARGET_SCHEMA_VERSION = "native_action_target_v1"
 _ACTION_TEMPLATE_SUFFIX = "<|im_end|>\n"
 _ALL_ONES_ATTENTION_MASK_PROOF_SEAL = object()
+
+
+ReadoutLossSupervisionFactory = Callable[
+    [
+        RepresentationTrainingSample,
+        CanonicalEvidenceSupervision,
+        ModelEvidenceSupervision,
+    ],
+    RepresentationReadoutLossSupervision,
+]
+
+
+@dataclass(frozen=True, slots=True)
+class RepresentationReadoutLossSupervisionBinding:
+    """Explicitly bind one sparse readout factory to its scientific identity."""
+
+    identity: str
+    factory: ReadoutLossSupervisionFactory
+
+    def __post_init__(self) -> None:
+        _require_non_empty_text(
+            self.identity,
+            field_name="readout loss-supervision binding identity",
+        )
+        if not callable(self.factory):
+            raise TypeError("readout loss-supervision factory must be callable")
+
+    def materialize(
+        self,
+        sample: RepresentationTrainingSample,
+        canonical: CanonicalEvidenceSupervision,
+        model: ModelEvidenceSupervision,
+    ) -> RepresentationReadoutLossSupervision:
+        result = self.factory(sample, canonical, model)
+        if not isinstance(result, RepresentationReadoutLossSupervision):
+            raise TypeError(
+                "readout loss-supervision factory returned an invalid value"
+            )
+        if result.policy_identity != self.identity:
+            raise ValueError(
+                "readout loss-supervision result differs from its configured policy "
+                "identity"
+            )
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -423,6 +469,9 @@ class Qwen3NativeRepresentationGroupBuilder:
         image_loader: Callable[[str], Any],
         image_max_pixels: int | None = None,
         reuse_preencoded_vision_for_contextual_conditioning: bool = False,
+        readout_loss_supervision: (
+            RepresentationReadoutLossSupervisionBinding | None
+        ) = None,
     ) -> None:
         if not isinstance(runtime, Qwen3RepresentationRuntime):
             raise TypeError("runtime must be Qwen3RepresentationRuntime")
@@ -458,6 +507,13 @@ class Qwen3NativeRepresentationGroupBuilder:
             raise ValueError(
                 "preencoded contextual conditioning requires the final hidden layer"
             )
+        if readout_loss_supervision is not None and not isinstance(
+            readout_loss_supervision,
+            RepresentationReadoutLossSupervisionBinding,
+        ):
+            raise TypeError(
+                "readout_loss_supervision must be an explicit typed binding"
+            )
         self.runtime = runtime
         self.family_adapter = family_adapter
         self.prompt = prompt
@@ -466,6 +522,7 @@ class Qwen3NativeRepresentationGroupBuilder:
         self.reuse_preencoded_vision_for_contextual_conditioning = (
             reuse_preencoded_vision_for_contextual_conditioning
         )
+        self.readout_loss_supervision = readout_loss_supervision
 
     def __call__(
         self,
@@ -816,6 +873,15 @@ class Qwen3NativeRepresentationGroupBuilder:
             canonical,
             cpu_input_ids,
         )
+        loss_supervision = (
+            None
+            if self.readout_loss_supervision is None
+            else self.readout_loss_supervision.materialize(
+                sample,
+                canonical,
+                supervision,
+            )
+        )
         # Qwen's native M-RoPE helper is device-agnostic and dominated by
         # Python scalar/list indexing.  Feeding it CUDA IDs forces many tiny
         # GPU kernels and host synchronizations (`tolist`, `item`, argwhere)
@@ -854,6 +920,7 @@ class Qwen3NativeRepresentationGroupBuilder:
                 input_ids,
                 (supervision.model_token_ids,),
             ),
+            loss_supervision=loss_supervision,
         )
 
 
