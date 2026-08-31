@@ -11,6 +11,7 @@ from tgvf_rl.policy.horizon_extension import (
     POLICY_HORIZON_EXTENSION_SCHEMA,
     PolicyHorizonExtension,
     load_policy_horizon_extension,
+    materialize_policy_horizon_extension,
     validate_policy_horizon_extension_resume,
 )
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
@@ -54,6 +55,7 @@ def _config(tmp_path: Path) -> MagicMock:
     config.training.maximum_optimizer_steps = 20
     config.training.checkpoint_steps = (0, 1, 5, 10, 20)
     config.scheduler.total_steps = 80
+    config.distributed.world_size = 4
     return config
 
 
@@ -228,3 +230,90 @@ def test_resume_gate_accepts_intermediate_and_completed_checkpoint(
         source_project.unlink()
 
     assert validate_policy_horizon_extension_resume(extension, config) == current_step
+
+
+def test_materialize_extension_binds_completed_base_and_generic_world_size(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.training.maximum_optimizer_steps = 1
+    config.training.checkpoint_steps = (0, 1)
+    config.scheduler.total_steps = 2
+    config.distributed.world_size = 2
+    output = config.output.root
+    actor = output / "checkpoints/global_step_1/actor"
+    actor.mkdir(parents=True)
+    (output / "checkpoints/latest_checkpointed_iteration.txt").write_text(
+        "1", encoding="utf-8"
+    )
+    config.output.metrics_path.write_bytes(_canonical({"optimizer_step": 1}) + b"\n")
+    for stem in ("model", "optim", "extra_state"):
+        for rank in range(2):
+            (actor / f"{stem}_world_size_2_rank_{rank}.pt").write_bytes(b"state")
+
+    project = _integrity(
+        {
+            "run_identity": {
+                "run_id": config.run_id,
+                "hashes": [
+                    ["run_config", config.identity_sha256],
+                    ["run_config_file", config.source_sha256],
+                ],
+            },
+            "policy_version": {
+                "run_id": config.run_id,
+                "optimizer_step": 1,
+                "weights_sha256": SHA,
+            },
+        }
+    )
+    project_path = actor / "tgvf_policy_project_state.json"
+    _write_json(project_path, project)
+    pair = _integrity(
+        {
+            "run_id": config.run_id,
+            "optimizer_step": 1,
+            "project_state_sha256": project["integrity_sha256"],
+        }
+    )
+    _write_json(actor / "tgvf_policy_checkpoint_pair.json", pair)
+
+    state = output / "runtime-policy-state"
+    tensor = state / "lora-snapshots/step1.safetensors"
+    tensor.parent.mkdir(parents=True)
+    tensor.write_bytes(b"lora")
+    manifest = _integrity(
+        {
+            "run_id": config.run_id,
+            "optimizer_step": 1,
+            "weights_sha256": SHA,
+            "tensor_file": "lora-snapshots/step1.safetensors",
+            "tensor_file_sha256": _sha(tensor),
+        }
+    )
+    manifest_path = state / "lora-manifests/step1.json"
+    _write_json(manifest_path, manifest)
+    pointer = _integrity(
+        {
+            "run_id": config.run_id,
+            "optimizer_step": 1,
+            "weights_sha256": SHA,
+            "manifest_file": "lora-manifests/step1.json",
+        }
+    )
+    _write_json(state / "latest-lora-snapshot.json", pointer)
+
+    path = tmp_path / "step1-to2.json"
+    extension = materialize_policy_horizon_extension(
+        config,
+        output_path=path,
+        extension_id="step1-to2",
+        target_optimizer_step=2,
+        effective_checkpoint_steps=(0, 1, 2),
+        code_commit=COMMIT,
+    )
+
+    assert extension.source_optimizer_step == 1
+    assert extension.target_optimizer_step == 2
+    assert extension.effective_checkpoint_steps == (0, 1, 2)
+    assert validate_policy_horizon_extension_resume(extension, config) == 1

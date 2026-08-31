@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import tempfile
 from typing import Any, Mapping
 
 from .run_config import PolicyE2ESmokeRunConfig
@@ -332,9 +333,12 @@ def validate_policy_horizon_extension_resume(
             raise ValueError("horizon extension source project state differs")
 
     actor = checkpoint_root / f"global_step_{current_step}" / "actor"
+    world_size = config.distributed.world_size
     for stem in ("model", "optim", "extra_state"):
-        shards = sorted(actor.glob(f"{stem}_world_size_4_rank_*.pt"))
-        if len(shards) != 4 or any(not path.is_file() or path.stat().st_size == 0 for path in shards):
+        shards = sorted(actor.glob(f"{stem}_world_size_{world_size}_rank_*.pt"))
+        if len(shards) != world_size or any(
+            not path.is_file() or path.stat().st_size == 0 for path in shards
+        ):
             raise ValueError(f"horizon extension current {stem} shard set is incomplete")
     pair = _read_json(actor / "tgvf_policy_checkpoint_pair.json", owner="checkpoint pair")
     project = _read_json(
@@ -390,10 +394,138 @@ def validate_policy_horizon_extension_resume(
     return current_step
 
 
+def materialize_policy_horizon_extension(
+    config: PolicyE2ESmokeRunConfig,
+    *,
+    output_path: str | Path,
+    extension_id: str,
+    target_optimizer_step: int,
+    effective_checkpoint_steps: tuple[int, ...],
+    code_commit: str,
+) -> PolicyHorizonExtension:
+    """Bind a completed base horizon to a deterministic continuation manifest.
+
+    The function is intentionally usable only after the base run has committed
+    its final checkpoint.  It derives every mutable resume hash from that exact
+    boundary, writes one immutable manifest, and reloads it through the normal
+    artifact validator before returning.
+    """
+
+    if not isinstance(config, PolicyE2ESmokeRunConfig):
+        raise TypeError("config must be PolicyE2ESmokeRunConfig")
+    if not isinstance(extension_id, str) or not extension_id.strip():
+        raise ValueError("extension_id must be non-empty")
+    source_step = config.training.maximum_optimizer_steps
+    if type(target_optimizer_step) is not int or target_optimizer_step <= source_step:
+        raise ValueError("target_optimizer_step must exceed the base horizon")
+    steps = _checkpoint_steps(list(effective_checkpoint_steps))
+    if target_optimizer_step != config.scheduler.total_steps:
+        raise ValueError("target_optimizer_step must equal scheduler.total_steps")
+    base_steps = config.training.checkpoint_steps
+    if steps[: len(base_steps)] != base_steps:
+        raise ValueError("effective checkpoint steps must preserve the base prefix")
+    if steps[-1] != target_optimizer_step:
+        raise ValueError("effective checkpoint steps must end at the target")
+    commit = _commit(code_commit)
+
+    output = config.output.root.resolve()
+    checkpoint_root = output / "checkpoints"
+    tracker = checkpoint_root / "latest_checkpointed_iteration.txt"
+    try:
+        current_step = int(tracker.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError) as error:
+        raise ValueError("base checkpoint tracker is unavailable") from error
+    if current_step != source_step:
+        raise ValueError("base run is not stopped at its configured horizon")
+
+    metric_lines = [
+        line for line in config.output.metrics_path.read_bytes().splitlines() if line
+    ]
+    if len(metric_lines) != source_step:
+        raise ValueError("base metrics are not the exact configured prefix")
+    try:
+        metric_steps = [json.loads(line).get("optimizer_step") for line in metric_lines]
+    except json.JSONDecodeError as error:
+        raise ValueError("base metrics are not valid JSON lines") from error
+    if metric_steps != list(range(1, source_step + 1)):
+        raise ValueError("base metrics optimizer steps are not contiguous")
+    metrics_prefix = b"\n".join(metric_lines) + b"\n"
+
+    actor = checkpoint_root / f"global_step_{source_step}" / "actor"
+    pair_path = actor / "tgvf_policy_checkpoint_pair.json"
+    project_path = actor / "tgvf_policy_project_state.json"
+    pointer_path = output / "runtime-policy-state/latest-lora-snapshot.json"
+    pair = _read_json(pair_path, owner="checkpoint pair")
+    project = _read_json(project_path, owner="project checkpoint")
+    pointer = _read_json(pointer_path, owner="latest LoRA pointer")
+    _verify_integrity(pair, owner="checkpoint pair")
+    _verify_integrity(project, owner="project checkpoint")
+    _verify_integrity(pointer, owner="latest LoRA pointer")
+    policy = project.get("policy_version")
+    if not isinstance(policy, dict):
+        raise ValueError("base project checkpoint lacks policy_version")
+    weights = _sha256(policy.get("weights_sha256"), name="source weights")
+    expected_identity = (config.run_id, source_step, weights)
+    if (
+        pair.get("run_id"),
+        pair.get("optimizer_step"),
+        project.get("policy_version", {}).get("weights_sha256"),
+    ) != expected_identity:
+        raise ValueError("base checkpoint identity differs from config")
+    if (
+        pointer.get("run_id"),
+        pointer.get("optimizer_step"),
+        pointer.get("weights_sha256"),
+    ) != expected_identity:
+        raise ValueError("base latest LoRA pointer identity differs")
+
+    payload: dict[str, object] = {
+        "schema_version": POLICY_HORIZON_EXTENSION_SCHEMA,
+        "extension_id": extension_id,
+        "run_id": config.run_id,
+        "base_config_path": str(config.source_path.resolve()),
+        "base_config_source_sha256": config.source_sha256,
+        "base_run_identity_sha256": config.identity_sha256,
+        "output_root": str(output),
+        "source_optimizer_step": source_step,
+        "target_optimizer_step": target_optimizer_step,
+        "scheduler_total_steps": config.scheduler.total_steps,
+        "effective_checkpoint_steps": list(steps),
+        "metrics_prefix_sha256": hashlib.sha256(metrics_prefix).hexdigest(),
+        "checkpoint_pair_file_sha256": _file_sha256(pair_path),
+        "project_state_file_sha256": _file_sha256(project_path),
+        "latest_lora_pointer_file_sha256": _file_sha256(pointer_path),
+        "source_weights_sha256": weights,
+        "code_commit": commit,
+    }
+    payload["integrity_sha256"] = hashlib.sha256(_canonical_json(payload)).hexdigest()
+    target = Path(output_path).expanduser().resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    encoded = _canonical_json(payload) + b"\n"
+    if target.exists() or target.is_symlink():
+        if target.is_symlink() or not target.is_file() or target.read_bytes() != encoded:
+            raise RuntimeError("horizon extension output collision")
+    else:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.link(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return load_policy_horizon_extension(target, config, validate_artifacts=True)
+
+
 __all__ = [
     "POLICY_HORIZON_EXTENSION_SCHEMA",
     "PolicyHorizonExtension",
     "load_policy_horizon_extension",
+    "materialize_policy_horizon_extension",
     "policy_horizon_extension_from_environment",
     "validate_policy_horizon_extension_resume",
 ]

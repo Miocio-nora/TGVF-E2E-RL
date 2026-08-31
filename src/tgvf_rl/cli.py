@@ -702,6 +702,12 @@ def _parser() -> argparse.ArgumentParser:
         default=Path(sys.executable).absolute(),
         help="absolute Python executable for the veRL driver",
     )
+    run_policy.add_argument(
+        "--horizon-extension",
+        type=Path,
+        default=None,
+        help="resume through an integrity-bound Policy horizon extension",
+    )
     dev_run_policy = subparsers.add_parser(
         "dev-run-policy",
         help="deprecated alias for run-policy",
@@ -712,6 +718,12 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(sys.executable).absolute(),
         help="absolute Python executable for the veRL driver",
+    )
+    dev_run_policy.add_argument(
+        "--horizon-extension",
+        type=Path,
+        default=None,
+        help="resume through an integrity-bound Policy horizon extension",
     )
     strict_run_policy = subparsers.add_parser(
         "strict-run-policy",
@@ -971,10 +983,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             config_path = args.path.expanduser().absolute()
             config = _load_policy_run_config(config_path)
+            extension = None
+            if args.horizon_extension is not None:
+                extension = _load_policy_horizon_extension(
+                    args.horizon_extension, config
+                )
             prepared = prepare_policy_dev_launch(
                 config,
                 python_executable=args.python,
                 host_environment=os.environ,
+                horizon_extension=extension,
             )
             execute_policy_dev_launch(prepared)
         elif args.command == "strict-run-policy":

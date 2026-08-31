@@ -28,6 +28,7 @@ from tgvf_rl.ops.policy_compile_prerequisites import (
     POLICY_COMPILE_PREREQUISITE_MISSING_BLOCKER,
 )
 
+from .horizon_extension import PolicyHorizonExtension
 from .run_config import PolicyE2ESmokeRunConfig
 from .launch import policy_child_environment
 
@@ -51,12 +52,20 @@ def prepare_policy_dev_launch(
     *,
     python_executable: str | Path,
     host_environment: Mapping[str, str] | None = None,
+    horizon_extension: PolicyHorizonExtension | None = None,
 ) -> PreparedPolicyDevLaunch:
     """Build one executable dev launch without consulting strict authority."""
 
     if not isinstance(config, PolicyE2ESmokeRunConfig):
         raise TypeError("development launch requires PolicyE2ESmokeRunConfig")
-    base_plan = build_policy_e2e_smoke_verl_plan(config)
+    if horizon_extension is not None:
+        if not isinstance(horizon_extension, PolicyHorizonExtension):
+            raise TypeError("horizon_extension must be PolicyHorizonExtension")
+        horizon_extension.validate_for_config(config)
+    base_plan = build_policy_e2e_smoke_verl_plan(
+        config,
+        horizon_extension=horizon_extension,
+    )
     plan = route_policy_method_matrix_plan(config, base_plan)
     _assert_dev_plan(plan)
     executable = Path(python_executable).expanduser().absolute()

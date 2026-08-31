@@ -58,9 +58,10 @@ def test_normal_parser_is_minimal_and_strict_parser_is_explicit_opt_in() -> None
     dev = parser.parse_args(["dev-run-policy", "/work/policy.toml"])
     strict = parser.parse_args(_STRICT_POLICY_ARGUMENTS)
 
-    assert set(vars(normal)) == {"command", "path", "python"}
+    assert set(vars(normal)) == {"command", "path", "python", "horizon_extension"}
     assert normal.command == "run-policy"
     assert normal.path == Path("/work/policy.toml")
+    assert normal.horizon_extension is None
     assert not hasattr(normal, "gate_directory")
     assert not hasattr(normal, "authorization_token")
     assert not hasattr(normal, "freeze_override")
@@ -70,6 +71,7 @@ def test_normal_parser_is_minimal_and_strict_parser_is_explicit_opt_in() -> None
     assert set(vars(dev)) == set(vars(normal))
     assert dev.command == "dev-run-policy"
     assert dev.path == Path("/work/policy.toml")
+    assert dev.horizon_extension is None
 
     assert strict.command == "strict-run-policy"
     assert strict.path == Path("/canonical/policy.toml")
@@ -225,7 +227,7 @@ def test_dev_launcher_rejects_any_blocker_beyond_missing_compile_manifest(
     monkeypatch.setattr(
         dev_launch,
         "build_policy_e2e_smoke_verl_plan",
-        lambda _config: broadened,
+        lambda _config, *, horizon_extension=None: broadened,
     )
 
     with pytest.raises(RuntimeError, match="permits only the missing compile"):
