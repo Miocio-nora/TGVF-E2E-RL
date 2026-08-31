@@ -14,8 +14,8 @@ from types import MappingProxyType
 from typing import Any
 
 from .policy_selection import (
+    POLICY_SELECTION_PRIMARY_SOURCES,
     SelectionCandidate,
-    SelectionSource,
     canonical_json_line,
 )
 
@@ -25,7 +25,9 @@ T1_RECOMMENDED_SELECTION_MANIFEST_SCHEMA = (
 )
 T1_RECOMMENDED_SELECTION_ALGORITHM_VERSION = "t1-source-content-hash-bottom-k-v1"
 T1_RECOMMENDED_SELECTION_NAMESPACE = "qwen3-instruct-t1-recommended-20260726-v1"
-T1_RECOMMENDED_SELECTION_ORDER = tuple(source.value for source in SelectionSource)
+T1_RECOMMENDED_SELECTION_ORDER = tuple(
+    source.value for source in POLICY_SELECTION_PRIMARY_SOURCES
+)
 T1_RECOMMENDED_SOURCE_QUOTAS = MappingProxyType(
     {"vstar": 170_000, "arxivqa": 32_000, "thinklite": 69_842}
 )

@@ -65,6 +65,17 @@ class SelectionSource(str, Enum):
     VSTAR = "vstar"
     ARXIVQA = "arxivqa"
     THINKLITE = "thinklite"
+    TEACHER = "teacher"
+
+
+# The accepted T1-04 pool is permanently a three-source artifact.  Keep its
+# source universe explicit so independent Teacher selection cannot silently
+# change the identity or quotas of historical manifests.
+POLICY_SELECTION_PRIMARY_SOURCES = (
+    SelectionSource.VSTAR,
+    SelectionSource.ARXIVQA,
+    SelectionSource.THINKLITE,
+)
 
 
 class SelectionBranch(str, Enum):
@@ -108,7 +119,9 @@ def classify_policy_selection_task_kind(
     try:
         normalized_source = SelectionSource(source)
     except (TypeError, ValueError) as error:
-        raise ValueError("source must be vstar, arxivqa, or thinklite") from error
+        raise ValueError(
+            "source must be vstar, arxivqa, thinklite, or teacher"
+        ) from error
     if normalized_source is SelectionSource.VSTAR:
         return DeepEyesTaskKind.OPEN
     if normalized_source is SelectionSource.ARXIVQA:
@@ -227,7 +240,9 @@ class SelectionCandidate:
         try:
             source = SelectionSource(record.get("source"))
         except ValueError as exc:
-            raise ValueError("source must be vstar, arxivqa, or thinklite") from exc
+            raise ValueError(
+                "source must be vstar, arxivqa, thinklite, or teacher"
+            ) from exc
         question = _required_string(record.get("question"), field_name="question")
         if "ground_truth" not in record:
             raise ValueError("ground_truth is required")
@@ -565,17 +580,27 @@ def summarize_selection_decisions(
             retained_by_source[source] += 1
     retained_total = sum(retained_by_source.values())
     source_report: dict[str, Any] = {}
-    for source in SelectionSource:
+    ordered_sources = tuple(
+        source
+        for source in (*POLICY_SELECTION_PRIMARY_SOURCES, SelectionSource.TEACHER)
+        if total_by_source[source.value]
+    )
+    for source in ordered_sources:
         retained = retained_by_source[source.value]
         share = retained / retained_total if retained_total else None
-        reference_share = DEEPEYES_REFERENCE_SHARES[source.value]
+        reference_count = DEEPEYES_REFERENCE_COUNTS.get(source.value)
+        reference_share = DEEPEYES_REFERENCE_SHARES.get(source.value)
         source_report[source.value] = {
             "candidate_count": total_by_source[source.value],
             "retained_count": retained,
             "retained_share": share,
-            "deepeyes_reference_count": DEEPEYES_REFERENCE_COUNTS[source.value],
+            "deepeyes_reference_count": reference_count,
             "deepeyes_reference_share": reference_share,
-            "share_delta": share - reference_share if share is not None else None,
+            "share_delta": (
+                share - reference_share
+                if share is not None and reference_share is not None
+                else None
+            ),
         }
     return {
         "reference": {

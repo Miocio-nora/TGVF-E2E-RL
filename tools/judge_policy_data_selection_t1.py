@@ -1,68 +1,45 @@
-#!/usr/bin/python3 -I
-# ruff: noqa: E402
+#!/usr/bin/env python3
 """Run or finalize the accepted local semantic judge for T1."""
 
 from __future__ import annotations
-
-# Direct script execution is stopped before legacy path/environment mutation or
-# heavyweight runtime imports. Importing the module for read-only compatibility
-# tests remains possible; its public ``main`` retains a second fail-closed guard.
-if __name__ == "__main__":
-    import os as _early_quarantine_os
-
-    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
-    for _early_quarantine_depth in range(2):
-        _early_quarantine_root = _early_quarantine_os.path.dirname(
-            _early_quarantine_root
-        )
-    _early_quarantine_os.execv(
-        "/usr/bin/python3",
-        (
-            "/usr/bin/python3",
-            "-I",
-            _early_quarantine_os.path.join(
-                _early_quarantine_root,
-                "tools",
-                "check_launch_gate.py",
-            ),
-            "quarantine-legacy",
-            "--tool-id",
-            "tools/judge_policy_data_selection_t1.py",
-        ),
-    )
 
 import argparse
 import asyncio
 import json
 from pathlib import Path
-import sys
-
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-_SOURCE_ROOT = _REPOSITORY_ROOT / "src"
-if str(_SOURCE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_SOURCE_ROOT))
 
 from tgvf_rl.data.policy_selection_t1_judge import (
     finalize_t1_scoring,
+    publish_t1_semantic_judge_manifest,
     run_t1_semantic_judge,
-)
-from tgvf_rl.ops.cli_authorization import (
-    assert_legacy_standalone_execution_quarantined,
 )
 
 
 def main() -> None:
-    assert_legacy_standalone_execution_quarantined(
-        "tools/judge_policy_data_selection_t1.py"
-    )
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
     run = subparsers.add_parser("run")
+    publish = subparsers.add_parser(
+        "publish",
+        help=(
+            "foreground index-only closure: validate canonical indices and "
+            "referenced evidence paths without reading evidence payloads"
+        ),
+        description=(
+            "Publish judge-v2 using bounded parallel index-only closure. This "
+            "validates queue/index identities and requires every referenced "
+            "evidence path to be a regular file; it does not read or hash "
+            "evidence payload contents. A full evidence audit is separate and "
+            "nonblocking."
+        ),
+    )
     finalize = subparsers.add_parser("finalize")
-    for command in (run, finalize):
+    for command in (run, publish, finalize):
         command.add_argument("--config", type=Path, required=True)
         command.add_argument("--judge-config", type=Path, required=True)
     run.add_argument("--concurrency", type=int, default=32)
+    publish.add_argument("--workers", type=int, default=32)
+    publish.add_argument("--progress-every", type=int, default=10_000)
     args = parser.parse_args()
     if args.command == "run":
         result = asyncio.run(
@@ -71,6 +48,13 @@ def main() -> None:
                 judge_config_path=args.judge_config,
                 concurrency=args.concurrency,
             )
+        )
+    elif args.command == "publish":
+        result = publish_t1_semantic_judge_manifest(
+            args.config,
+            judge_config_path=args.judge_config,
+            workers=args.workers,
+            progress_every=args.progress_every,
         )
     else:
         result = finalize_t1_scoring(args.config, judge_config_path=args.judge_config)

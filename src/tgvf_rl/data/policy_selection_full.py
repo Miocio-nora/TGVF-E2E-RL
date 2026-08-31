@@ -12,15 +12,17 @@ import tempfile
 from typing import Any
 
 from .policy_selection import (
+    POLICY_SELECTION_PRIMARY_SOURCES,
     SelectionCandidate,
-    SelectionSource,
     canonical_json_line,
 )
 
 
 T1_FULL_SELECTION_MANIFEST_SCHEMA = "tgvf.policy-selection.t1-full-manifest.v1"
 T1_FULL_SELECTION_ALGORITHM_VERSION = "t1-full-source-concatenation-v1"
-T1_FULL_SELECTION_ORDER = tuple(source.value for source in SelectionSource)
+T1_FULL_SELECTION_ORDER = tuple(
+    source.value for source in POLICY_SELECTION_PRIMARY_SOURCES
+)
 
 
 def _sha256_file(path: Path) -> str:
@@ -98,9 +100,7 @@ def materialize_t1_full_selection(
                                 line,
                                 object_pairs_hook=_reject_duplicate_keys,
                                 parse_constant=lambda constant: (_ for _ in ()).throw(
-                                    ValueError(
-                                        f"non-finite JSON number: {constant}"
-                                    )
+                                    ValueError(f"non-finite JSON number: {constant}")
                                 ),
                             )
                         except json.JSONDecodeError as exc:

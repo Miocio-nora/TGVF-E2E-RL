@@ -265,16 +265,32 @@ def verify_t1_answer(
         normalized_source = SelectionSource(source)
     except ValueError as exc:
         raise ValueError("source is unsupported") from exc
-    if normalized_source is SelectionSource.ARXIVQA:
-        if option_count is None:
-            raise ValueError("ArxivQA verification requires option_count")
-        return verify_arxivqa_answer(
+    if normalized_source in {SelectionSource.ARXIVQA, SelectionSource.TEACHER} and (
+        option_count is not None
+    ):
+        verified = verify_arxivqa_answer(
             candidate_answer, expected_answer, option_count=option_count
         )
+        if normalized_source is SelectionSource.TEACHER:
+            return DeterministicVerification(
+                verified.outcome,
+                verified.route.replace("arxivqa", "teacher_mcq"),
+                verified.evidence,
+            )
+        return verified
+    if normalized_source is SelectionSource.ARXIVQA:
+        raise ValueError("ArxivQA verification requires option_count")
     if option_count is not None:
-        raise ValueError("option_count is only valid for ArxivQA")
+        raise ValueError("option_count is valid only for ArxivQA or teacher MCQ")
     if normalized_source is SelectionSource.THINKLITE:
         return verify_thinklite_answer(candidate_answer, expected_answer)
+    if normalized_source is SelectionSource.TEACHER:
+        verified = verify_thinklite_answer(candidate_answer, expected_answer)
+        return DeterministicVerification(
+            verified.outcome,
+            verified.route.replace("thinklite", "teacher_open"),
+            verified.evidence,
+        )
     return verify_vstar_answer(candidate_answer, expected_answer)
 
 

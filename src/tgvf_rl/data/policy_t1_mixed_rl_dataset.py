@@ -22,6 +22,7 @@ from typing import Any
 
 from .deepeyes47k import DeepEyesTaskKind
 from .policy_selection import (
+    POLICY_SELECTION_PRIMARY_SOURCES,
     POLICY_SELECTION_DECISION_SCHEMA,
     POLICY_SELECTION_TASK_KIND_POLICY,
     SelectionCandidate,
@@ -250,13 +251,13 @@ def _jsonl_records(path: Path) -> Iterator[dict[str, Any]]:
 def _normalized_expected_source_counts(
     value: Mapping[str, int],
 ) -> dict[str, int]:
-    expected_sources = {source.value for source in SelectionSource}
+    expected_sources = {source.value for source in POLICY_SELECTION_PRIMARY_SOURCES}
     if set(value) != expected_sources:
         raise PolicyT1MixedMaterializationError(
             "expected_source_counts must bind vstar, arxivqa, and thinklite"
         )
     normalized: dict[str, int] = {}
-    for source in SelectionSource:
+    for source in POLICY_SELECTION_PRIMARY_SOURCES:
         count = value[source.value]
         if type(count) is not int or count <= 0:
             raise PolicyT1MixedMaterializationError(
@@ -542,10 +543,10 @@ def materialize_policy_t1_mixed_retained_pool(
     records: list[dict[str, Any]] = []
     decision_counts: Counter[str] = Counter()
     decision_counts_by_source: dict[str, Counter[str]] = {
-        source.value: Counter() for source in SelectionSource
+        source.value: Counter() for source in POLICY_SELECTION_PRIMARY_SOURCES
     }
     retained_task_kind_counts_by_source: dict[str, Counter[str]] = {
-        source.value: Counter() for source in SelectionSource
+        source.value: Counter() for source in POLICY_SELECTION_PRIMARY_SOURCES
     }
     seen: set[str] = set()
     image_hash_cache: dict[Path, str] = {}
@@ -626,7 +627,7 @@ def materialize_policy_t1_mixed_retained_pool(
     records.sort(key=lambda row: _shuffle_key(str(row["sample_id"]), shuffle_seed))
     retained_total = len(records)
     source_report: dict[str, dict[str, object]] = {}
-    for source in SelectionSource:
+    for source in POLICY_SELECTION_PRIMARY_SOURCES:
         source_decisions = decision_counts_by_source[source.value]
         retained_count = source_decisions[T1Decision.RETAIN.value]
         source_report[source.value] = {
@@ -852,8 +853,7 @@ def _validate_runtime_manifest_semantics(
         manifest.get("schema_version") != POLICY_T1_MIXED_MANIFEST_SCHEMA
         or manifest.get("dataset_kind") != POLICY_T1_MIXED_DATASET_KIND
         or manifest.get("decision_stage") != "final"
-        or manifest.get("task_kind_policy")
-        != POLICY_SELECTION_TASK_KIND_POLICY
+        or manifest.get("task_kind_policy") != POLICY_SELECTION_TASK_KIND_POLICY
         or manifest.get("selection_policy")
         != {"t1": "retain", "t2": "ignored", "post_t1_balancing": "none"}
         or manifest.get("content_sha256") != binding.content_sha256
@@ -912,13 +912,13 @@ def _validate_runtime_manifest_semantics(
         )
     sources = manifest.get("sources")
     if not isinstance(sources, Mapping) or set(sources) != {
-        source.value for source in SelectionSource
+        source.value for source in POLICY_SELECTION_PRIMARY_SOURCES
     }:
         raise PolicyT1MixedRuntimeValidationError("mixed Policy T1 source set differs")
     retained_sum = 0
     candidate_sum = 0
     expected_task_kind_keys = {task_kind.value for task_kind in DeepEyesTaskKind}
-    for source in SelectionSource:
+    for source in POLICY_SELECTION_PRIMARY_SOURCES:
         report = sources[source.value]
         if not isinstance(report, Mapping) or set(report) != _SOURCE_REPORT_FIELDS:
             raise PolicyT1MixedRuntimeValidationError(
@@ -1029,7 +1029,7 @@ def load_policy_t1_mixed_runtime(
     seen: set[str] = set()
     source_counts: Counter[str] = Counter()
     task_kind_counts_by_source: dict[str, Counter[str]] = {
-        source.value: Counter() for source in SelectionSource
+        source.value: Counter() for source in POLICY_SELECTION_PRIMARY_SOURCES
     }
     image_hash_cache: dict[Path, str] = {}
     try:
@@ -1189,7 +1189,7 @@ def load_policy_t1_mixed_runtime(
             task_kind.value: task_kind_counts_by_source[source.value][task_kind.value]
             for task_kind in DeepEyesTaskKind
         }
-        for source in SelectionSource
+        for source in POLICY_SELECTION_PRIMARY_SOURCES
     }
     if observed_task_kind_counts != expected_task_kind_counts:
         raise PolicyT1MixedRuntimeValidationError(

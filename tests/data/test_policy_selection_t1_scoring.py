@@ -39,6 +39,58 @@ for name in ('torch', 'vllm', 'transformers', 'PIL'):
     assert "--quality-exclusions" in completed.stdout
 
 
+def test_semantic_queue_uses_sample_level_task_kind() -> None:
+    run = SimpleNamespace(
+        run_id="fixture-run",
+        manifest_sha256="1" * 64,
+        verifier={
+            "semantic_judge": {
+                "prompt_sha256": "2" * 64,
+                "repository": "judge/repository",
+                "served_name": "judge-model",
+            }
+        },
+    )
+
+    def queued(source: SelectionSource, question: str, ground_truth: str) -> str:
+        candidate = SimpleNamespace(
+            identity_sha256="3" * 64,
+            sample_id=f"{source.value}-sample",
+            source=source,
+            question=question,
+            ground_truth=ground_truth,
+        )
+        evidence = SimpleNamespace(
+            request_id="request-1",
+            attempt_index=0,
+            evidence_sha256="4" * 64,
+        )
+        records = scoring._judge_queue(
+            (
+                {
+                    "request_id": evidence.request_id,
+                    "status": "verifier_error",
+                    "semantic_required": True,
+                    "answer": "candidate answer",
+                },
+            ),
+            ((candidate, evidence, False),),
+            run=run,
+            judge_config_sha256="5" * 64,
+        )
+        return records[0]["task_kind"]
+
+    assert queued(SelectionSource.THINKLITE, "What is shown?", "food truck") == (
+        "open_vqa"
+    )
+    assert queued(SelectionSource.THINKLITE, r"Find \angle ABC.", "45 degrees") == (
+        "math"
+    )
+    assert queued(SelectionSource.TEACHER, "What is shown?", "food truck") == (
+        "open_vqa"
+    )
+
+
 def test_latest_length_is_terminal_truncated_without_requiring_retry(
     monkeypatch,
 ) -> None:

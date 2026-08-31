@@ -9,6 +9,7 @@ import re
 
 from tgvf_rl.public_api_compat import rebind_public_function
 
+from .policy_selection import POLICY_SELECTION_PRIMARY_SOURCES as PRIMARY_SOURCES
 from .policy_selection import SelectionCandidate, SelectionSource
 from .policy_selection_config_schema import (
     T1_INSTRUCT_ANSWER_PARSER as T1_INSTRUCT_ANSWER_PARSER,
@@ -167,7 +168,7 @@ _SELECTION_FIELDS = {
     "manifest_path",
     "manifest_sha256",
 }
-_VERIFIER_FIELDS = {
+_VERIFIER_V1_FIELDS = {
     "schema",
     "answer_parser",
     "arxivqa_rule",
@@ -175,6 +176,7 @@ _VERIFIER_FIELDS = {
     "vstar_rule",
     "semantic_judge",
 }
+_VERIFIER_V2_FIELDS = _VERIFIER_V1_FIELDS | {"teacher_rule"}
 _SEMANTIC_JUDGE_FIELDS = {
     "provider",
     "repository",
@@ -516,8 +518,8 @@ def load_t1_run_config(
             source_record["rows"], field_name=f"data.sources[{index}].rows", minimum=1
         )
         sources.append(T1DataSource(source, source_path, source_sha256, rows))
-    if {item.source for item in sources} != set(SelectionSource) or len(sources) != 3:
-        raise ValueError("data.sources must contain vstar, arxivqa, and thinklite once")
+    if len({item.source for item in sources}) != len(sources):
+        raise ValueError("data.sources must not repeat a source")
     if verify_data_files:
         for source in sources:
             actual_sha256 = _sha256_file(source.path)
@@ -529,9 +531,11 @@ def load_t1_run_config(
                 raise ValueError(
                     f"{source.source.value} candidate row count {actual_rows} != {source.rows}"
                 )
-
     selection = _mapping(record["selection"], field_name="selection")
     _exact_fields(selection, _SELECTION_FIELDS, field_name="selection")
+    declared_selection_rows = _required_int(
+        selection["rows"], field_name="selection.rows", minimum=1
+    )
     selection_profile = (
         selection["kind"],
         selection["algorithm_version"],
@@ -541,24 +545,33 @@ def load_t1_run_config(
         "t1-canary-content-hash-v1",
     ):
         expected_selection_rows = 192
-        expected_source_counts = {source.value: 64 for source in SelectionSource}
+        expected_source_counts = {source.value: 64 for source in PRIMARY_SOURCES}
     elif selection_profile == (
         "source_quota",
         T1_RECOMMENDED_SELECTION_ALGORITHM_VERSION,
     ):
         expected_selection_rows = T1_RECOMMENDED_SELECTION_ROWS
         expected_source_counts = dict(T1_RECOMMENDED_SOURCE_QUOTAS)
+    elif selection_profile == (
+        "teacher_full",
+        "teacher-train-source-uid-full-v1",
+    ):
+        expected_selection_rows = declared_selection_rows
+        expected_source_counts = {
+            SelectionSource.TEACHER.value: declared_selection_rows
+        }
     else:
         raise ValueError("selection kind/algorithm profile is unsupported")
+    expected_data_sources = set(map(SelectionSource, expected_source_counts))
+    if {item.source for item in sources} != expected_data_sources:
+        raise ValueError("data.sources differ from the selected T1 profile")
     candidates_path = _absolute_normal_path(
         selection["candidates_path"], field_name="selection.candidates_path"
     )
     candidates_sha256 = _required_sha256(
         selection["candidates_sha256"], field_name="selection.candidates_sha256"
     )
-    selection_rows = _required_int(
-        selection["rows"], field_name="selection.rows", minimum=1
-    )
+    selection_rows = declared_selection_rows
     if selection_rows != expected_selection_rows:
         raise ValueError(
             f"selection.rows must be {expected_selection_rows} for this profile"
@@ -615,10 +628,11 @@ def load_t1_run_config(
                 "selection candidates must have unique identities and sample IDs"
             )
         source_counts = {
-            source.value: sum(
-                candidate.source is source for candidate in selected_candidates
+            source_name: sum(
+                candidate.source is SelectionSource(source_name)
+                for candidate in selected_candidates
             )
-            for source in SelectionSource
+            for source_name in expected_source_counts
         }
         if source_counts != expected_source_counts:
             raise ValueError(
@@ -652,7 +666,7 @@ def load_t1_run_config(
                 raise ValueError(
                     "selection manifest candidate order or identity mismatch"
                 )
-        else:
+        elif selection["kind"] == "source_quota":
             if (
                 selection_manifest.get("schema_version")
                 != T1_RECOMMENDED_SELECTION_MANIFEST_SCHEMA
@@ -709,9 +723,46 @@ def load_t1_run_config(
                 )
                 if actual_binding != expected_binding:
                     raise ValueError("source-quota manifest source binding differs")
-
+        else:
+            if (
+                selection_manifest.get("schema_version")
+                != "tgvf.policy-selection.teacher-t1-candidates-manifest.v1"
+            ):
+                raise ValueError("teacher selection manifest schema is unsupported")
+            candidates_binding = _mapping(
+                selection_manifest.get("candidates"),
+                field_name="teacher selection manifest candidates",
+            )
+            if (
+                candidates_binding.get("path") != str(candidates_path)
+                or candidates_binding.get("sha256") != candidates_sha256
+                or candidates_binding.get("rows") != selection_rows
+            ):
+                raise ValueError("teacher selection candidate identity differs")
+            if (
+                selection_manifest.get("logical_attempts")
+                != selection_rows * T1_ATTEMPTS
+            ):
+                raise ValueError("teacher selection logical attempt count differs")
+            if selection_manifest.get("source_counts") != expected_source_counts:
+                raise ValueError("teacher selection source count differs")
     verifier = _mapping(record["verifier"], field_name="verifier")
-    _exact_fields(verifier, _VERIFIER_FIELDS, field_name="verifier")
+    verifier_schema = verifier.get("schema")
+    if selection["kind"] != "teacher_full":
+        _exact_fields(verifier, _VERIFIER_V1_FIELDS, field_name="verifier")
+        if verifier_schema != "t1-source-verifier-v1":
+            raise ValueError("verifier.schema must be 't1-source-verifier-v1'")
+    else:
+        _exact_fields(verifier, _VERIFIER_V2_FIELDS, field_name="verifier")
+        if verifier_schema != "t1-source-verifier-v2":
+            raise ValueError(
+                "teacher T1 requires verifier schema t1-source-verifier-v2"
+            )
+        if (
+            verifier["teacher_rule"]
+            != "mcq-bounded-label-else-normalized-exact-numeric-semantic-v1"
+        ):
+            raise ValueError("verifier.teacher_rule is not accepted")
     for field in (
         "schema",
         "answer_parser",
@@ -750,7 +801,6 @@ def load_t1_run_config(
         raise ValueError("semantic judge max_tokens must be 256")
     if _required_bool(judge["remote"], field_name="verifier.semantic_judge.remote"):
         raise ValueError("semantic judge remote must be false")
-
     output_root = _absolute_normal_path(record["output_root"], field_name="output_root")
     normalized = _json_clone(record)
     record_bytes = _canonical_json_bytes(normalized)

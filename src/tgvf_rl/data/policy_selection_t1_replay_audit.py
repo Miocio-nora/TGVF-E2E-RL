@@ -17,7 +17,11 @@ from typing import Any
 
 from tgvf_rl.artifact_contracts import canonical_json_sha256
 
-from .policy_selection import SelectionCandidate, SelectionSource
+from .policy_selection import (
+    POLICY_SELECTION_PRIMARY_SOURCES,
+    SelectionCandidate,
+    SelectionSource,
+)
 from .policy_selection_runtime import (
     T1_ATTEMPTS,
     T1RawGenerationEvidence,
@@ -152,8 +156,7 @@ class T1ReplayAuditPlan:
                                 history[-1].evidence.budget_revision
                             ),
                             "recorded_revisions": [
-                                located.evidence.budget_revision
-                                for located in history
+                                located.evidence.budget_revision for located in history
                             ],
                             "evidence_sha256": history[-1].evidence.evidence_sha256,
                             "sampled_token_ids_sha256": (
@@ -203,13 +206,18 @@ def select_replay_audit_candidates(
     if type(rank) is not int or not 0 <= rank < world_size:
         raise ValueError("rank must be inside world_size")
     selected: list[tuple[SelectionCandidate, str]] = []
-    for source in SelectionSource:
+    candidate_sources = {candidate.source for candidate in candidates}
+    expected_sources = (
+        (SelectionSource.TEACHER,)
+        if candidate_sources == {SelectionSource.TEACHER}
+        else POLICY_SELECTION_PRIMARY_SOURCES
+    )
+    for source in expected_sources:
         eligible = [
             candidate
             for candidate in candidates
             if candidate.source is source
-            and candidate_rank(candidate.identity_sha256, world_size=world_size)
-            == rank
+            and candidate_rank(candidate.identity_sha256, world_size=world_size) == rank
         ]
         if not eligible:
             raise ValueError(
@@ -340,9 +348,7 @@ def _build_histories(
     return normalized, locations
 
 
-def plan_t1_replay_audit(
-    config_path: str | Path, *, rank: int
-) -> T1ReplayAuditPlan:
+def plan_t1_replay_audit(config_path: str | Path, *, rank: int) -> T1ReplayAuditPlan:
     """Validate the complete immutable canary and build one fixed replay plan."""
 
     path = Path(config_path).resolve()
@@ -382,7 +388,9 @@ def plan_t1_replay_audit(
                 if evidence.sampled_token_ids is None:
                     raise ValueError("audited evidence omitted sampled token IDs")
                 if evidence.finish_reason == "error":
-                    raise ValueError("generation-error evidence cannot pass exact replay")
+                    raise ValueError(
+                        "generation-error evidence cannot pass exact replay"
+                    )
         selections.append(
             T1ReplayAuditSelection(
                 candidate=candidate,
@@ -643,9 +651,7 @@ async def _replay_plan(plan: T1ReplayAuditPlan) -> list[dict[str, object]]:
                             sampling_params_type=SamplingParams,
                             output_kind=RequestOutputKind.FINAL_ONLY,
                             run=run,
-                            prepared=prepared[
-                                selection.candidate.identity_sha256
-                            ],
+                            prepared=prepared[selection.candidate.identity_sha256],
                             attempt_index=located.evidence.attempt_index,
                             budget_revision=revision,
                         )
@@ -679,9 +685,8 @@ async def _replay_plan(plan: T1ReplayAuditPlan) -> list[dict[str, object]]:
 def _write_audit_report(
     plan: T1ReplayAuditPlan, comparisons: Sequence[Mapping[str, object]]
 ) -> dict[str, object]:
-    passed = (
-        len(comparisons) == plan.audited_attempt_count
-        and all(comparison.get("passed") is True for comparison in comparisons)
+    passed = len(comparisons) == plan.audited_attempt_count and all(
+        comparison.get("passed") is True for comparison in comparisons
     )
     report: dict[str, object] = {
         "schema_version": T1_REPLAY_AUDIT_SCHEMA,
