@@ -8,7 +8,7 @@ profile = "atomic"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "934c3eaf569709504337f65fcad11e8df6a7c992"
+commit = "89dfd52decece90cbb2d3923cc9dc65c8eb6f0d4"
 dirty = false
 
 [model]
