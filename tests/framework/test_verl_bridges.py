@@ -559,8 +559,9 @@ def test_runtime_requirements_are_vllm_only_and_fsdp2_strict() -> None:
         VerlRuntimeRequirements(calculate_log_probs=False)
     with pytest.raises(VerlConfigurationError, match="synchronous"):
         FSDP2BridgeConfig(checkpoint_async_save=True)
-    with pytest.raises(VerlConfigurationError, match="two ranks"):
-        FSDP2BridgeConfig(world_size=1, fsdp_size=1)
+    assert FSDP2BridgeConfig(world_size=1, fsdp_size=1).world_size == 1
+    with pytest.raises(VerlConfigurationError, match="positive"):
+        FSDP2BridgeConfig(world_size=0, fsdp_size=0)
 
 
 def test_concrete_verl_config_mapping_checks_public_paths() -> None:

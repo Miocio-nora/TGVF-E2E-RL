@@ -82,19 +82,20 @@ def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
         if not values or len(set(values)) != len(values):
             raise ValueError(f"distributed.{name} must be non-empty and unique")
     world_size = _positive_int(table["world_size"], name="distributed.world_size")
-    if logical != tuple(range(len(logical))) or len(physical) != len(logical):
-        raise ValueError("distributed physical/logical GPU mapping is invalid")
-    if len(physical) != 4 or logical != (0, 1, 2, 3):
+    expected_logical = tuple(range(world_size))
+    if logical != expected_logical:
         raise ValueError(
-            "this Policy E2E smoke requires four physical GPUs mapped to "
-            "logical GPUs 0-3"
+            "distributed.logical_gpu_ids must be contiguous from zero and match "
+            "distributed.world_size"
         )
-    if actor != logical or world_size != len(actor):
+    if len(physical) != world_size:
+        raise ValueError(
+            "distributed.physical_gpu_ids must match distributed.world_size"
+        )
+    if actor != logical:
         raise ValueError(
             "this smoke requires every logical GPU in the FSDP2 actor world"
         )
-    if world_size != 4:
-        raise ValueError("this Policy E2E smoke identity requires world_size=4")
     placement = _text(table["placement"], name="distributed.placement")
     if placement != "colocated" or rollout != actor:
         raise ValueError("this smoke requires colocated actor/rollout placement")
@@ -103,8 +104,6 @@ def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
     tp = _positive_int(
         table["vllm_tensor_parallel_size"], name="distributed.vllm_tensor_parallel_size"
     )
-    if tp != 1:
-        raise ValueError("the initial 4-GPU Policy E2E smoke requires vLLM TP=1")
     if len(rollout) % tp != 0:
         raise ValueError("vLLM tensor parallel size must divide rollout GPUs")
     return SmokeDistributedBinding(

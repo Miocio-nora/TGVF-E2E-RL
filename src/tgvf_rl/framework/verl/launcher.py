@@ -150,24 +150,39 @@ class UpstreamVerlLaunchPlan:
             )
         except ValueError as error:
             raise ValueError(
-                "Policy Pilot launch must bind four integer physical GPU IDs"
+                "Policy launch must bind integer physical GPU IDs"
             ) from error
         if (
-            len(physical_gpu_ids) != 4
-            or len(set(physical_gpu_ids)) != 4
+            not physical_gpu_ids
+            or len(set(physical_gpu_ids)) != len(physical_gpu_ids)
             or any(device < 0 for device in physical_gpu_ids)
         ):
-            raise ValueError("Policy Pilot launch must bind four unique physical GPUs")
-        if self.overrides.get("trainer.n_gpus_per_node") != 4:
-            raise ValueError("initial Policy Pilot launch must bind world size four")
-        if (
-            self.overrides.get("actor_rollout_ref.rollout.tensor_model_parallel_size")
-            != 1
+            raise ValueError("Policy launch must bind non-empty unique physical GPUs")
+        world_size = len(physical_gpu_ids)
+        world_size_overrides = (
+            "trainer.n_gpus_per_node",
+            "actor_rollout_ref.rollout.n_gpus_per_node",
+            "actor_rollout_ref.rollout.agent.num_workers",
+        )
+        if any(
+            type(self.overrides.get(name)) is not int
+            or self.overrides.get(name) != world_size
+            for name in world_size_overrides
         ):
-            raise ValueError("initial Policy Pilot launch must bind vLLM TP=1")
-        if self.overrides.get("actor_rollout_ref.rollout.agent.num_workers") != 4:
             raise ValueError(
-                "initial Policy Pilot launch requires four AgentLoop workers"
+                "Policy launch GPU and AgentLoop worker counts must match visible "
+                "devices"
+            )
+        tensor_parallel_size = self.overrides.get(
+            "actor_rollout_ref.rollout.tensor_model_parallel_size"
+        )
+        if (
+            type(tensor_parallel_size) is not int
+            or tensor_parallel_size <= 0
+            or world_size % tensor_parallel_size != 0
+        ):
+            raise ValueError(
+                "vLLM tensor parallel size must be positive and divide visible GPUs"
             )
         if (
             self.overrides.get("actor_rollout_ref.actor.fsdp_config.forward_only")

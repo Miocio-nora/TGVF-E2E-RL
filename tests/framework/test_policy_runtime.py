@@ -9,6 +9,7 @@ from tgvf_rl.contracts.errors import IdentityMismatchError
 from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.framework.verl.policy_runtime import (
     ExactLoRASnapshotPolicyVersionPort,
+    PolicyAgentLoopWorkerPlacement,
     PolicyE2ERuntimeInvocationFactory,
     PolicyE2ERuntimeProduct,
     _reset_policy_e2e_runtime_singletons_for_tests,
@@ -150,6 +151,36 @@ def test_worker_name_maps_deterministically_to_configured_physical_gpu(
         resolve_policy_agent_loop_worker_placement(
             config, environment={}, actor_name="some-other-ray-actor"
         )
+
+
+@pytest.mark.parametrize(
+    ("worker_index", "logical_gpu_id", "physical_gpu_id", "world_size"),
+    [(0, 0, 7, 1), (1, 1, 6, 2)],
+)
+def test_worker_placement_accepts_any_positive_generic_world_size(
+    worker_index: int,
+    logical_gpu_id: int,
+    physical_gpu_id: int,
+    world_size: int,
+) -> None:
+    placement = PolicyAgentLoopWorkerPlacement(
+        worker_index=worker_index,
+        logical_gpu_id=logical_gpu_id,
+        physical_gpu_id=physical_gpu_id,
+        world_size=world_size,
+    )
+
+    assert placement.world_size == world_size
+    assert placement.torch_device == torch.device("cuda", logical_gpu_id)
+
+
+def test_worker_placement_rejects_nonpositive_and_out_of_world_values() -> None:
+    with pytest.raises(ValueError, match="positive world_size"):
+        PolicyAgentLoopWorkerPlacement(0, 0, 7, 0)
+    with pytest.raises(ValueError, match="worker index lies outside"):
+        PolicyAgentLoopWorkerPlacement(2, 1, 7, 2)
+    with pytest.raises(ValueError, match="logical GPU ID lies outside"):
+        PolicyAgentLoopWorkerPlacement(1, 2, 7, 2)
 
 
 def test_exact_snapshot_port_installs_initial_and_each_new_committed_version(

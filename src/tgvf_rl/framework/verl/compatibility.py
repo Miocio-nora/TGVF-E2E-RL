@@ -285,10 +285,8 @@ class FSDP2BridgeConfig:
         object.__setattr__(
             self, "checkpoint_load_contents", tuple(self.checkpoint_load_contents)
         )
-        if type(self.world_size) is not int or self.world_size < 2:
-            raise VerlConfigurationError(
-                "the accepted FSDP2 probe requires at least two ranks"
-            )
+        if type(self.world_size) is not int or self.world_size <= 0:
+            raise VerlConfigurationError("FSDP2 world_size must be positive")
         if type(self.fsdp_size) is not int or self.fsdp_size not in {
             -1,
             self.world_size,

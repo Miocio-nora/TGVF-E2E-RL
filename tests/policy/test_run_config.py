@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -491,6 +492,58 @@ def _write_config(tmp_path: Path) -> tuple[Path, str, dict[str, object]]:
     return path, text, external
 
 
+def _with_generic_gpu_topology(
+    text: str,
+    *,
+    physical_gpu_ids: tuple[int, ...],
+    logical_gpu_ids: tuple[int, ...] | None = None,
+    world_size: int | None = None,
+    actor_logical_gpu_ids: tuple[int, ...] | None = None,
+    rollout_logical_gpu_ids: tuple[int, ...] | None = None,
+    tensor_parallel_size: int = 1,
+) -> str:
+    logical = (
+        tuple(range(len(physical_gpu_ids)))
+        if logical_gpu_ids is None
+        else logical_gpu_ids
+    )
+    world = len(physical_gpu_ids) if world_size is None else world_size
+    actor = logical if actor_logical_gpu_ids is None else actor_logical_gpu_ids
+    rollout = logical if rollout_logical_gpu_ids is None else rollout_logical_gpu_ids
+
+    def _array(values: tuple[int, ...]) -> str:
+        return "[" + ", ".join(str(value) for value in values) + "]"
+
+    replacements = (
+        ("\nglobal_prompt_batch_size = 4", f"\nglobal_prompt_batch_size = {world}"),
+        (
+            "\nphysical_gpu_ids = [0, 1, 2, 3]",
+            f"\nphysical_gpu_ids = {_array(physical_gpu_ids)}",
+        ),
+        (
+            "\nlogical_gpu_ids = [0, 1, 2, 3]",
+            f"\nlogical_gpu_ids = {_array(logical)}",
+        ),
+        ("\nworld_size = 4", f"\nworld_size = {world}"),
+        (
+            "\nactor_logical_gpu_ids = [0, 1, 2, 3]",
+            f"\nactor_logical_gpu_ids = {_array(actor)}",
+        ),
+        (
+            "\nrollout_logical_gpu_ids = [0, 1, 2, 3]",
+            f"\nrollout_logical_gpu_ids = {_array(rollout)}",
+        ),
+        (
+            "\nvllm_tensor_parallel_size = 1",
+            f"\nvllm_tensor_parallel_size = {tensor_parallel_size}",
+        ),
+    )
+    for old, new in replacements:
+        assert old in text
+        text = text.replace(old, new, 1)
+    return text
+
+
 def test_horizon_extension_plan_changes_only_stopping_and_checkpoint_boundaries(
     tmp_path: Path,
 ) -> None:
@@ -618,6 +671,121 @@ def test_accepts_a_distinct_four_gpu_physical_mapping(tmp_path: Path) -> None:
     assert config.distributed.physical_gpu_ids == (4, 5, 6, 7)
     assert config.distributed.logical_gpu_ids == (0, 1, 2, 3)
     assert plan.environment["CUDA_VISIBLE_DEVICES"] == "4,5,6,7"
+
+
+@pytest.mark.parametrize(
+    ("physical_gpu_ids", "tensor_parallel_size"),
+    [((7,), 1), ((4, 6), 2)],
+)
+def test_generic_policy_topology_accepts_one_or_two_visible_gpus(
+    tmp_path: Path,
+    physical_gpu_ids: tuple[int, ...],
+    tensor_parallel_size: int,
+) -> None:
+    path, text, _ = _write_config(tmp_path)
+    path.write_text(
+        _with_generic_gpu_topology(
+            text,
+            physical_gpu_ids=physical_gpu_ids,
+            tensor_parallel_size=tensor_parallel_size,
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_policy_e2e_smoke_run_config(path)
+    plan = build_policy_e2e_smoke_verl_plan(config)
+    world_size = len(physical_gpu_ids)
+
+    assert config.distributed.logical_gpu_ids == tuple(range(world_size))
+    assert config.distributed.world_size == world_size
+    assert plan.environment["CUDA_VISIBLE_DEVICES"] == ",".join(
+        str(device) for device in physical_gpu_ids
+    )
+    assert plan.overrides["trainer.n_gpus_per_node"] == world_size
+    assert plan.overrides["actor_rollout_ref.rollout.n_gpus_per_node"] == world_size
+    assert plan.overrides["actor_rollout_ref.rollout.agent.num_workers"] == world_size
+    assert (
+        plan.overrides["actor_rollout_ref.rollout.tensor_model_parallel_size"]
+        == tensor_parallel_size
+    )
+
+
+@pytest.mark.parametrize(
+    ("topology", "error"),
+    [
+        (
+            {"physical_gpu_ids": (4, 4)},
+            "physical_gpu_ids must be non-empty and unique",
+        ),
+        (
+            {
+                "physical_gpu_ids": (4, 6),
+                "logical_gpu_ids": (0, 2),
+            },
+            "logical_gpu_ids must be contiguous from zero",
+        ),
+        (
+            {
+                "physical_gpu_ids": (4, 6),
+                "world_size": 1,
+            },
+            "logical_gpu_ids must be contiguous from zero",
+        ),
+        (
+            {
+                "physical_gpu_ids": (4, 6),
+                "tensor_parallel_size": 3,
+            },
+            "tensor parallel size must divide rollout GPUs",
+        ),
+    ],
+)
+def test_generic_policy_topology_rejects_duplicates_and_mismatches(
+    tmp_path: Path,
+    topology: dict[str, object],
+    error: str,
+) -> None:
+    path, text, _ = _write_config(tmp_path)
+    path.write_text(
+        _with_generic_gpu_topology(text, **topology),  # type: ignore[arg-type]
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=error):
+        load_policy_e2e_smoke_run_config(path)
+
+
+def test_launch_plan_rejects_duplicate_devices_and_worker_count_drift(
+    tmp_path: Path,
+) -> None:
+    path, text, _ = _write_config(tmp_path)
+    path.write_text(
+        _with_generic_gpu_topology(text, physical_gpu_ids=(4, 6)),
+        encoding="utf-8",
+    )
+    plan = build_policy_e2e_smoke_verl_plan(load_policy_e2e_smoke_run_config(path))
+
+    duplicate_environment = dict(plan.environment)
+    duplicate_environment["CUDA_VISIBLE_DEVICES"] = "4,4"
+    with pytest.raises(ValueError, match="unique physical GPUs"):
+        replace(plan, environment=duplicate_environment)
+
+    for override_name in (
+        "trainer.n_gpus_per_node",
+        "actor_rollout_ref.rollout.n_gpus_per_node",
+        "actor_rollout_ref.rollout.agent.num_workers",
+    ):
+        mismatched_overrides = dict(plan.overrides)
+        mismatched_overrides[override_name] = 1
+        with pytest.raises(ValueError, match="counts must match visible devices"):
+            replace(plan, overrides=mismatched_overrides)
+
+    mismatched_overrides = dict(plan.overrides)
+    mismatched_overrides[
+        "actor_rollout_ref.rollout.tensor_model_parallel_size"
+    ] = 3
+    with pytest.raises(ValueError, match="divide visible GPUs"):
+        replace(plan, overrides=mismatched_overrides)
 
 
 def test_rejects_unnamed_reward_weight_profile(tmp_path: Path) -> None:
