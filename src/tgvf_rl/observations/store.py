@@ -201,6 +201,7 @@ class TrajectoryReplayRecord:
         if self.crop_vision_replay_mode not in {
             "no_crop",
             "shared_frozen_recorded_features",
+            "current_live_reference_recorded_features",
         }:
             raise ValueError("unknown crop vision replay mode")
         if self.cache_mode not in {"no_cache", "prefill_decode", "recorded_cache"}:
@@ -555,19 +556,34 @@ class ObservationStore:
             if occupied & positions:
                 raise ReplayMismatchError("multi-call replay visual positions overlap")
             occupied.update(positions)
-        has_crop = any(
-            isinstance(record, (CropObservationRecord, CropTGVFObservationRecord))
-            for record in observations
+        has_plain_crop = any(
+            isinstance(record, CropObservationRecord) for record in observations
         )
-        if has_crop and replay.crop_vision_replay_mode != (
-            "shared_frozen_recorded_features"
-        ):
+        has_crop_tgvf = any(
+            isinstance(record, CropTGVFObservationRecord) for record in observations
+        )
+        if has_plain_crop and has_crop_tgvf:
             raise ReplayMismatchError(
-                "crop replay requires an explicit shared frozen-vision contract"
+                "one trajectory cannot mix plain Crop and atomic Crop+TGVF"
             )
-        if not has_crop and replay.crop_vision_replay_mode != "no_crop":
+        expected_crop_mode = (
+            (
+                "current_live_reference_recorded_features"
+                if all(
+                    not isinstance(record, CropObservationRecord)
+                    or record.crop_visual.preprocessed_pixel_values is not None
+                    for record in observations
+                )
+                else "shared_frozen_recorded_features"
+            )
+            if has_plain_crop
+            else "current_live_reference_recorded_features"
+            if has_crop_tgvf
+            else "no_crop"
+        )
+        if replay.crop_vision_replay_mode != expected_crop_mode:
             raise ReplayMismatchError(
-                "crop vision replay mode was set without a crop observation"
+                "crop replay mode differs from its observation type"
             )
         if any(
             position >= sequence

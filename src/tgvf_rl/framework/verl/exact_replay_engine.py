@@ -248,6 +248,7 @@ def exact_replay_forward_step(
         model_training=bool(module.training),
     )
     _validate_port_role(port, role)
+    _validate_execution_capabilities(micro_batch, port)
     _unshard_exact_replay_root(module)
 
     prompt_rows = _batched_sidecar(micro_batch, EXACT_PROMPT_IDS_FIELD)
@@ -677,7 +678,6 @@ def _validate_unsupported_outputs(micro_batch: Any) -> None:
         "calculate_sum_pi_squared",
         "distillation_use_topk",
         "distillation_only",
-        "use_fused_kernels",
     ):
         if name in micro_batch and _as_bool(_unwrapped_value(micro_batch[name]), name):
             raise ValueError(f"exact replay engine does not materialize {name}")
@@ -691,6 +691,20 @@ def _validate_unsupported_outputs(micro_batch: Any) -> None:
             accepted = temperature == 1.0
         if not accepted:
             raise ValueError("exact replay engine requires Pilot temperature 1.0")
+
+
+def _validate_execution_capabilities(micro_batch: Any, port: Any) -> None:
+    """Reject an execution flag only when the selected replay port lacks it."""
+
+    requested = "use_fused_kernels" in micro_batch and _as_bool(
+        _unwrapped_value(micro_batch["use_fused_kernels"]),
+        "use_fused_kernels",
+    )
+    if requested and not bool(getattr(port, "materializes_fused_kernels", False)):
+        raise ValueError(
+            "selected exact replay port does not implement fused selected-token "
+            "logprobs"
+        )
 
 
 def _single_sampling_identity(integrity: DataProtoIntegrityView) -> SamplingIdentity:

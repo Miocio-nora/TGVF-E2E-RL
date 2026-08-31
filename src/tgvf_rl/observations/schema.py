@@ -13,6 +13,11 @@ from tgvf_rl.contracts.identity import (
 from tgvf_rl.contracts.tensors import TensorArtifactRef, TensorPayloadSet
 
 
+TRAJECTORY_SOURCE_VISUAL_SCHEMA_V1 = "trajectory-source-visual-v1"
+TRAJECTORY_SOURCE_VISUAL_SCHEMA_V2 = "trajectory-source-visual-v2"
+CROP_TGVF_OBSERVATION_SCHEMA_V3 = "crop-tgvf-observation-v3"
+
+
 @dataclass(frozen=True, slots=True)
 class ConditionProvenance:
     provider: str
@@ -175,6 +180,43 @@ class TrajectorySourceVisual:
                 raise ValueError(
                     f"trajectory source DeepStack branch {index} features and positions differ"
                 )
+
+
+@dataclass(frozen=True, slots=True)
+class TrajectorySourceVisualV2(TrajectorySourceVisual):
+    """Trainable-replay source state with exact processor output."""
+
+    preprocessed_pixel_values: TensorArtifactRef | None = None
+    schema_version: str = TRAJECTORY_SOURCE_VISUAL_SCHEMA_V2
+
+    def __post_init__(self) -> None:
+        TrajectorySourceVisual.__post_init__(self)
+        if self.schema_version != TRAJECTORY_SOURCE_VISUAL_SCHEMA_V2:
+            raise ValueError(
+                f"unsupported trajectory source visual schema {self.schema_version!r}"
+            )
+        if self.preprocessed_pixel_values is None:
+            raise ValueError(
+                "trajectory source visual v2 requires preprocessed pixel_values"
+            )
+        pixel_values = self.preprocessed_pixel_values.descriptor
+        if (
+            len(pixel_values.shape) != 2
+            or pixel_values.shape[0] <= 0
+            or pixel_values.shape[1] <= 0
+        ):
+            raise ValueError("preprocessed pixel_values must have shape [N, patch_dim]")
+        if not _is_floating_dtype(pixel_values.dtype):
+            raise TypeError("preprocessed pixel_values must use a floating dtype")
+        expected_tokens = _grid_token_count(self.state.image_grid_thw)
+        if pixel_values.shape[0] != expected_tokens:
+            raise ValueError(
+                "preprocessed pixel_values rows differ from image_grid_thw"
+            )
+        if pixel_values.shape[0] != _feature_count(self.state.premerge_main):
+            raise ValueError(
+                "preprocessed pixel_values rows differ from source pre-merge tokens"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,6 +386,7 @@ class CropVisualState:
     positions: tuple[int, ...]
     deepstack_branch_layers: tuple[int, ...]
     deepstack_injection_positions: tuple[tuple[int, ...], ...]
+    preprocessed_pixel_values: TensorArtifactRef | None = None
 
     def __post_init__(self) -> None:
         if self.crop_pixels.descriptor.dtype != "uint8" or (
@@ -373,6 +416,24 @@ class CropVisualState:
             raise ValueError("crop merged features and positions differ")
         if len(set(self.positions)) != len(self.positions):
             raise ValueError("crop positions must be unique")
+        if self.preprocessed_pixel_values is not None:
+            pixels = self.preprocessed_pixel_values.descriptor
+            if (
+                len(pixels.shape) != 2
+                or pixels.shape[0] <= 0
+                or pixels.shape[1] <= 0
+            ):
+                raise ValueError(
+                    "crop preprocessed pixel_values must have shape [N, patch_dim]"
+                )
+            if not _is_floating_dtype(pixels.dtype):
+                raise TypeError(
+                    "crop preprocessed pixel_values must use a floating dtype"
+                )
+            if pixels.shape[0] != _grid_token_count(self.image_grid_thw):
+                raise ValueError(
+                    "crop preprocessed pixel_values rows differ from image_grid_thw"
+                )
         for index, (ref, positions) in enumerate(
             zip(
                 self.merged_deepstack,
@@ -491,6 +552,7 @@ class CropTGVFVisualState:
     """Exact crop pixels and processor-owned visual state consumed by TGVF."""
 
     crop_pixels: TensorArtifactRef
+    preprocessed_pixel_values: TensorArtifactRef
     processor_identity: ArtifactIdentity
     layout_identity: ArtifactIdentity
     source: SourceVisualState
@@ -503,6 +565,16 @@ class CropTGVFVisualState:
             raise ValueError("atomic crop pixels must be RGB uint8 [H,W,3]")
         if any(value <= 0 for value in self.crop_pixels.descriptor.shape[:2]):
             raise ValueError("atomic crop pixels must have positive dimensions")
+        preprocessed = self.preprocessed_pixel_values.descriptor
+        if (
+            len(preprocessed.shape) != 2
+            or preprocessed.shape[0] <= 0
+            or preprocessed.shape[1] <= 0
+            or not _is_floating_dtype(preprocessed.dtype)
+        ):
+            raise ValueError(
+                "atomic crop preprocessed pixels must be floating [tokens, patch]"
+            )
         if not isinstance(self.processor_identity, ArtifactIdentity) or not isinstance(
             self.layout_identity, ArtifactIdentity
         ):
@@ -539,9 +611,13 @@ class CropTGVFObservationRecord:
     layout: VisualLayout
     masks: ObservationMasks
     cache: CacheContract
+    condition_hq: TensorArtifactRef
 
     def __post_init__(self) -> None:
-        if self.schema_version != "crop-tgvf-observation-v2" or not self.observation_id:
+        if (
+            self.schema_version != CROP_TGVF_OBSERVATION_SCHEMA_V3
+            or not self.observation_id
+        ):
             raise ValueError("atomic crop+TGVF schema version and ID are required")
         if self.call_index < 0:
             raise ValueError("atomic crop+TGVF call index must be non-negative")
@@ -631,6 +707,27 @@ class CropTGVFObservationRecord:
             raise ValueError("atomic original source features and positions differ")
         if _feature_count(self.payload.main_d) != len(self.layout.d_positions):
             raise ValueError("atomic main D features and positions differ")
+        preprocessed = self.crop_visual.preprocessed_pixel_values.descriptor
+        if preprocessed.shape[0] != _feature_count(
+            self.crop_visual.source.premerge_main
+        ):
+            raise ValueError(
+                "atomic crop preprocessed pixels and pre-merge vision tokens differ"
+            )
+        hq = self.condition_hq.descriptor
+        target_tokens = (
+            self.condition.conditioning_target_token_end
+            - self.condition.conditioning_target_token_start
+        )
+        if (
+            len(hq.shape) != 2
+            or hq.shape[0] != target_tokens
+            or hq.shape[1] != _feature_dim(self.payload.main_d)
+            or not _is_floating_dtype(hq.dtype)
+        ):
+            raise ValueError(
+                "atomic condition Hq must match target tokens and main D hidden size"
+            )
         branch_count = len(self.branches)
         if len(self.source_visual.merged_deepstack) != branch_count or len(
             self.crop_visual.source.premerge_deepstack
@@ -661,3 +758,19 @@ def _feature_count(ref: TensorArtifactRef) -> int:
     if len(shape) == 3 and shape[0] == 1:
         return shape[1]
     raise ValueError(f"visual tensor {ref.name!r} must have shape [N,H] or [1,N,H]")
+
+
+def _feature_dim(ref: TensorArtifactRef) -> int:
+    shape = ref.descriptor.shape
+    if len(shape) not in {2, 3} or shape[-1] <= 0:
+        raise ValueError(f"visual tensor {ref.name!r} must have shape [N,H] or [1,N,H]")
+    return shape[-1]
+
+
+def _grid_token_count(grid: tuple[int, int, int]) -> int:
+    temporal, height, width = grid
+    return temporal * height * width
+
+
+def _is_floating_dtype(dtype: str) -> bool:
+    return dtype == "bfloat16" or dtype.startswith("float")

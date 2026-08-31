@@ -489,6 +489,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 source_positions for _ in _BRANCH_LAYERS
             ),
             observation_store=self.store,
+            preprocessed_pixel_values=pixel_values,
             source_rgb=source_rgb,
         )
 

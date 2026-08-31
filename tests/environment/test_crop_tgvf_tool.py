@@ -16,6 +16,7 @@ from tgvf_rl.contracts.tokens import TokenSpan
 from tgvf_rl.environment.crop_tgvf_tool import (
     AtomicCropTGVFTool,
     CropTGVFToolExecutionRequest,
+    CropTGVFVisualMaterialization,
 )
 from tgvf_rl.environment.focus_tool import (
     ReplayLayoutTensors,
@@ -73,19 +74,26 @@ class Materializer:
     def __init__(self) -> None:
         self.received: list[torch.Tensor] = []
 
-    def materialize_source_visual(self, crop_rgb, *, parsed_call, call_index):
+    def materialize_crop_tgvf_visual(
+        self, crop_rgb, *, parsed_call, call_index
+    ):
         assert parsed_call.name == "tgvf_crop_tool"
         assert call_index == 0
         self.received.append(crop_rgb.clone())
-        return SourceVisualTensorBundle(
-            image_sha256=tensor_checksum(crop_rgb),
-            premerge_main=torch.arange(16, dtype=torch.float32).view(4, 4),
-            premerge_deepstack=(torch.full((4, 4), 2.0),),
-            merged_main=torch.full((1, 8), 3.0),
-            merged_deepstack=(torch.full((1, 8), 4.0),),
-            image_grid_thw=(1, 2, 2),
-            spatial_merge_size=2,
-            decoded_rgb_sha256=tensor_checksum(crop_rgb),
+        return CropTGVFVisualMaterialization(
+            preprocessed_pixel_values=torch.arange(
+                12, dtype=torch.float32
+            ).view(4, 3),
+            source_visual=SourceVisualTensorBundle(
+                image_sha256=tensor_checksum(crop_rgb),
+                premerge_main=torch.arange(16, dtype=torch.float32).view(4, 4),
+                premerge_deepstack=(torch.full((4, 4), 2.0),),
+                merged_main=torch.full((1, 8), 3.0),
+                merged_deepstack=(torch.full((1, 8), 4.0),),
+                image_grid_thw=(1, 2, 2),
+                spatial_merge_size=2,
+                decoded_rgb_sha256=tensor_checksum(crop_rgb),
+            ),
         )
 
 
@@ -281,7 +289,7 @@ def test_atomic_crop_tgvf_materializes_one_complete_exact_record() -> None:
             reference_attention_mask=result.record.masks.reference_visible,
             teacher_attention_mask=result.record.masks.teacher_visible,
         ),
-        crop_vision_replay_mode="shared_frozen_recorded_features",
+        crop_vision_replay_mode="current_live_reference_recorded_features",
     )
     replay_handle = store.put_replay(replay)
     bundle = store.export_replay_bundle(replay_handle)

@@ -20,7 +20,10 @@ from tgvf_rl.contracts.tokens import LogProbMeasurement, SamplingIdentity, Token
 from tgvf_rl.environment.agent_loop import SampledPolicyTurn, ToolExecutionContext
 from tgvf_rl.environment.adapter_runtime import load_frozen_tgvf_adapter
 from tgvf_rl.environment.crop_tgvf_runtime import AtomicCropTGVFToolRuntime
-from tgvf_rl.environment.crop_tgvf_tool import AtomicCropTGVFTool
+from tgvf_rl.environment.crop_tgvf_tool import (
+    AtomicCropTGVFTool,
+    CropTGVFVisualMaterialization,
+)
 from tgvf_rl.environment.focus_runtime import (
     BehaviorHiddenStateCapture,
     FocusExecutionLedger,
@@ -93,25 +96,32 @@ class _Materializer:
     def __init__(self) -> None:
         self.received: list[torch.Tensor] = []
 
-    def materialize_source_visual(self, crop_rgb, *, parsed_call, call_index):
+    def materialize_crop_tgvf_visual(
+        self, crop_rgb, *, parsed_call, call_index
+    ):
         assert parsed_call.name == "tgvf_crop_tool"
         assert call_index == 0
         self.received.append(crop_rgb.clone())
         premerge = torch.arange(16, dtype=torch.float32).view(4, 4)
-        return SourceVisualTensorBundle(
-            image_sha256=tensor_checksum(crop_rgb),
-            premerge_main=premerge,
-            premerge_deepstack=tuple(
-                premerge.add(index + 1) for index in range(len(BRANCH_LAYERS))
+        return CropTGVFVisualMaterialization(
+            preprocessed_pixel_values=torch.arange(
+                12, dtype=torch.float32
+            ).view(4, 3),
+            source_visual=SourceVisualTensorBundle(
+                image_sha256=tensor_checksum(crop_rgb),
+                premerge_main=premerge,
+                premerge_deepstack=tuple(
+                    premerge.add(index + 1) for index in range(len(BRANCH_LAYERS))
+                ),
+                merged_main=torch.full((1, 8), 3.0),
+                merged_deepstack=tuple(
+                    torch.full((1, 8), float(4 + index))
+                    for index in range(len(BRANCH_LAYERS))
+                ),
+                image_grid_thw=(1, 2, 2),
+                spatial_merge_size=2,
+                decoded_rgb_sha256=tensor_checksum(crop_rgb),
             ),
-            merged_main=torch.full((1, 8), 3.0),
-            merged_deepstack=tuple(
-                torch.full((1, 8), float(4 + index))
-                for index in range(len(BRANCH_LAYERS))
-            ),
-            image_grid_thw=(1, 2, 2),
-            spatial_merge_size=2,
-            decoded_rgb_sha256=tensor_checksum(crop_rgb),
         )
 
 
@@ -171,6 +181,7 @@ def _source(store: ObservationStore, trajectory_id: str):
         deepstack_branch_layers=BRANCH_LAYERS,
         deepstack_injection_positions=tuple((1,) for _ in BRANCH_LAYERS),
         observation_store=store,
+        preprocessed_pixel_values=torch.ones((4, 3), dtype=torch.float32),
         source_rgb=pixels,
     )
     return pixels, binding

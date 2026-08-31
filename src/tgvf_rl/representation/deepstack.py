@@ -1,12 +1,15 @@
-"""Typed D-DeepStack outputs and frozen Qwen projection ports."""
+"""Typed D-DeepStack outputs and borrowed Qwen projection ports."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+import weakref
 
 import torch
 from torch import nn
+
+from tgvf_rl.tensor_device import tensor_compute_device
 
 
 D_DEEPSTACK_SCHEMA_VERSION = "tgvf-d-deepstack-v1"
@@ -130,6 +133,107 @@ class FrozenProjectionPort(nn.Module):
         return output
 
 
+class TrainableBorrowedProjectionPort(nn.Module):
+    """Call a trainable model merger without registering or freezing it.
+
+    Joint full-model training already owns each Qwen merger through the Qwen
+    module tree.  Registering the same merger below the TGVF Adapter would give
+    one parameter two module paths and an ambiguous FSDP ownership boundary.
+    This port therefore keeps only a weak reference to the canonical merger.
+    The call itself remains an ordinary autograd-tracked module call, so both
+    the input tokens and the canonically owned merger parameters receive
+    gradients.
+    """
+
+    def __init__(
+        self,
+        projection: nn.Module,
+        *,
+        identity: str,
+        input_dim: int,
+        output_dim: int,
+        spatial_merge_size: int,
+    ) -> None:
+        super().__init__()
+        if not isinstance(projection, nn.Module):
+            raise TypeError("projection must be an nn.Module")
+        if not identity or not identity.strip():
+            raise ValueError("projection identity must be non-empty")
+        if input_dim <= 0 or output_dim <= 0:
+            raise ValueError("projection dimensions must be positive")
+        if spatial_merge_size <= 0:
+            raise ValueError("spatial_merge_size must be positive")
+
+        # Keep the merger out of ``self._modules``.  The Qwen owner remains the
+        # sole parameter/state/FSDP owner while this port retains call access.
+        self._projection_ref = weakref.ref(projection)
+        self.identity = identity
+        self.input_dim = int(input_dim)
+        self.output_dim = int(output_dim)
+        self.spatial_merge_size = int(spatial_merge_size)
+
+    @property
+    def projection(self) -> nn.Module:
+        projection = self._projection_ref()
+        if projection is None:
+            raise RuntimeError("borrowed trainable projection no longer exists")
+        return projection
+
+    @property
+    def merge_group_size(self) -> int:
+        return self.spatial_merge_size**2
+
+    def _project_one(self, tokens: torch.Tensor) -> torch.Tensor:
+        projection = self.projection
+        parameter = next(projection.parameters(), None)
+        buffer = next(projection.buffers(), None)
+        owner = parameter if parameter is not None else buffer
+        if owner is not None and tokens.device != tensor_compute_device(owner):
+            raise ValueError(
+                "projection input and borrowed projection must be on the same device"
+            )
+        if parameter is not None and parameter.dtype.is_floating_point:
+            tokens = tokens.to(dtype=parameter.dtype)
+        output = projection(tokens)
+        if not isinstance(output, torch.Tensor):
+            raise TypeError("borrowed projection must return a torch.Tensor")
+        return output
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        _validate_token_tensor(
+            tokens, name="projection tokens", feature_dim=self.input_dim
+        )
+        token_count = int(tokens.shape[-2])
+        if token_count % self.merge_group_size:
+            raise ValueError(
+                "projection token count must be divisible by spatial_merge_size**2: "
+                f"{token_count} vs {self.merge_group_size}"
+            )
+
+        if tokens.ndim == 2:
+            output = self._project_one(tokens)
+        else:
+            output = torch.stack(
+                tuple(self._project_one(batch_tokens) for batch_tokens in tokens), dim=0
+            )
+
+        expected_shape = (
+            *tokens.shape[:-2],
+            token_count // self.merge_group_size,
+            self.output_dim,
+        )
+        if tuple(output.shape) != expected_shape:
+            raise ValueError(
+                f"projection output shape is {tuple(output.shape)}, expected {expected_shape}"
+            )
+        if not output.is_floating_point():
+            raise TypeError("borrowed projection output must use a floating-point dtype")
+        return output
+
+
+ProjectionPort = FrozenProjectionPort | TrainableBorrowedProjectionPort
+
+
 @dataclass(frozen=True, slots=True)
 class DDeepStackPayload:
     """Ordered D branches ready for model-layer injection."""
@@ -178,13 +282,13 @@ class DDeepStackPayload:
 
 
 class DDeepStackProjectionPorts(nn.Module):
-    """Apply one explicit frozen projection to every required branch."""
+    """Apply one explicit borrowed projection to every required branch."""
 
     def __init__(
         self,
         *,
         branch_layers: Sequence[int],
-        projections: Sequence[FrozenProjectionPort],
+        projections: Sequence[ProjectionPort],
     ) -> None:
         super().__init__()
         layers = tuple(int(layer) for layer in branch_layers)
@@ -197,9 +301,14 @@ class DDeepStackProjectionPorts(nn.Module):
             raise ValueError("branch_layers must be non-negative")
         if len(layers) != len(ports):
             raise ValueError("branch layers and frozen projections must align")
-        if any(not isinstance(port, FrozenProjectionPort) for port in ports):
+        if any(
+            not isinstance(
+                port, (FrozenProjectionPort, TrainableBorrowedProjectionPort)
+            )
+            for port in ports
+        ):
             raise TypeError(
-                "every D-DeepStack projection must be a FrozenProjectionPort"
+                "every D-DeepStack projection must be a supported projection port"
             )
         if len({id(port) for port in ports}) != len(ports):
             raise ValueError("D-DeepStack branches cannot share a projection port")
@@ -369,5 +478,7 @@ __all__ = [
     "DDeepStackPayload",
     "DDeepStackProjectionPorts",
     "FrozenProjectionPort",
+    "ProjectionPort",
+    "TrainableBorrowedProjectionPort",
     "build_original_image_key_block_mask",
 ]

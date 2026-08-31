@@ -9,6 +9,7 @@ from tgvf_rl.representation import (
     TGVFAdapter,
     TGVFAdapterVariant,
 )
+from tgvf_rl.representation.deepstack import TrainableBorrowedProjectionPort
 
 
 class ToyMerger(nn.Module):
@@ -246,6 +247,46 @@ def test_adapter_artifact_state_excludes_every_borrowed_qwen_merger() -> None:
     polluted["main_projection.projection.weight"] = torch.zeros(1)
     with pytest.raises(ValueError, match="artifact keys mismatch"):
         target.load_artifact_state_dict(polluted)
+
+
+def test_adapter_loads_subset_with_trainable_non_registered_mergers() -> None:
+    source = _adapter()
+    artifact_state = {
+        name: value.clone() for name, value in source.artifact_state_dict().items()
+    }
+    owner = nn.Module()
+    owner.mergers = nn.ModuleList(ToyMerger(4, 6) for _ in range(4))
+    ports = tuple(
+        TrainableBorrowedProjectionPort(
+            merger,
+            identity=identity,
+            input_dim=4,
+            output_dim=6,
+            spatial_merge_size=2,
+        )
+        for merger, identity in zip(
+            owner.mergers,
+            ("main-merger", "merger-8", "merger-16", "merger-24"),
+            strict=True,
+        )
+    )
+    owner.adapter = TGVFAdapter(
+        d_lm=6,
+        d_v=4,
+        attn_dim=5,
+        main_projection=ports[0],
+        deepstack_projections=ports[1:],
+        branch_layers=(8, 16, 24),
+    )
+
+    owner.adapter.load_artifact_state_dict(artifact_state)
+
+    assert set(owner.adapter.state_dict()) == set(artifact_state)
+    assert all(
+        parameter.requires_grad
+        for merger in owner.mergers
+        for parameter in merger.parameters()
+    )
 
 
 def test_main_d_only_has_no_learned_branch_parameters_or_branch_objective() -> None:

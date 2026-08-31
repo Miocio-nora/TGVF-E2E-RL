@@ -320,7 +320,7 @@ def test_crop_then_tgvf_share_exact_qwen_and_vllm_replay_order() -> None:
             teacher_attention_mask=common_mask,
         ),
     )
-    with pytest.raises(ReplayMismatchError, match="shared frozen-vision"):
+    with pytest.raises(ReplayMismatchError, match="crop replay mode"):
         store.put_replay(replace(replay, crop_vision_replay_mode="no_crop"))
     with pytest.raises(ReplayMismatchError, match="exact immutable source pixels"):
         store.put_replay(
