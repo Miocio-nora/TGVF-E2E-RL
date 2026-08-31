@@ -148,13 +148,13 @@ class PolicyCoreDevConfig:
         if not self.evaluation_id:
             raise ValueError("evaluation_id must be non-empty")
         if (
-            len(self.gpu_ids) != 4
+            not self.gpu_ids
             or any(type(gpu_id) is not int or gpu_id < 0 for gpu_id in self.gpu_ids)
-            or len(set(self.gpu_ids)) != 4
+            or len(set(self.gpu_ids)) != len(self.gpu_ids)
         ):
             raise ValueError(
-                "formal policy benchmark evaluation requires four distinct "
-                "non-negative GPU IDs"
+                "policy benchmark evaluation requires at least one distinct "
+                "non-negative GPU ID"
             )
         if not 1 <= self.inference_concurrency_per_gpu <= 8:
             raise ValueError("inference_concurrency_per_gpu must be in [1,8]")

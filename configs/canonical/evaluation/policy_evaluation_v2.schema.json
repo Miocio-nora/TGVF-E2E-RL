@@ -38,8 +38,7 @@
     "output_root": {"type": "string", "minLength": 1},
     "gpu_ids": {
       "type": "array",
-      "minItems": 4,
-      "maxItems": 4,
+      "minItems": 1,
       "uniqueItems": true,
       "items": {"type": "integer", "minimum": 0}
     },

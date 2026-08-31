@@ -367,6 +367,35 @@ def test_canonical_evaluation_schema_tracks_runtime_v2_constants() -> None:
         "expected_policy_run_identity_sha256",
         "expected_policy_weights_sha256",
     } <= required
+    assert schema["properties"]["gpu_ids"]["minItems"] == 1
+    assert "maxItems" not in schema["properties"]["gpu_ids"]
+
+
+def test_policy_evaluation_gpu_topology_is_operational_not_four_gpu_only() -> None:
+    single_gpu = PolicyCoreDevConfig(
+        **{
+            **_explicit_coredev_v2_payload(
+                success_observation_protocol_id=(
+                    NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1
+                )
+            ),
+            "gpu_ids": [7],
+        }
+    )
+    assert single_gpu.gpu_ids == (7,)
+
+    payload = _explicit_coredev_v2_payload(
+        success_observation_protocol_id=(
+            NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1
+        )
+    )
+    payload["gpu_ids"] = []
+    with pytest.raises(ValueError, match="at least one distinct"):
+        PolicyCoreDevConfig(**payload)
+
+    payload["gpu_ids"] = [2, 2]
+    with pytest.raises(ValueError, match="at least one distinct"):
+        PolicyCoreDevConfig(**payload)
 
 
 def test_policy_evaluation_accepts_native_vllm_eos_identity(tmp_path: Path) -> None:
