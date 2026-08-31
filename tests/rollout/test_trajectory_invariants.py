@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
+import hashlib
+
 import pytest
 import torch
 
@@ -14,6 +17,7 @@ from tgvf_rl.contracts.tokens import (
 from tgvf_rl.trajectories.schema import (
     AssistantTurnRecord,
     ToolCallRecord,
+    ToolErrorRecord,
     ToolObservationRecord,
     TrajectoryIdentity,
     TrajectoryRecord,
@@ -108,6 +112,78 @@ def test_old_logprob_alignment_cannot_be_fabricated() -> None:
     store, behavior_store, trajectory = _trajectory(sampled_indices=(0, 1))
     with pytest.raises(ReplayMismatchError, match="content-addressed"):
         TrajectoryValidator(store, behavior_store).validate(trajectory)
+
+
+def _final_tool_marker_turn(
+    behavior_store: BehaviorTraceStore,
+    trajectory: TrajectoryRecord,
+) -> AssistantTurnRecord:
+    version = trajectory.behavior_policy
+    tokens = OwnedTokenSequence(
+        token_ids=(151652,),
+        ownership=(TokenOwnership.POLICY_SAMPLED,),
+    )
+    sampling = SamplingIdentity(
+        policy_version=version,
+        backend="vllm",
+        backend_version="fixture",
+        seed=2,
+        rng_state_sha256=SHA0,
+        temperature=0.7,
+        top_p=0.95,
+        top_k=20,
+        min_p=0.0,
+        repetition_penalty=1.0,
+        logit_processors=(),
+        measurement=LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        asynchronous_staleness_steps=0,
+    )
+    turn_index = len(trajectory.assistant_turns)
+    behavior_handle = VLLMBehaviorRecorder(behavior_store).record(
+        trajectory_id=trajectory.identity.canonical_id,
+        assistant_turn_index=turn_index,
+        tokens=tokens,
+        actual_sampled_logprobs=(-0.2,),
+        sampling=sampling,
+        behavior_policy=version,
+        backend_request_sha256=SHA0,
+        backend_response_sha256=SHA0,
+    )
+    return AssistantTurnRecord(
+        turn_index,
+        "<tool_call>{terminal}</tool_call>",
+        tokens,
+        behavior_handle,
+        None,
+        True,
+    )
+
+
+def test_invalid_format_accepts_only_an_unexecuted_final_tool_marker() -> None:
+    store, behavior_store, trajectory = _trajectory()
+    final_turn = _final_tool_marker_turn(behavior_store, trajectory)
+    invalid = replace(
+        trajectory,
+        assistant_turns=trajectory.assistant_turns + (final_turn,),
+        final_answer=None,
+        stop=TrajectoryStop.INVALID_FORMAT,
+    )
+
+    TrajectoryValidator(store, behavior_store).validate(invalid)
+
+    payload = '{"error":"executed"}'
+    final_error = ToolErrorRecord(
+        attempt_index=1,
+        assistant_turn_index=final_turn.turn_index,
+        code="tool_parse.invalid_json",
+        payload_json=payload,
+        payload_sha256=hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+        template_token_ids=(1,),
+        recoverable=True,
+    )
+    executed = replace(invalid, tool_errors=(final_error,))
+    with pytest.raises(ReplayMismatchError, match="unexecuted final tool marker"):
+        TrajectoryValidator(store, behavior_store).validate(executed)
 
 
 def test_vllm_recorder_preserves_nontrivial_post_transform_logprob_oracle() -> None:

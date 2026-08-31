@@ -17,6 +17,12 @@ from tgvf_rl.contracts.tokens import (
 from tgvf_rl.observations.schema import TrajectorySourceVisual
 from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.policy.config import PilotSamplingConfig
+from tgvf_rl.protocol.action_boundary import (
+    AssistantActionBoundary,
+    AssistantTurnDisposition,
+    NativeActionBoundaryProtocolId,
+    classify_assistant_action_boundary,
+)
 from tgvf_rl.protocol.native import NativeAssistantDialect
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import (
@@ -220,6 +226,9 @@ class FrameworkNeutralAgentLoop:
         ),
         direct_only: bool = False,
         allow_no_tools: bool = False,
+        action_boundary_protocol_id: NativeActionBoundaryProtocolId = (
+            NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+        ),
     ) -> None:
         self.sampler = sampler
         self.tool_runtime = tool_runtime
@@ -234,8 +243,15 @@ class FrameworkNeutralAgentLoop:
             raise TypeError("allow_no_tools must be a bool")
         if allow_no_tools and not direct_only:
             raise ValueError("an empty tool surface requires direct_only mode")
+        if not isinstance(
+            action_boundary_protocol_id, NativeActionBoundaryProtocolId
+        ):
+            raise TypeError(
+                "action_boundary_protocol_id must be NativeActionBoundaryProtocolId"
+            )
         self.assistant_dialect = assistant_dialect
         self.direct_only = direct_only
+        self.action_boundary_protocol_id = action_boundary_protocol_id
         names = tuple(enabled_tool_names)
         if (not names and not allow_no_tools) or len(names) != len(set(names)):
             raise ValueError(
@@ -299,6 +315,10 @@ class FrameworkNeutralAgentLoop:
                     raise ValueError(
                         "sampler exceeded the cumulative trajectory response budget"
                     )
+            boundary = classify_assistant_action_boundary(
+                sampled.text,
+                protocol_id=self.action_boundary_protocol_id,
+            )
             owned_tokens = OwnedTokenSequence(
                 sampled.token_ids,
                 tuple(TokenOwnership.POLICY_SAMPLED for _ in sampled.token_ids),
@@ -313,8 +333,9 @@ class FrameworkNeutralAgentLoop:
                 backend_request_sha256=sampled.backend_request_sha256,
                 backend_response_sha256=sampled.backend_response_sha256,
             )
-            has_tool_marker = (
-                "<tool_call>" in sampled.text or "</tool_call>" in sampled.text
+            is_direct_only_rejection = (
+                self.direct_only
+                and boundary.disposition is not AssistantTurnDisposition.DIRECT_FINAL
             )
             turns.append(
                 AssistantTurnRecord(
@@ -323,27 +344,28 @@ class FrameworkNeutralAgentLoop:
                     tokens=owned_tokens,
                     behavior_trace=behavior_trace,
                     think_span=sampled.think_token_span,
-                    is_tool_call=has_tool_marker,
+                    is_tool_call=(
+                        boundary.disposition
+                        is not AssistantTurnDisposition.DIRECT_FINAL
+                    ),
                     stop_reason=sampled.stop_reason,
                 )
             )
-            if self.direct_only and has_tool_marker:
+            if is_direct_only_rejection:
                 # Preserve the exact sampled behavior row for replay, but a
                 # direct-only arm must never parse, append, or execute a tool.
                 stop = TrajectoryStop.INVALID_FORMAT
                 break
-            if not has_tool_marker:
-                final_answer = _extract_final_answer(
-                    sampled.text,
+            if boundary.disposition is AssistantTurnDisposition.DIRECT_FINAL:
+                final_answer, final_format_valid = _extract_boundary_final_answer(
+                    boundary,
+                    sampled=sampled,
                     assistant_dialect=self.assistant_dialect,
                 )
                 if _terminated_by_length(sampled):
                     stop = TrajectoryStop.MAX_TOKENS
                 elif (
-                    not _final_format_valid(
-                        sampled,
-                        assistant_dialect=self.assistant_dialect,
-                    )
+                    not final_format_valid
                     or final_answer is None
                 ):
                     stop = TrajectoryStop.INVALID_FORMAT
@@ -358,6 +380,12 @@ class FrameworkNeutralAgentLoop:
                 break
 
             try:
+                if boundary.disposition is AssistantTurnDisposition.INVALID_ACTION:
+                    raise _boundary_parse_error(boundary)
+                if boundary.disposition is not AssistantTurnDisposition.TOOL_ACTION:
+                    raise RuntimeError(
+                        "assistant action boundary reached an unknown disposition"
+                    )
                 think_error = _tool_think_format_error(
                     sampled.text,
                     assistant_dialect=self.assistant_dialect,
@@ -664,6 +692,63 @@ class FrameworkNeutralAgentLoop:
             recoverable=error.recoverable,
             function_name=function_name,
         )
+
+
+_ACTION_BOUNDARY_PARSE_ERROR_CODES = {
+    "malformed_tool_call_tags": ParseErrorCode.INCOMPLETE_TOOL_CALL,
+    "multiple_tool_calls": ParseErrorCode.MULTIPLE_TOOL_CALLS,
+    "tool_call_terminal_suffix": ParseErrorCode.TRAILING_ASSISTANT_TEXT,
+}
+
+
+def _boundary_parse_error(
+    boundary: AssistantActionBoundary,
+) -> ToolCallParseError:
+    """Map a rejected outer boundary onto the existing recoverable error path."""
+
+    if boundary.disposition is not AssistantTurnDisposition.INVALID_ACTION:
+        raise ValueError("only an invalid action boundary can become a parse error")
+    violation_code = boundary.violation_code
+    if violation_code is None:  # pragma: no cover - classifier invariant
+        raise RuntimeError("invalid action boundary lacks a violation code")
+    try:
+        parse_error_code = _ACTION_BOUNDARY_PARSE_ERROR_CODES[violation_code]
+    except KeyError as error:  # pragma: no cover - enum expansion guard
+        raise RuntimeError(
+            f"unsupported action-boundary violation: {violation_code!r}"
+        ) from error
+    return ToolCallParseError(
+        parse_error_code,
+        (
+            f"{boundary.protocol_id.value} rejected assistant action: "
+            f"{violation_code}"
+        ),
+    )
+
+
+def _extract_boundary_final_answer(
+    boundary: AssistantActionBoundary,
+    *,
+    sampled: SampledPolicyTurn,
+    assistant_dialect: NativeAssistantDialect,
+) -> tuple[str | None, bool]:
+    """Extract a final answer only from a classifier-approved direct branch."""
+
+    if boundary.disposition is not AssistantTurnDisposition.DIRECT_FINAL:
+        raise ValueError("final answer extraction requires a direct-final boundary")
+    if boundary.final_text is None:  # pragma: no cover - classifier invariant
+        raise RuntimeError("direct-final boundary lacks final text")
+    if boundary.final_text != sampled.text:
+        # Explicit legacy answer-over-action selects only the trailing answer.
+        answer = boundary.final_text.strip() or None
+        return answer, answer is not None
+    return (
+        _extract_final_answer(
+            sampled.text,
+            assistant_dialect=assistant_dialect,
+        ),
+        _final_format_valid(sampled, assistant_dialect=assistant_dialect),
+    )
 
 
 def _extract_final_answer(

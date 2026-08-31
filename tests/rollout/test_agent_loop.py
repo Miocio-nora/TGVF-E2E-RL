@@ -18,6 +18,7 @@ from tgvf_rl.environment.agent_loop import (
 from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.policy import PilotSamplingConfig
 from tgvf_rl.protocol.parser import StrictToolCallParser
+from tgvf_rl.protocol.action_boundary import NativeActionBoundaryProtocolId
 from tgvf_rl.protocol.native import NativeAssistantDialect
 from tgvf_rl.protocol.schema import StandardToolError, TokenByteSpan
 from tgvf_rl.protocol.state_machine import CapErrorBehavior
@@ -1088,6 +1089,7 @@ def test_direct_only_empty_tool_loop_never_parses_appends_or_executes(
     version = PolicyVersion("no-tool", 0, SHA)
     sampled = _sample(text, _pilot_fixture_sampling(version))
     unreachable = _UnreachableNoToolDependency()
+    behavior_store = BehaviorTraceStore()
     loop = FrameworkNeutralAgentLoop(
         sampler=Sampler((sampled,)),
         tool_runtime=unreachable,
@@ -1096,7 +1098,7 @@ def test_direct_only_empty_tool_loop_never_parses_appends_or_executes(
             enabled_tool_names=(),
             allow_empty_tool_names=True,
         ),
-        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        behavior_recorder=VLLMBehaviorRecorder(behavior_store),
         max_tool_calls=1,
         enabled_tool_names=(),
         direct_only=True,
@@ -1120,6 +1122,10 @@ def test_direct_only_empty_tool_loop_never_parses_appends_or_executes(
     assert trajectory.tool_calls == ()
     assert trajectory.observations == ()
     assert trajectory.tool_errors == ()
+    assert trajectory.assistant_turns[0].is_tool_call is (
+        expected_stop is TrajectoryStop.INVALID_FORMAT
+    )
+    TrajectoryValidator(_SOURCE_STORE, behavior_store).validate(trajectory)
 
 
 def test_empty_agent_tool_surface_requires_direct_only_opt_in() -> None:
@@ -1138,4 +1144,162 @@ def test_empty_agent_tool_surface_requires_direct_only_opt_in() -> None:
             max_tool_calls=1,
             enabled_tool_names=(),
             allow_no_tools=True,
+        )
+
+
+class _BoundaryRejectedParser:
+    def parse(self, turn):
+        raise AssertionError("an INVALID_ACTION reached the tool parser")
+
+
+class _RecordingBoundaryAppender(Appender):
+    def __init__(self) -> None:
+        self.values = []
+
+    def append(
+        self,
+        prompt_token_ids,
+        sampled_turn,
+        observation,
+        *,
+        call_index,
+        parsed_call,
+    ):
+        self.values.append(observation)
+        return super().append(
+            prompt_token_ids,
+            sampled_turn,
+            observation,
+            call_index=call_index,
+            parsed_call=parsed_call,
+        )
+
+
+@pytest.mark.parametrize(
+    ("invalid_text", "expected_error_code"),
+    (
+        (
+            "reason</think><tool_call>"
+            '{"name":"tgvf_focus_tool","arguments":{"target":"label"}}'
+            "</tool_call>trailing answer",
+            "tool_parse.trailing_assistant_text",
+        ),
+        (
+            "reason</think><tool_call>"
+            '{"name":"tgvf_focus_tool","arguments":{"target":"first"}}'
+            "</tool_call><tool_call>"
+            '{"name":"tgvf_focus_tool","arguments":{"target":"second"}}'
+            "</tool_call>",
+            "tool_parse.multiple_tool_calls",
+        ),
+        (
+            "reason</think><tool_call>"
+            '{"name":"tgvf_focus_tool","arguments":{"target":"label"}}',
+            "tool_parse.incomplete_tool_call",
+        ),
+    ),
+)
+def test_strict_boundary_rejection_never_parses_or_executes_and_can_retry(
+    invalid_text: str,
+    expected_error_code: str,
+) -> None:
+    version = PolicyVersion("strict-boundary", 0, SHA)
+    sampling = _pilot_fixture_sampling(version)
+    rejected = _sample(invalid_text, sampling)
+    answer = _sample("recovered</think>B", replace(sampling, seed=8))
+    runtime = Runtime()
+    appender = _RecordingBoundaryAppender()
+    behavior_store = BehaviorTraceStore()
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((rejected, answer)),
+        tool_runtime=runtime,
+        appender=appender,
+        parser=_BoundaryRejectedParser(),  # type: ignore[arg-type]
+        behavior_recorder=VLLMBehaviorRecorder(behavior_store),
+        max_tool_calls=4,
+        enabled_tool_names=("tgvf_focus_tool",),
+    )
+
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("strict-boundary", "fixture", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+
+    assert loop.action_boundary_protocol_id is (
+        NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2
+    )
+    assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
+    assert trajectory.final_answer == "B"
+    assert runtime.contexts == []
+    assert trajectory.tool_calls == ()
+    assert trajectory.observations == ()
+    assert len(trajectory.tool_errors) == 1
+    assert trajectory.tool_errors[0].code == expected_error_code
+    assert len(appender.values) == 1
+    assert isinstance(appender.values[0], StandardToolError)
+    assert trajectory.assistant_turns[0].is_tool_call is True
+    assert trajectory.assistant_turns[1].is_tool_call is False
+    TrajectoryValidator(_SOURCE_STORE, behavior_store).validate(trajectory)
+
+
+def test_explicit_legacy_answer_over_action_follows_direct_final_branch() -> None:
+    version = PolicyVersion("legacy-boundary", 0, SHA)
+    text = (
+        "reason</think><tool_call>"
+        '{"name":"tgvf_focus_tool","arguments":{"target":"label"}}'
+        "</tool_call> blue"
+    )
+    sampled = _sample(text, _pilot_fixture_sampling(version))
+    unreachable = _UnreachableNoToolDependency()
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((sampled,)),
+        tool_runtime=unreachable,
+        appender=unreachable,
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=4,
+        action_boundary_protocol_id=(
+            NativeActionBoundaryProtocolId.LEGACY_ANSWER_OVER_ACTION_V1
+        ),
+    )
+
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("legacy-boundary", "fixture", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+
+    assert trajectory.stop is TrajectoryStop.DIRECT_ANSWER
+    assert trajectory.final_answer == "blue"
+    assert trajectory.assistant_turns[0].is_tool_call is False
+    assert trajectory.tool_calls == ()
+    assert trajectory.observations == ()
+
+
+def test_action_boundary_protocol_binding_is_strictly_typed() -> None:
+    dependency = _UnreachableNoToolDependency()
+    with pytest.raises(TypeError, match="NativeActionBoundaryProtocolId"):
+        FrameworkNeutralAgentLoop(
+            sampler=Sampler(()),
+            tool_runtime=dependency,
+            appender=dependency,
+            parser=StrictToolCallParser(),
+            behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+            max_tool_calls=1,
+            action_boundary_protocol_id=(
+                NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2.value
+            ),  # type: ignore[arg-type]
         )
