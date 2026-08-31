@@ -41,7 +41,7 @@ from tgvf_rl.framework.vllm import (
     split_preexpanded_prompt_contract,
 )
 from tgvf_rl.observations.store import ObservationHandle
-from tgvf_rl.policy.config import PilotSamplingConfig
+from tgvf_rl.policy.config import PilotSamplingConfig, PolicyMethodSamplingConfig
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.native import NativeAssistantDialect
 from tgvf_rl.protocol.observation_contract import (
@@ -948,3 +948,78 @@ def test_bound_invocation_factory_assigns_deepeyes_n16_group_indices() -> None:
     )
     with pytest.raises(ReplayMismatchError, match="completed n=16 group"):
         factory.build(sampling_params=upstream_sampling, sample_fields=sample)
+
+
+def test_bound_invocation_factory_accepts_config_owned_n3_group() -> None:
+    sampling = PolicyMethodSamplingConfig(
+        trajectories_per_prompt=3,
+        max_response_length=1_234,
+    ).bind_run_inputs(
+        min_p=0.0,
+        stop_token_ids=(ord("!"),),
+        stop_strings=("</tool_call>",),
+        include_stop_str_in_output=True,
+        ignore_eos=False,
+    )
+    factory = BoundVerlNativeAgentLoopInvocationFactory(
+        run_id=POLICY.run_id,
+        model=ModelIdentity("qwen3_vl", "fixture", "/fixture", 151_669, SHA0),
+        sampling_contract=sampling,
+        policy_version=_CurrentPolicy(),
+        trajectory_components=_TrajectoryComponents(),
+        decoding=DECODING,
+        termination=TERMINATION,
+        rollout_master_seed=42,
+        max_model_len=4_096,
+        rollouts_per_prompt=3,
+    )
+    upstream_sampling = {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": -1,
+        "repetition_penalty": 1.0,
+        "logprobs": True,
+    }
+    sample = {
+        "sample_id": "sample-n3",
+        "uid": "upstream-group-n3",
+        "index": 0,
+        "initial_prompt_token_ids": (10, 20, 30),
+    }
+
+    invocations = tuple(
+        factory.build(sampling_params=upstream_sampling, sample_fields=sample)
+        for _ in range(3)
+    )
+
+    assert tuple(item.request.identity.rollout_index for item in invocations) == (
+        0,
+        1,
+        2,
+    )
+    with pytest.raises(ReplayMismatchError, match="completed n=3 group"):
+        factory.build(sampling_params=upstream_sampling, sample_fields=sample)
+
+
+def test_bound_invocation_factory_keeps_legacy_group_size_allowlist() -> None:
+    sampling = PilotSamplingConfig().bind_run_inputs(
+        min_p=0.0,
+        stop_token_ids=(ord("!"),),
+        stop_strings=("</tool_call>",),
+        include_stop_str_in_output=True,
+        ignore_eos=False,
+    )
+
+    with pytest.raises(ValueError, match="group size is unsupported"):
+        BoundVerlNativeAgentLoopInvocationFactory(
+            run_id=POLICY.run_id,
+            model=ModelIdentity("qwen3_vl", "fixture", "/fixture", 151_669, SHA0),
+            sampling_contract=sampling,
+            policy_version=_CurrentPolicy(),
+            trajectory_components=_TrajectoryComponents(),
+            decoding=DECODING,
+            termination=TERMINATION,
+            rollout_master_seed=42,
+            max_model_len=4_096,
+            rollouts_per_prompt=3,
+        )

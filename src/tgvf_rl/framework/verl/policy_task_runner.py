@@ -9,8 +9,10 @@ paired Policy checkpoint lifecycle on the trainer driver.
 from __future__ import annotations
 
 from collections.abc import Mapping
+import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 from time import perf_counter
@@ -82,6 +84,11 @@ from tgvf_rl.rewards.stage3_verl_adapter import (
     STAGE3_VERL_QUALITY_FAILURE_FIELD,
     STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
     STAGE3_VERL_VISUAL_JUDGE_USAGE_FIELD,
+)
+from tgvf_rl.rewards.stage3_shaped import (
+    STAGE3_ANSWER_REWARD_SCALE,
+    STAGE3_PROTOCOL_ERROR_PENALTY,
+    STAGE3_REPEATED_CALL_PENALTY,
 )
 from .rollout_bridge import (
     TRAJECTORY_PAYLOAD_FIELD,
@@ -442,6 +449,63 @@ def _reference_weights_sha256(config: PolicyE2ESmokeRunConfig) -> str:
     return _operational_base_identity_sha256(config.model)
 
 
+def _stage3_reward_coefficients(
+    config: PolicyE2ESmokeRunConfig,
+) -> tuple[float, float, float]:
+    """Read the shaped-reward equation from the validated run binding."""
+
+    if config.reward.profile != "stage3-shaped-v1":
+        return (
+            STAGE3_ANSWER_REWARD_SCALE,
+            STAGE3_REPEATED_CALL_PENALTY,
+            STAGE3_PROTOCOL_ERROR_PENALTY,
+        )
+    raw = (
+        getattr(config.reward, "answer_reward_scale", None),
+        getattr(config.reward, "repeated_call_penalty", None),
+        getattr(config.reward, "protocol_error_penalty", None),
+    )
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) < 0.0
+        for value in raw
+    ):
+        raise ValueError(
+            "Stage3 reward coefficients must be finite non-negative bindings"
+        )
+    answer_scale, repeated_penalty, protocol_penalty = raw
+    return (
+        float(answer_scale),
+        float(repeated_penalty),
+        float(protocol_penalty),
+    )
+
+
+def _stage3_reward_switches(
+    config: PolicyE2ESmokeRunConfig,
+) -> tuple[bool, bool]:
+    """Return utility and visual-quality ownership for one reward binding."""
+
+    if config.reward.profile != "stage3-shaped-v1":
+        return True, True
+    utility_enabled = getattr(config.reward, "tool_utility_reward_enabled", None)
+    focus_enabled = getattr(config.reward, "focus_reward_enabled", None)
+    grounding_enabled = getattr(config.reward, "grounding_reward_enabled", None)
+    if type(utility_enabled) is not bool:
+        raise ValueError("Stage3 tool-utility reward switch is missing")
+    if type(focus_enabled) is not bool or type(grounding_enabled) is not bool:
+        raise ValueError("Stage3 visual reward switches are missing")
+    if focus_enabled != grounding_enabled:
+        raise ValueError("Stage3 Focus/Grounding reward switches differ")
+    return utility_enabled, focus_enabled
+
+
+def _reward_identity_sha256(value: object) -> str:
+    return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
 def _run_identity(config: PolicyE2ESmokeRunConfig) -> PilotRunIdentityHashes:
     hashes = {
         "agent_loop_config": config.framework.agent_loop_config_sha256,
@@ -463,25 +527,94 @@ def _run_identity(config: PolicyE2ESmokeRunConfig) -> PilotRunIdentityHashes:
     }
     if config.reward.profile == "stage3-shaped-v1":
         tool_utility = config.reward.tool_utility
+        utility_enabled, quality_enabled = _stage3_reward_switches(config)
+        focus_enabled = quality_enabled
+        grounding_enabled = quality_enabled
         visual_identity = config.reward.visual_quality_judge_identity
         visual_config_sha256 = config.reward.visual_quality_judge_config_sha256
-        if (
-            tool_utility is None
-            or visual_identity is None
-            or visual_config_sha256 is None
+        if utility_enabled != (tool_utility is not None):
+            raise ValueError("Stage3 tool-utility identity differs from its switch")
+        if quality_enabled != (
+            visual_identity is not None and visual_config_sha256 is not None
         ):
-            raise ValueError("Stage3 run identity dependencies are missing")
-        hashes.update(
-            {
-                "reward_tool_utility_sidecar": tool_utility.sidecar_sha256,
-                "reward_tool_utility_manifest": tool_utility.manifest_sha256,
-                "reward_visual_judge_config": visual_config_sha256,
-                "reward_visual_judge_identity": visual_identity.sha256,
-            }
-        )
+            raise ValueError("Stage3 visual judge identity differs from its switches")
+        if utility_enabled and quality_enabled:
+            assert tool_utility is not None
+            assert visual_identity is not None
+            assert visual_config_sha256 is not None
+            hashes.update(
+                {
+                    "reward_tool_utility_sidecar": tool_utility.sidecar_sha256,
+                    "reward_tool_utility_manifest": tool_utility.manifest_sha256,
+                    "reward_visual_judge_config": visual_config_sha256,
+                    "reward_visual_judge_identity": visual_identity.sha256,
+                }
+            )
+        else:
+            answer_scale, repeated_penalty, protocol_penalty = (
+                _stage3_reward_coefficients(config)
+            )
+            hashes.update(
+                {
+                    "reward_answer_scale": _reward_identity_sha256(answer_scale),
+                    "reward_repeated_call_penalty": _reward_identity_sha256(
+                        repeated_penalty
+                    ),
+                    "reward_protocol_error_penalty": _reward_identity_sha256(
+                        protocol_penalty
+                    ),
+                    "reward_tool_utility_enabled": _reward_identity_sha256(
+                        utility_enabled
+                    ),
+                    "reward_focus_enabled": _reward_identity_sha256(focus_enabled),
+                    "reward_grounding_enabled": _reward_identity_sha256(
+                        grounding_enabled
+                    ),
+                }
+            )
+            visual_mode = getattr(config.reward, "visual_quality_judge_mode", None)
+            if visual_mode is not None:
+                hashes["reward_visual_judge_mode"] = _reward_identity_sha256(
+                    visual_mode
+                )
+            if tool_utility is not None:
+                hashes.update(
+                    {
+                        "reward_tool_utility_sidecar": tool_utility.sidecar_sha256,
+                        "reward_tool_utility_manifest": tool_utility.manifest_sha256,
+                    }
+                )
+            if visual_identity is not None and visual_config_sha256 is not None:
+                hashes.update(
+                    {
+                        "reward_visual_judge_config": visual_config_sha256,
+                        "reward_visual_judge_identity": visual_identity.sha256,
+                    }
+                )
     return PilotRunIdentityHashes.from_hashes(
         config.run_id,
         hashes,
+    )
+
+
+def _load_current_policy_version(
+    config: PolicyE2ESmokeRunConfig,
+    state: PolicyWeightSyncState,
+    *,
+    expected_optimizer_step: int | None = None,
+) -> PolicyVersion:
+    """Select legacy LoRA or method-matrix behavior publication by config."""
+
+    if config.method is None:
+        return load_latest_policy_version(
+            state,
+            expected_optimizer_step=expected_optimizer_step,
+        )
+    from .policy_behavior_version import load_latest_policy_behavior_version
+
+    return load_latest_policy_behavior_version(
+        state,
+        expected_optimizer_step=expected_optimizer_step,
     )
 
 
@@ -549,7 +682,8 @@ class PolicyPilotTrainerCheckpointState:
             raise RuntimeError(
                 "Policy metrics do not reach the checkpoint optimizer step"
             )
-        policy = load_latest_policy_version(
+        policy = _load_current_policy_version(
+            self.config,
             self._weight_state,
             expected_optimizer_step=optimizer_step,
         )
@@ -574,6 +708,9 @@ class PolicyPilotTrainerCheckpointState:
             trajectories_per_prompt=(
                 self.config.policy.sampling.trajectories_per_prompt
             ),
+            stage3_reward_coefficients=_stage3_reward_coefficients(self.config),
+            stage3_reward_switches=_stage3_reward_switches(self.config),
+            maximum_tool_calls=self.config.protocol.maximum_tool_calls,
         )
         summary = self.metrics_accumulator.record_optimizer_step(observation)
         self._recovery_progress = PilotOptimizerDataCursor(
@@ -625,8 +762,9 @@ class PolicyPilotTrainerCheckpointState:
             return self._prepared_policy
         # Clean-process resume is intentionally latest-checkpoint-only in this
         # first executable slice.  The strict pair subsequently verifies the
-        # loaded optimizer step against this content-addressed snapshot.
-        return load_latest_policy_version(self._weight_state)
+        # loaded optimizer step against the method-appropriate behavior
+        # snapshot (legacy LoRA or full-Qwen composite).
+        return _load_current_policy_version(self.config, self._weight_state)
 
     def reference_policy_version(self) -> PolicyVersion:
         model_slug = Path(self.config.model.model_name).name.casefold()
@@ -741,7 +879,7 @@ class PairedActorWorkerGroup:
 
 
 class CheckpointAfterWeightSyncManager:
-    """Commit a pending checkpoint only after current-step LoRA publication."""
+    """Commit only after publication and restore weights discarded by sleep."""
 
     def __init__(
         self,
@@ -785,7 +923,30 @@ class CheckpointAfterWeightSyncManager:
             self.sleep_replicas()
             try:
                 self.trainer._commit_policy_checkpoint_after_weight_sync(global_steps)
-            finally:
+            except BaseException:
+                # A failed checkpoint must still leave the rollout runtime
+                # callable before the trainer propagates the original error.
+                self.wake_up_replicas()
+                raise
+            if bool(
+                getattr(
+                    self.upstream,
+                    "requires_post_checkpoint_weight_resync",
+                    False,
+                )
+            ):
+                # Level-2 sleep discards full-model weights.  Re-run the
+                # method manager's normal same-step publication instead of a
+                # bare wake.  Call the upstream object directly so this
+                # wrapper does not recursively commit the checkpoint.
+                try:
+                    self.upstream.update_weights(global_steps)
+                finally:
+                    # Publication can make replicas callable before a later
+                    # ACK failure.  Failure recovery must conservatively
+                    # treat them as awake and quiesce them again.
+                    self._replicas_sleeping = False
+            else:
                 self.wake_up_replicas()
             checkpoint_seconds = perf_counter() - checkpoint_started
         complete = getattr(self.trainer, "_complete_policy_metric_publication", None)
@@ -1152,11 +1313,22 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 # reward check after the synchronous update, but that later
                 # check is deliberately not the mutation safety boundary.
                 validate_data_proto_integrity(batch)
+                answer_scale, repeated_penalty, protocol_penalty = (
+                    _stage3_reward_coefficients(self._policy_checkpoint_state.config)
+                )
+                utility_enabled, quality_enabled = _stage3_reward_switches(
+                    self._policy_checkpoint_state.config
+                )
                 validate_policy_pilot_reward_data_proto(
                     batch,
                     expected_group_size=(
                         self._policy_checkpoint_state.config.policy.sampling.trajectories_per_prompt
                     ),
+                    expected_stage3_answer_reward_scale=answer_scale,
+                    expected_stage3_repeated_call_penalty=repeated_penalty,
+                    expected_stage3_protocol_error_penalty=protocol_penalty,
+                    expected_stage3_tool_utility_reward_enabled=utility_enabled,
+                    expected_stage3_visual_quality_enabled=quality_enabled,
                 )
                 self._policy_actor_update_inflight = True
                 output = super()._update_actor(batch, *args, **kwargs)
@@ -1315,12 +1487,36 @@ def policy_metrics_observation_from_data_proto(
     optimizer_step: int,
     elapsed_seconds: float,
     trajectories_per_prompt: int = POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT,
+    stage3_reward_coefficients: tuple[float, float, float] = (
+        STAGE3_ANSWER_REWARD_SCALE,
+        STAGE3_REPEATED_CALL_PENALTY,
+        STAGE3_PROTOCOL_ERROR_PENALTY,
+    ),
+    stage3_reward_switches: tuple[bool, bool] = (True, True),
+    maximum_tool_calls: int | None = None,
 ) -> PilotOptimizerStepMetricsObservation:
     """Recover the checkpointed raw Pilot metrics from one exact update batch."""
 
+    try:
+        answer_scale, repeated_penalty, protocol_penalty = (
+            float(value) for value in stage3_reward_coefficients
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("Stage3 reward coefficients are malformed") from error
+    try:
+        utility_enabled, quality_enabled = stage3_reward_switches
+    except (TypeError, ValueError) as error:
+        raise ValueError("Stage3 reward switches are malformed") from error
+    if type(utility_enabled) is not bool or type(quality_enabled) is not bool:
+        raise ValueError("Stage3 reward switches must be bool")
     reward_view = validate_policy_pilot_reward_data_proto(
         data,
         expected_group_size=trajectories_per_prompt,
+        expected_stage3_answer_reward_scale=answer_scale,
+        expected_stage3_repeated_call_penalty=repeated_penalty,
+        expected_stage3_protocol_error_penalty=protocol_penalty,
+        expected_stage3_tool_utility_reward_enabled=utility_enabled,
+        expected_stage3_visual_quality_enabled=quality_enabled,
     )
     stage3_profile = (
         reward_view.reward_bridge_schema_version
@@ -1405,8 +1601,12 @@ def policy_metrics_observation_from_data_proto(
             ):
                 raise ValueError("Stage3 metric reward components differ")
             stage3_components = tuple(reward.values())
-            compatibility_answer_reward = reward["answer"] / 2.0
-            compatibility_format_error = reward["protocol"] == -1.0
+            compatibility_answer_reward = (
+                0.0 if answer_scale == 0.0 else reward["answer"] / answer_scale
+            )
+            compatibility_format_error = bool(
+                protocol_penalty > 0.0 and reward["protocol"] == -protocol_penalty
+            )
             compatibility_conditional_tool_reward = 0.0
             if (
                 type(raw_quality_applicable) is not bool
@@ -1485,6 +1685,7 @@ def policy_metrics_observation_from_data_proto(
                 stage3_visual_judge_prompt_tokens=visual_judge_prompt_tokens,
                 stage3_visual_judge_completion_tokens=(visual_judge_completion_tokens),
                 stage3_visual_judge_cost_usd=visual_judge_cost_usd,
+                maximum_tool_calls=maximum_tool_calls,
             )
         )
     return PilotOptimizerStepMetricsObservation(

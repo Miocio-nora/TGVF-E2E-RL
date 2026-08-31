@@ -116,8 +116,8 @@ def policy_pilot_v1_grpo_spec(
 
     if not isinstance(diagnostic_kl_estimator, ReferenceKLEstimator):
         raise TypeError("diagnostic_kl_estimator must be ReferenceKLEstimator")
-    if type(expected_group_size) is not int or expected_group_size not in {8, 16}:
-        raise ValueError("expected_group_size must be one of {8, 16}")
+    if type(expected_group_size) is not int or expected_group_size <= 0:
+        raise ValueError("expected_group_size must be a positive integer")
     return GRPOSpec(
         center_rewards=True,
         scale_by_group_std=True,

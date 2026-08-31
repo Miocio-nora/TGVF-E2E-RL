@@ -11,6 +11,14 @@ from tgvf_rl.policy.deepeyes_official_protocol import (
     DEEPEYES_TOOL_NAME,
     USER_PROMPT_V2,
 )
+from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (
+    CROP_TGVF_DEEPEYES_MATCHED_TOOL_NAME,
+    CROP_TGVF_DEEPEYES_MATCHED_USER_PROMPT,
+)
+from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
+    TGVF_DEEPEYES_MATCHED_TOOL_NAME,
+    TGVF_DEEPEYES_MATCHED_USER_PROMPT,
+)
 from tgvf_rl.protocol.native import NativeAssistantDialect
 from tgvf_rl.protocol.observation_contract import (
     NativeSuccessObservationProtocolId,
@@ -59,6 +67,28 @@ QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT = (
 QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256 = hashlib.sha256(
     QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT.encode("utf-8")
 ).hexdigest()
+QWEN_NATIVE_MATCHED_TGVF_SUCCESS_TEXT = (
+    QWEN_NATIVE_MATCHED_CROP_SUCCESS_PREFIX
+    + QWEN_NATIVE_IMAGE_PLACEHOLDER
+    + TGVF_DEEPEYES_MATCHED_USER_PROMPT
+    + QWEN_NATIVE_MATCHED_CROP_SUCCESS_SUFFIX
+)
+QWEN_NATIVE_MATCHED_TGVF_SUCCESS_TEXT_SHA256 = hashlib.sha256(
+    QWEN_NATIVE_MATCHED_TGVF_SUCCESS_TEXT.encode("utf-8")
+).hexdigest()
+QWEN_NATIVE_MATCHED_ATOMIC_SUCCESS_TEXT = (
+    QWEN_NATIVE_MATCHED_CROP_SUCCESS_PREFIX
+    + QWEN_NATIVE_IMAGE_PLACEHOLDER
+    + CROP_TGVF_DEEPEYES_MATCHED_USER_PROMPT
+    + QWEN_NATIVE_MATCHED_CROP_SUCCESS_SUFFIX
+)
+QWEN_NATIVE_MATCHED_ATOMIC_SUCCESS_TEXT_SHA256 = hashlib.sha256(
+    QWEN_NATIVE_MATCHED_ATOMIC_SUCCESS_TEXT.encode("utf-8")
+).hexdigest()
+# NoTool owns no environment continuation at all.  Hashing the exact empty
+# byte sequence gives evaluation/replay identity a concrete no-execution value
+# without inventing a synthetic tool response.
+QWEN_NATIVE_NO_TOOL_NO_EXECUTION_SHA256 = hashlib.sha256(b"").hexdigest()
 
 # Historical PRL-25-B/PRL-26-B Instruct Crop training used this generic native
 # continuation.  It remains readable only through the explicit legacy protocol
@@ -102,12 +132,33 @@ class NativeSuccessObservationContract:
     def render(self, parsed_call: NativeToolCall) -> str:
         """Render and validate the exact success bytes for one accepted call."""
 
+        if (
+            self.protocol_id
+            is NativeSuccessObservationProtocolId.NO_TOOL_NO_EXECUTION_V1
+        ):
+            raise RuntimeError("no-tool observation identity forbids tool execution")
         _validate_call_matches_tool_profile(parsed_call, self.tool_profile)
         if (
             self.protocol_id
             is NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1
         ):
             rendered = render_qwen_native_matched_crop_success_environment_text(
+                parsed_call,
+                assistant_dialect=self.assistant_dialect,
+            )
+        elif (
+            self.protocol_id
+            is NativeSuccessObservationProtocolId.DEEPEYES_TGVF_MATCHED_V1
+        ):
+            rendered = render_qwen_native_matched_tgvf_success_environment_text(
+                parsed_call,
+                assistant_dialect=self.assistant_dialect,
+            )
+        elif (
+            self.protocol_id
+            is NativeSuccessObservationProtocolId.DEEPEYES_ATOMIC_MATCHED_V1
+        ):
+            rendered = render_qwen_native_matched_atomic_success_environment_text(
                 parsed_call,
                 assistant_dialect=self.assistant_dialect,
             )
@@ -198,6 +249,13 @@ class QwenNativeToolObservationAppender:
         call_index: int,
         parsed_call: NativeToolCall | None,
     ) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        if (
+            self.observation_contract.protocol_id
+            is NativeSuccessObservationProtocolId.NO_TOOL_NO_EXECUTION_V1
+        ):
+            raise RuntimeError(
+                "no-tool observation identity forbids appending tool turns"
+            )
         prompt = tuple(prompt_token_ids)
         if not prompt:
             raise ValueError("native tool appender requires a non-empty prompt")
@@ -373,6 +431,44 @@ def render_qwen_native_matched_crop_success_environment_text(
     return QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT
 
 
+def render_qwen_native_matched_tgvf_success_environment_text(
+    parsed_call: NativeToolCall,
+    *,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_INSTRUCT
+    ),
+) -> str:
+    """Render matched TGVF evidence without copying its target into text."""
+
+    _validate_matched_call_and_instruct_dialect(
+        parsed_call,
+        expected_type=ParsedToolCall,
+        expected_name=TGVF_DEEPEYES_MATCHED_TOOL_NAME,
+        assistant_dialect=assistant_dialect,
+        contract_label="matched TGVF",
+    )
+    return QWEN_NATIVE_MATCHED_TGVF_SUCCESS_TEXT
+
+
+def render_qwen_native_matched_atomic_success_environment_text(
+    parsed_call: NativeToolCall,
+    *,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_INSTRUCT
+    ),
+) -> str:
+    """Render matched atomic evidence without copying its target into text."""
+
+    _validate_matched_call_and_instruct_dialect(
+        parsed_call,
+        expected_type=ParsedCropTGVFCall,
+        expected_name=CROP_TGVF_DEEPEYES_MATCHED_TOOL_NAME,
+        assistant_dialect=assistant_dialect,
+        contract_label="matched Atomic",
+    )
+    return QWEN_NATIVE_MATCHED_ATOMIC_SUCCESS_TEXT
+
+
 def render_qwen_native_legacy_crop_generic86_success_environment_text(
     parsed_call: NativeToolCall,
     *,
@@ -409,6 +505,22 @@ def _validate_crop_call_and_instruct_dialect(
     if not isinstance(parsed_call, ParsedImageZoomInCall):
         raise TypeError(f"{contract_label} response requires a parsed Crop call")
     if parsed_call.name != DEEPEYES_TOOL_NAME:
+        raise ValueError(f"{contract_label} response received another tool")
+    if assistant_dialect is not NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+        raise ValueError(f"{contract_label} response requires Qwen3-VL Instruct")
+
+
+def _validate_matched_call_and_instruct_dialect(
+    parsed_call: NativeToolCall,
+    *,
+    expected_type: type[ParsedToolCall] | type[ParsedCropTGVFCall],
+    expected_name: str,
+    assistant_dialect: NativeAssistantDialect,
+    contract_label: str,
+) -> None:
+    if not isinstance(parsed_call, expected_type):
+        raise TypeError(f"{contract_label} response received another call type")
+    if parsed_call.name != expected_name:
         raise ValueError(f"{contract_label} response received another tool")
     if assistant_dialect is not NativeAssistantDialect.QWEN3_VL_INSTRUCT:
         raise ValueError(f"{contract_label} response requires Qwen3-VL Instruct")
@@ -461,18 +573,25 @@ __all__ = [
     "NativeToolTurnRegistrar",
     "QWEN_NATIVE_IMAGE_PLACEHOLDER",
     "QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX",
+    "QWEN_NATIVE_MATCHED_ATOMIC_SUCCESS_TEXT",
+    "QWEN_NATIVE_MATCHED_ATOMIC_SUCCESS_TEXT_SHA256",
     "QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT",
     "QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT_SHA256",
     "QWEN_NATIVE_MATCHED_CROP_SUCCESS_PREFIX",
     "QWEN_NATIVE_MATCHED_CROP_SUCCESS_SUFFIX",
     "QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT",
     "QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256",
+    "QWEN_NATIVE_MATCHED_TGVF_SUCCESS_TEXT",
+    "QWEN_NATIVE_MATCHED_TGVF_SUCCESS_TEXT_SHA256",
+    "QWEN_NATIVE_NO_TOOL_NO_EXECUTION_SHA256",
     "QWEN_NATIVE_RESPONSE_SUFFIX",
     "QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX",
     "QwenNativeToolObservationAppender",
     "qwen_native_response_suffix",
     "render_qwen_native_legacy_crop_generic86_success_environment_text",
+    "render_qwen_native_matched_atomic_success_environment_text",
     "render_qwen_native_matched_crop_success_environment_text",
+    "render_qwen_native_matched_tgvf_success_environment_text",
     "render_qwen_native_success_environment_text",
     "render_qwen_native_success_payload",
 ]

@@ -17,7 +17,6 @@ from tgvf_rl.objectives import (
 )
 from tgvf_rl.policy.metrics import (
     POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT,
-    POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT,
 )
 from tgvf_rl.rewards.schema import (
     PILOT_REWARD_EQUATION_DEEPEYES_MATH,
@@ -25,7 +24,12 @@ from tgvf_rl.rewards.schema import (
     RewardResult,
     deepeyes_reward_equation_for_data_source,
 )
-from tgvf_rl.rewards.stage3_shaped import Stage3ShapedRewardResult
+from tgvf_rl.rewards.stage3_shaped import (
+    STAGE3_ANSWER_REWARD_SCALE,
+    STAGE3_PROTOCOL_ERROR_PENALTY,
+    STAGE3_REPEATED_CALL_PENALTY,
+    Stage3ShapedRewardResult,
+)
 from tgvf_rl.rewards.stage3_verl_adapter import (
     STAGE3_VERL_QUALITY_APPLICABLE_FIELD,
     STAGE3_VERL_QUALITY_COVERED_FIELD,
@@ -164,17 +168,37 @@ def validate_policy_pilot_reward_data_proto(
     data: object,
     *,
     expected_group_size: int = POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT,
+    expected_stage3_answer_reward_scale: float = STAGE3_ANSWER_REWARD_SCALE,
+    expected_stage3_repeated_call_penalty: float = STAGE3_REPEATED_CALL_PENALTY,
+    expected_stage3_protocol_error_penalty: float = STAGE3_PROTOCOL_ERROR_PENALTY,
+    expected_stage3_tool_utility_reward_enabled: bool = True,
+    expected_stage3_visual_quality_enabled: bool = True,
 ) -> VerlPilotRewardBatchView:
     """Prove upstream used exact rewards and retained every configured group."""
 
-    if (
-        type(expected_group_size) is not int
-        or expected_group_size not in POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT
+    if type(expected_group_size) is not int or expected_group_size <= 0:
+        raise ValueError("expected reward group size must be a positive integer")
+    for field_name, value in (
+        ("answer reward scale", expected_stage3_answer_reward_scale),
+        ("repeated-call penalty", expected_stage3_repeated_call_penalty),
+        ("protocol error penalty", expected_stage3_protocol_error_penalty),
     ):
-        raise ValueError(
-            "unsupported reward group size; accepted="
-            f"{POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT!r}"
-        )
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) < 0.0
+        ):
+            raise ValueError(f"Stage3 {field_name} must be finite and non-negative")
+    for field_name, value in (
+        (
+            "tool-utility reward switch",
+            expected_stage3_tool_utility_reward_enabled,
+        ),
+        ("visual-quality reward switch", expected_stage3_visual_quality_enabled),
+    ):
+        if type(value) is not bool:
+            raise ValueError(f"Stage3 {field_name} must be bool")
 
     batch, non_tensors = _data_parts(data)
     required_tensors = {
@@ -332,6 +356,19 @@ def validate_policy_pilot_reward_data_proto(
             raise ValueError("exact trajectory reward sidecar is invalid")
         pipeline_sha = fields[PILOT_VERL_REWARD_PIPELINE_SHA256_FIELD][row_index]
         _require_sha256(pipeline_sha, "reward pipeline")
+        stage3_tool_utility_bound = None
+        if stage3_fields:
+            stage3_tool_utility_bound = _validate_stage3_row_sidecars(
+                stage3_fields,
+                row_index=row_index,
+                expected_tool_utility_reward_enabled=(
+                    expected_stage3_tool_utility_reward_enabled
+                ),
+                expected_visual_quality_enabled=(
+                    expected_stage3_visual_quality_enabled
+                ),
+                successful_observation_count=len(trajectory.observations),
+            )
         _validate_component_sidecar(
             fields[PILOT_VERL_REWARD_COMPONENTS_FIELD][row_index],
             expected_total=float(exact_reward),
@@ -351,9 +388,23 @@ def validate_policy_pilot_reward_data_proto(
                 if bridge_schema == PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION
                 else None
             ),
+            expected_stage3_answer_reward_scale=float(
+                expected_stage3_answer_reward_scale
+            ),
+            expected_stage3_repeated_call_penalty=float(
+                expected_stage3_repeated_call_penalty
+            ),
+            expected_stage3_protocol_error_penalty=float(
+                expected_stage3_protocol_error_penalty
+            ),
+            expected_stage3_visual_quality_enabled=(
+                expected_stage3_visual_quality_enabled
+            ),
+            stage3_tool_utility_bound=stage3_tool_utility_bound,
+            stage3_tool_call_count=(
+                len(trajectory.observations) + len(trajectory.tool_errors)
+            ),
         )
-        if stage3_fields:
-            _validate_stage3_row_sidecars(stage3_fields, row_index=row_index)
         trajectory_ids.append(trajectory_id)
         group_uids.append(exact_group)
         upstream_uids.append(upstream_uid)
@@ -432,12 +483,24 @@ def bind_policy_pilot_exact_grpo_fields(
     *,
     diagnostic_kl_estimator: ReferenceKLEstimator,
     expected_group_size: int = POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT,
+    expected_stage3_answer_reward_scale: float = STAGE3_ANSWER_REWARD_SCALE,
+    expected_stage3_repeated_call_penalty: float = STAGE3_REPEATED_CALL_PENALTY,
+    expected_stage3_protocol_error_penalty: float = STAGE3_PROTOCOL_ERROR_PENALTY,
+    expected_stage3_tool_utility_reward_enabled: bool = True,
+    expected_stage3_visual_quality_enabled: bool = True,
 ) -> VerlPilotRewardBatchView:
     """Attach repo-owned scores/rewards/advantages consumed by the exact loss."""
 
     view = validate_policy_pilot_reward_data_proto(
         data,
         expected_group_size=expected_group_size,
+        expected_stage3_answer_reward_scale=expected_stage3_answer_reward_scale,
+        expected_stage3_repeated_call_penalty=(expected_stage3_repeated_call_penalty),
+        expected_stage3_protocol_error_penalty=(expected_stage3_protocol_error_penalty),
+        expected_stage3_tool_utility_reward_enabled=(
+            expected_stage3_tool_utility_reward_enabled
+        ),
+        expected_stage3_visual_quality_enabled=(expected_stage3_visual_quality_enabled),
     )
     batch, _ = _data_parts(data)
     rm_scores = batch["rm_scores"]
@@ -464,6 +527,13 @@ def bind_policy_pilot_exact_grpo_fields(
     return validate_policy_pilot_reward_data_proto(
         data,
         expected_group_size=expected_group_size,
+        expected_stage3_answer_reward_scale=expected_stage3_answer_reward_scale,
+        expected_stage3_repeated_call_penalty=(expected_stage3_repeated_call_penalty),
+        expected_stage3_protocol_error_penalty=(expected_stage3_protocol_error_penalty),
+        expected_stage3_tool_utility_reward_enabled=(
+            expected_stage3_tool_utility_reward_enabled
+        ),
+        expected_stage3_visual_quality_enabled=(expected_stage3_visual_quality_enabled),
     )
 
 
@@ -560,13 +630,28 @@ def _validate_component_sidecar(
     equation_route: object = None,
     applied_weights: object = None,
     data_source: object = None,
+    expected_stage3_answer_reward_scale: float = STAGE3_ANSWER_REWARD_SCALE,
+    expected_stage3_repeated_call_penalty: float = STAGE3_REPEATED_CALL_PENALTY,
+    expected_stage3_protocol_error_penalty: float = STAGE3_PROTOCOL_ERROR_PENALTY,
+    expected_stage3_visual_quality_enabled: bool = True,
+    stage3_tool_utility_bound: bool | None = None,
+    stage3_tool_call_count: int = 0,
 ) -> None:
     try:
         components = tuple(value)  # type: ignore[arg-type]
     except TypeError as error:
         raise TypeError("reward component sidecar must be iterable") from error
     if bridge_schema == STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION:
-        _validate_stage3_component_sidecar(components, expected_total=expected_total)
+        _validate_stage3_component_sidecar(
+            components,
+            expected_total=expected_total,
+            expected_answer_reward_scale=expected_stage3_answer_reward_scale,
+            expected_repeated_call_penalty=expected_stage3_repeated_call_penalty,
+            expected_protocol_error_penalty=expected_stage3_protocol_error_penalty,
+            visual_quality_enabled=expected_stage3_visual_quality_enabled,
+            tool_utility_bound=stage3_tool_utility_bound,
+            tool_call_count=stage3_tool_call_count,
+        )
         return
     names = ("answer_reward", "format_reward", "conditional_tool_reward")
     if len(components) != 3 or tuple(item[0] for item in components) != names:
@@ -607,7 +692,15 @@ def _validate_component_sidecar(
 
 
 def _validate_stage3_component_sidecar(
-    components: tuple[object, ...], *, expected_total: float
+    components: tuple[object, ...],
+    *,
+    expected_total: float,
+    expected_answer_reward_scale: float,
+    expected_repeated_call_penalty: float,
+    expected_protocol_error_penalty: float,
+    visual_quality_enabled: bool,
+    tool_utility_bound: bool | None,
+    tool_call_count: int,
 ) -> None:
     names = ("answer", "tool", "focus", "grounding", "protocol")
     try:
@@ -619,14 +712,22 @@ def _validate_stage3_component_sidecar(
         raise ValueError("reward component sidecar differs from Stage3 equation")
     if not all(math.isfinite(value) for value in values):
         raise ValueError("Stage3 reward components must be finite")
-    answer, _tool, focus, grounding, protocol = values
+    answer, tool, focus, grounding, protocol = values
     if (
-        answer not in {0.0, 2.0}
+        answer not in {0.0, expected_answer_reward_scale}
         or focus not in {0.0, 0.5, 1.0}
         or grounding not in {-1.0, 0.0, 0.5, 1.0}
-        or protocol not in {-1.0, 0.0}
+        or protocol not in {-expected_protocol_error_penalty, 0.0}
     ):
         raise ValueError("Stage3 reward component sidecar has invalid values")
+    if tool_utility_bound is False:
+        expected_tool = -expected_repeated_call_penalty * max(0, tool_call_count - 1)
+        if not math.isclose(tool, expected_tool, rel_tol=0.0, abs_tol=1.0e-12):
+            raise ValueError(
+                "T-free Stage3 tool component differs from repeated-call penalty"
+            )
+    if not visual_quality_enabled and (focus != 0.0 or grounding != 0.0):
+        raise ValueError("T-free Stage3 cannot carry visual-quality rewards")
     if not math.isclose(
         math.fsum(values), expected_total, rel_tol=0.0, abs_tol=1.0e-12
     ):
@@ -634,27 +735,37 @@ def _validate_stage3_component_sidecar(
 
 
 def _validate_stage3_row_sidecars(
-    fields: Mapping[str, tuple[object, ...]], *, row_index: int
-) -> None:
+    fields: Mapping[str, tuple[object, ...]],
+    *,
+    row_index: int,
+    expected_tool_utility_reward_enabled: bool,
+    expected_visual_quality_enabled: bool,
+    successful_observation_count: int,
+) -> bool:
     label = fields[STAGE3_VERL_TOOL_LABEL_FIELD][row_index]
     confidence = fields[STAGE3_VERL_TOOL_LABEL_CONFIDENCE_FIELD][row_index]
-    if label not in {"needed", "optional", "unnecessary"}:
-        raise ValueError("Stage3 tool label sidecar is invalid")
-    if (
-        isinstance(confidence, bool)
-        or not isinstance(confidence, (int, float))
-        or not math.isfinite(float(confidence))
-        or not 0.0 <= float(confidence) <= 1.0
-    ):
-        raise ValueError("Stage3 tool label confidence is invalid")
-    _require_sha256(
-        fields[STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD][row_index],
-        "Stage3 tool label row",
-    )
-    _require_sha256(
-        fields[STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD][row_index],
-        "Stage3 tool sidecar",
-    )
+    label_row_sha256 = fields[STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD][row_index]
+    sidecar_sha256 = fields[STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD][row_index]
+    utility_fields = (label, confidence, label_row_sha256, sidecar_sha256)
+    tool_utility_bound = utility_fields != (None, None, None, None)
+    if tool_utility_bound != expected_tool_utility_reward_enabled:
+        raise ValueError(
+            "Stage3 tool-utility sidecars differ from the configured switch"
+        )
+    if tool_utility_bound:
+        if any(value is None for value in utility_fields):
+            raise ValueError("Stage3 tool-utility sidecars are partially bound")
+        if label not in {"needed", "optional", "unnecessary"}:
+            raise ValueError("Stage3 tool label sidecar is invalid")
+        if (
+            isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not math.isfinite(float(confidence))
+            or not 0.0 <= float(confidence) <= 1.0
+        ):
+            raise ValueError("Stage3 tool label confidence is invalid")
+        _require_sha256(label_row_sha256, "Stage3 tool label row")
+        _require_sha256(sidecar_sha256, "Stage3 tool sidecar")
     applicable = fields[STAGE3_VERL_QUALITY_APPLICABLE_FIELD][row_index]
     covered = fields[STAGE3_VERL_QUALITY_COVERED_FIELD][row_index]
     failure = fields[STAGE3_VERL_QUALITY_FAILURE_FIELD][row_index]
@@ -688,6 +799,14 @@ def _validate_stage3_row_sidecars(
             raise ValueError("Stage3 visual judge usage sidecar is invalid")
     if visual_usage is not None and not applicable:
         raise ValueError("Stage3 visual judge usage requires an applicable call")
+    expected_applicable = (
+        expected_visual_quality_enabled and successful_observation_count >= 1
+    )
+    if applicable != expected_applicable:
+        raise ValueError(
+            "Stage3 visual judge applicability differs from the configured switch"
+        )
+    return tool_utility_bound
 
 
 def _integer_group_ids(

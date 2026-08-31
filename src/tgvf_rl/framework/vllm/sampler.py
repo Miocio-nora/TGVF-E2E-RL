@@ -220,6 +220,7 @@ class VLLMTurnTerminationContract:
     tool_call_terminal_suffixes: tuple[str, ...]
     tool_call_outcomes: tuple[VLLMTerminationOutcome, ...]
     final_turn_outcomes: tuple[VLLMTerminationOutcome, ...]
+    preserve_invalid_tool_call_output: bool = False
 
     def __post_init__(self) -> None:
         for name in (
@@ -230,7 +231,10 @@ class VLLMTurnTerminationContract:
             "final_turn_outcomes",
         ):
             object.__setattr__(self, name, tuple(getattr(self, name)))
-        if not self.required_request_stop_strings and not self.required_request_stop_token_ids:
+        if (
+            not self.required_request_stop_strings
+            and not self.required_request_stop_token_ids
+        ):
             raise ContractUnsetError("a termination contract requires explicit stops")
         if any(not item for item in self.required_request_stop_strings):
             raise ValueError("required stop strings must be non-empty")
@@ -247,17 +251,20 @@ class VLLMTurnTerminationContract:
             raise ValueError("required termination stops must be unique")
         if not isinstance(self.include_stop_str_in_output, bool):
             raise TypeError("include_stop_str_in_output must be bool")
+        if not isinstance(self.preserve_invalid_tool_call_output, bool):
+            raise TypeError("preserve_invalid_tool_call_output must be bool")
         if not self.tool_call_terminal_suffixes or len(
             set(self.tool_call_terminal_suffixes)
         ) != len(self.tool_call_terminal_suffixes):
             raise ValueError("tool-call terminal suffixes must be non-empty and unique")
-        if any(not isinstance(suffix, str) for suffix in self.tool_call_terminal_suffixes):
+        if any(
+            not isinstance(suffix, str) for suffix in self.tool_call_terminal_suffixes
+        ):
             raise TypeError("tool-call terminal suffixes must be strings")
         for name in ("tool_call_outcomes", "final_turn_outcomes"):
             outcomes = getattr(self, name)
             if not outcomes or any(
-                not isinstance(outcome, VLLMTerminationOutcome)
-                for outcome in outcomes
+                not isinstance(outcome, VLLMTerminationOutcome) for outcome in outcomes
             ):
                 raise TypeError(f"{name} must contain accepted termination outcomes")
             if len(set(outcomes)) != len(outcomes):
@@ -276,6 +283,9 @@ class VLLMTurnTerminationContract:
             ),
             "final_turn_outcomes": tuple(
                 outcome.canonical_payload for outcome in self.final_turn_outcomes
+            ),
+            "preserve_invalid_tool_call_output": (
+                self.preserve_invalid_tool_call_output
             ),
         }
 
@@ -300,13 +310,9 @@ class VLLMTokenLogprob:
         if value > 1e-6:
             raise ValueError("vLLM token logprob must be non-positive")
         object.__setattr__(self, "logprob", value)
-        if self.rank is not None and (
-            type(self.rank) is not int or self.rank < 1
-        ):
+        if self.rank is not None and (type(self.rank) is not int or self.rank < 1):
             raise ValueError("vLLM token rank must be positive when present")
-        if self.decoded_token is not None and not isinstance(
-            self.decoded_token, str
-        ):
+        if self.decoded_token is not None and not isinstance(self.decoded_token, str):
             raise TypeError("decoded_token must be str or None")
 
     @property
@@ -437,7 +443,9 @@ class VLLMPolicyTurnResponse:
         ):
             raise TypeError("vLLM stop_reason must be int, str, or None")
         if self.output_index != 0:
-            raise ValueError("one PolicySamplerPort request accepts only output index 0")
+            raise ValueError(
+                "one PolicySamplerPort request accepts only output index 0"
+            )
         if self.finished is not True:
             raise ValueError("PolicySamplerPort accepts only a final vLLM response")
 
@@ -539,7 +547,9 @@ class VLLMPolicySampler:
         if not prompt or any(
             type(token_id) is not int or token_id < 0 for token_id in prompt
         ):
-            raise ValueError("sampler prompt token IDs must be non-empty and non-negative")
+            raise ValueError(
+                "sampler prompt token IDs must be non-empty and non-negative"
+            )
         if type(turn_index) is not int or turn_index < 0:
             raise ValueError("turn_index must be a non-negative integer")
         self._validate_backend_identity()
@@ -660,29 +670,44 @@ class VLLMPolicySampler:
         if len(response.token_ids) > int(parameters["max_tokens"]):
             raise ReplayMismatchError("vLLM response exceeded requested max_tokens")
 
+        outcome = VLLMTerminationOutcome(response.finish_reason, response.stop_reason)
         close_count = response.text.count(TOOL_CALL_CLOSE)
         if close_count > 1:
-            raise ReplayMismatchError(
-                "vLLM emitted more than one complete tool-call closing marker"
-            )
-        if close_count == 1:
+            if not self.termination.preserve_invalid_tool_call_output:
+                raise ReplayMismatchError(
+                    "vLLM emitted more than one complete tool-call closing marker"
+                )
+            # Direct-only sampling deliberately has no tool close-tag stop.
+            # Preserve the exact invalid behavior for downstream action-boundary
+            # classification, but only when it ended as an ordinary final turn.
+            if outcome not in self.termination.final_turn_outcomes:
+                raise ReplayMismatchError(
+                    "invalid tool-call output termination differs from the "
+                    "run-bound final-turn contract"
+                )
+        elif close_count == 1:
             close_end = response.text.index(TOOL_CALL_CLOSE) + len(TOOL_CALL_CLOSE)
             suffix = response.text[close_end:]
-            if suffix not in self.termination.tool_call_terminal_suffixes:
+            terminal_tool_call = suffix in (
+                self.termination.tool_call_terminal_suffixes
+            )
+            if (
+                not terminal_tool_call
+                and not self.termination.preserve_invalid_tool_call_output
+            ):
                 raise ReplayMismatchError(
                     "vLLM emitted a tool-call suffix outside the run-bound contract"
                 )
-            outcome = VLLMTerminationOutcome(
-                response.finish_reason, response.stop_reason
+            accepted_outcomes = (
+                self.termination.tool_call_outcomes
+                if terminal_tool_call
+                else self.termination.final_turn_outcomes
             )
-            if outcome not in self.termination.tool_call_outcomes:
+            if outcome not in accepted_outcomes:
                 raise ReplayMismatchError(
                     "tool-call termination differs from the run-bound contract"
                 )
         else:
-            outcome = VLLMTerminationOutcome(
-                response.finish_reason, response.stop_reason
-            )
             if outcome not in self.termination.final_turn_outcomes:
                 raise ReplayMismatchError(
                     "final/non-complete-call termination differs from the run-bound contract"
@@ -708,16 +733,16 @@ def _normalize_sampling_parameters(
     repetition_penalty = _finite_real(
         parameters["repetition_penalty"], "repetition_penalty"
     )
-    presence_penalty = _finite_real(
-        parameters["presence_penalty"], "presence_penalty"
-    )
+    presence_penalty = _finite_real(parameters["presence_penalty"], "presence_penalty")
     frequency_penalty = _finite_real(
         parameters["frequency_penalty"], "frequency_penalty"
     )
     top_k = _integer(parameters["top_k"], "top_k", minimum=-1)
     max_tokens = _integer(parameters["max_tokens"], "max_tokens", minimum=1)
     if temperature < 1e-2:
-        raise ValueError("audited processed-logprob sampling requires temperature >= 0.01")
+        raise ValueError(
+            "audited processed-logprob sampling requires temperature >= 0.01"
+        )
     if not 0.0 < top_p <= 1.0 or not 0.0 <= min_p <= 1.0:
         raise ValueError("invalid top_p/min_p")
     if repetition_penalty <= 0.0:
@@ -758,9 +783,7 @@ def _normalize_sampling_parameters(
             "frequency_penalty": frequency_penalty,
             "stop_token_ids": tuple(raw_stop_ids),
             "stop": tuple(raw_stops),
-            "include_stop_str_in_output": parameters[
-                "include_stop_str_in_output"
-            ],
+            "include_stop_str_in_output": parameters["include_stop_str_in_output"],
             "ignore_eos": parameters["ignore_eos"],
             "max_tokens": max_tokens,
             "logprobs": True,
@@ -864,9 +887,7 @@ def _sampling_identity(
     )
 
 
-def _selected_logprob(
-    token_id: int, entries: tuple[VLLMTokenLogprob, ...]
-) -> float:
+def _selected_logprob(token_id: int, entries: tuple[VLLMTokenLogprob, ...]) -> float:
     selected = tuple(entry for entry in entries if entry.token_id == token_id)
     if len(selected) != 1:
         raise ReplayMismatchError(

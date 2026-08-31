@@ -26,11 +26,14 @@ from .run_config_schema import (
     POLICY_E2E_SMOKE_ANSWER_VERIFIER_V2_SHA256,
     POLICY_E2E_SMOKE_JUDGE_MODE,
     POLICY_E2E_SMOKE_REWARD_TASK,
+    PolicyMethodMatrixBinding,
     SmokeRewardBinding,
 )
 from .run_config_validation import (
+    _boolean,
     _existing_file,
     _real,
+    _nonnegative_real,
     _require_exact,
     _sha256,
     _sha256_file,
@@ -40,6 +43,13 @@ from .run_config_validation import (
 )
 
 
+# Read-only compatibility semantics for Stage3 TOMLs that predate explicit
+# coefficient fields. New method-matrix runs bind all three values from TOML.
+_LEGACY_STAGE3_ANSWER_REWARD_SCALE = 2.0
+_LEGACY_STAGE3_REPEATED_CALL_PENALTY = 0.05
+_LEGACY_STAGE3_PROTOCOL_ERROR_PENALTY = 1.0
+
+
 def bind_policy_reward(
     payload: Mapping[str, object],
     *,
@@ -47,6 +57,7 @@ def bind_policy_reward(
     deepeyes_control_present: bool,
     formal_pilot: bool,
     iteration_sha256: str,
+    method_binding: PolicyMethodMatrixBinding | None,
     mixed_run: bool,
     runtime_binding: object,
     stage3_shaped_reward_version: str,
@@ -60,6 +71,8 @@ def bind_policy_reward(
 ) -> SmokeRewardBinding:
     """Validate and bind reward inputs without enabling external calls."""
 
+    method_run = method_binding is not None
+
     reward_fields = {
         "task_kind",
         "answer_verifier",
@@ -70,17 +83,30 @@ def bind_policy_reward(
     if mixed_run:
         reward_fields.update({"judge_config_path", "judge_config_sha256"})
     if stage3_shaped_run:
-        reward_fields.update(
-            {
-                "profile",
-                "tool_utility_sidecar_path",
-                "tool_utility_sidecar_sha256",
-                "tool_utility_manifest_path",
-                "tool_utility_manifest_sha256",
-                "visual_quality_judge_config_path",
-                "visual_quality_judge_config_sha256",
-            }
-        )
+        reward_fields.add("profile")
+        if method_run:
+            reward_fields.update(
+                {
+                    "answer_reward_scale",
+                    "protocol_error_penalty",
+                    "repeated_call_penalty",
+                    "tool_utility_reward_enabled",
+                    "focus_reward_enabled",
+                    "grounding_reward_enabled",
+                    "visual_quality_judge_mode",
+                }
+            )
+        else:
+            reward_fields.update(
+                {
+                    "tool_utility_sidecar_path",
+                    "tool_utility_sidecar_sha256",
+                    "tool_utility_manifest_path",
+                    "tool_utility_manifest_sha256",
+                    "visual_quality_judge_config_path",
+                    "visual_quality_judge_config_sha256",
+                }
+            )
     else:
         reward_fields.update(
             {"answer_weight", "format_weight", "conditional_tool_weight"}
@@ -177,48 +203,103 @@ def bind_policy_reward(
             stage3_shaped_reward_version,
             "reward.profile",
         )
-        if not isinstance(runtime_binding, PolicyT1MixedRuntimeBinding):
-            raise ValueError("Stage3-shaped reward requires the mixed-v2 T1 dataset")
-        if tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY:
-            raise ValueError("Stage3-shaped reward requires the TGVF-only tool profile")
-        sidecar_path = _existing_file(
-            reward_table["tool_utility_sidecar_path"],
-            name="reward.tool_utility_sidecar_path",
-        )
-        sidecar_sha256 = _sha256(
-            reward_table["tool_utility_sidecar_sha256"],
-            name="reward.tool_utility_sidecar_sha256",
-        )
-        sidecar_manifest_path = _existing_file(
-            reward_table["tool_utility_manifest_path"],
-            name="reward.tool_utility_manifest_path",
-        )
-        sidecar_manifest_sha256 = _sha256(
-            reward_table["tool_utility_manifest_sha256"],
-            name="reward.tool_utility_manifest_sha256",
-        )
-        tool_utility = load_tgvf_tool_utility_runtime_binding(
-            sidecar_path,
-            expected_sidecar_sha256=sidecar_sha256,
-            manifest_path=sidecar_manifest_path,
-            expected_manifest_sha256=sidecar_manifest_sha256,
-            expected_dataset_iteration_identity_sha256=iteration_sha256,
-        )
-        visual_quality_config_path = _existing_file(
-            reward_table["visual_quality_judge_config_path"],
-            name="reward.visual_quality_judge_config_path",
-        )
-        visual_quality_config_sha256 = _sha256(
-            reward_table["visual_quality_judge_config_sha256"],
-            name="reward.visual_quality_judge_config_sha256",
-        )
-        if _sha256_file(visual_quality_config_path) != visual_quality_config_sha256:
-            raise ValueError("reward visual-quality judge config SHA256 mismatch")
-        bound_visual_quality_judge = load_tgvf_visual_quality_judge(
-            visual_quality_config_path,
-            expected_file_sha256=visual_quality_config_sha256,
-        )
-        visual_quality_judge_identity = bound_visual_quality_judge.config_identity
+        if method_run:
+            tool_utility_reward_enabled = _boolean(
+                reward_table["tool_utility_reward_enabled"],
+                name="reward.tool_utility_reward_enabled",
+            )
+            focus_reward_enabled = _boolean(
+                reward_table["focus_reward_enabled"],
+                name="reward.focus_reward_enabled",
+            )
+            grounding_reward_enabled = _boolean(
+                reward_table["grounding_reward_enabled"],
+                name="reward.grounding_reward_enabled",
+            )
+            _require_exact(
+                (
+                    tool_utility_reward_enabled,
+                    focus_reward_enabled,
+                    grounding_reward_enabled,
+                    _text(
+                        reward_table["visual_quality_judge_mode"],
+                        name="reward.visual_quality_judge_mode",
+                    ),
+                ),
+                (False, False, False, "disabled"),
+                "method answer/protocol-only reward",
+            )
+            answer_reward_scale = _nonnegative_real(
+                reward_table["answer_reward_scale"],
+                name="reward.answer_reward_scale",
+            )
+            repeated_call_penalty = _nonnegative_real(
+                reward_table["repeated_call_penalty"],
+                name="reward.repeated_call_penalty",
+            )
+            protocol_error_penalty = _nonnegative_real(
+                reward_table["protocol_error_penalty"],
+                name="reward.protocol_error_penalty",
+            )
+            visual_quality_judge_mode = "disabled"
+            tool_utility = None
+            visual_quality_config_path = None
+            visual_quality_config_sha256 = None
+            visual_quality_judge_identity = None
+        else:
+            if not isinstance(runtime_binding, PolicyT1MixedRuntimeBinding):
+                raise ValueError(
+                    "Stage3-shaped reward requires the mixed-v2 T1 dataset"
+                )
+            if tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY:
+                raise ValueError(
+                    "Stage3-shaped reward requires the TGVF-only tool profile"
+                )
+            sidecar_path = _existing_file(
+                reward_table["tool_utility_sidecar_path"],
+                name="reward.tool_utility_sidecar_path",
+            )
+            sidecar_sha256 = _sha256(
+                reward_table["tool_utility_sidecar_sha256"],
+                name="reward.tool_utility_sidecar_sha256",
+            )
+            sidecar_manifest_path = _existing_file(
+                reward_table["tool_utility_manifest_path"],
+                name="reward.tool_utility_manifest_path",
+            )
+            sidecar_manifest_sha256 = _sha256(
+                reward_table["tool_utility_manifest_sha256"],
+                name="reward.tool_utility_manifest_sha256",
+            )
+            tool_utility = load_tgvf_tool_utility_runtime_binding(
+                sidecar_path,
+                expected_sidecar_sha256=sidecar_sha256,
+                manifest_path=sidecar_manifest_path,
+                expected_manifest_sha256=sidecar_manifest_sha256,
+                expected_dataset_iteration_identity_sha256=iteration_sha256,
+            )
+            tool_utility_reward_enabled = True
+            focus_reward_enabled = True
+            grounding_reward_enabled = True
+            answer_reward_scale = _LEGACY_STAGE3_ANSWER_REWARD_SCALE
+            repeated_call_penalty = _LEGACY_STAGE3_REPEATED_CALL_PENALTY
+            protocol_error_penalty = _LEGACY_STAGE3_PROTOCOL_ERROR_PENALTY
+            visual_quality_judge_mode = "configured"
+            visual_quality_config_path = _existing_file(
+                reward_table["visual_quality_judge_config_path"],
+                name="reward.visual_quality_judge_config_path",
+            )
+            visual_quality_config_sha256 = _sha256(
+                reward_table["visual_quality_judge_config_sha256"],
+                name="reward.visual_quality_judge_config_sha256",
+            )
+            if _sha256_file(visual_quality_config_path) != visual_quality_config_sha256:
+                raise ValueError("reward visual-quality judge config SHA256 mismatch")
+            bound_visual_quality_judge = load_tgvf_visual_quality_judge(
+                visual_quality_config_path,
+                expected_file_sha256=visual_quality_config_sha256,
+            )
+            visual_quality_judge_identity = bound_visual_quality_judge.config_identity
         reward_profile = stage3_shaped_reward_version
         reward_weights: tuple[float, float, float] | None = None
     else:
@@ -233,6 +314,13 @@ def bind_policy_reward(
         pilot_reward_weight_profile_name(reward_weights)
         reward_profile = "pilot-v1"
         tool_utility = None
+        tool_utility_reward_enabled = None
+        focus_reward_enabled = None
+        grounding_reward_enabled = None
+        answer_reward_scale = None
+        repeated_call_penalty = None
+        protocol_error_penalty = None
+        visual_quality_judge_mode = None
         visual_quality_config_path = None
         visual_quality_config_sha256 = None
         visual_quality_judge_identity = None
@@ -246,12 +334,19 @@ def bind_policy_reward(
         answer_weight=None if reward_weights is None else reward_weights[0],
         format_weight=None if reward_weights is None else reward_weights[1],
         conditional_tool_weight=None if reward_weights is None else reward_weights[2],
+        protocol_error_penalty=protocol_error_penalty,
+        answer_reward_scale=answer_reward_scale,
+        repeated_call_penalty=repeated_call_penalty,
         judge_config_path=judge_config_path,
         judge_config_sha256=judge_config_sha256,
         tool_utility=tool_utility,
+        tool_utility_reward_enabled=tool_utility_reward_enabled,
+        focus_reward_enabled=focus_reward_enabled,
+        grounding_reward_enabled=grounding_reward_enabled,
         visual_quality_judge_config_path=visual_quality_config_path,
         visual_quality_judge_config_sha256=visual_quality_config_sha256,
         visual_quality_judge_identity=visual_quality_judge_identity,
+        visual_quality_judge_mode=visual_quality_judge_mode,
     )
     return reward
 

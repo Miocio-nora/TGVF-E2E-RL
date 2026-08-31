@@ -22,6 +22,7 @@ from tgvf_rl.protocol.schema import (
     NativeToolCapabilityProfile,
     build_tgvf_crop_tool_schema,
 )
+from tgvf_rl.protocol import NativeSuccessObservationProtocolId
 
 
 def _without_tool_specific_regions(value: str) -> str:
@@ -107,4 +108,7 @@ def test_atomic_prompt_identity_binds_schema_and_six_call_budget() -> None:
         == CROP_TGVF_DEEPEYES_MATCHED_MAXIMUM_TOOL_CALLS
         == DEEPEYES_MAX_ACTIVE_PERCEPTION
         == 6
+    )
+    assert identity.success_observation_protocol_id is (
+        NativeSuccessObservationProtocolId.DEEPEYES_ATOMIC_MATCHED_V1
     )

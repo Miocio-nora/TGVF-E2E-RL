@@ -60,9 +60,7 @@ def _char_tokens(text: str) -> tuple[tuple[int, ...], tuple[TokenByteSpan, ...]]
         token_id = 1000 + index
         width = len(char.encode("utf-8"))
         token_ids.append(token_id)
-        spans.append(
-            TokenByteSpan(index, token_id, byte_cursor, byte_cursor + width)
-        )
+        spans.append(TokenByteSpan(index, token_id, byte_cursor, byte_cursor + width))
         byte_cursor += width
     return tuple(token_ids), tuple(spans)
 
@@ -191,6 +189,7 @@ def _termination(
         VLLMTerminationOutcome("stop", 151645),
         VLLMTerminationOutcome("length", None),
     ),
+    preserve_invalid_tool_call_output: bool = False,
 ) -> VLLMTurnTerminationContract:
     return VLLMTurnTerminationContract(
         required_request_stop_strings=required_stop_strings,
@@ -199,6 +198,7 @@ def _termination(
         tool_call_terminal_suffixes=tool_suffixes,
         tool_call_outcomes=tool_outcomes,
         final_turn_outcomes=final_outcomes,
+        preserve_invalid_tool_call_output=preserve_invalid_tool_call_output,
     )
 
 
@@ -223,10 +223,7 @@ def test_sampler_captures_actual_selected_logprobs_and_exact_identities() -> Non
     assert sampled.sampling.policy_version == POLICY
     assert sampled.sampling.seed == 42
     assert sampled.sampling.backend_version == "0.12.0"
-    assert (
-        sampled.sampling.measurement
-        is LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS
-    )
+    assert sampled.sampling.measurement is LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS
     assert sampled.sampling.max_tokens == 8192
     assert sampled.sampling.stop_strings == ("</tool_call>",)
     assert sampled.backend_request_sha256 == request.backend_request_sha256
@@ -264,7 +261,9 @@ def test_sampler_identity_satisfies_bound_policy_pilot_contract() -> None:
     assert sampled.sampling.asynchronous_staleness_steps == 0
 
 
-def test_final_answer_may_terminate_on_explicit_eos_without_becoming_tool_call() -> None:
+def test_final_answer_may_terminate_on_explicit_eos_without_becoming_tool_call() -> (
+    None
+):
     text = "reason</think>final answer"
     client = _Client(text, finish_reason="stop", stop_reason=151645)
 
@@ -335,9 +334,7 @@ def test_unresolved_or_implicit_sampling_fields_fail_closed(
 
 def test_approved_close_token_id_can_supply_explicit_turn_stop() -> None:
     close_id = 151658
-    client = _Client(
-        "reason</think><tool_call>{}</tool_call>", stop_reason=close_id
-    )
+    client = _Client("reason</think><tool_call>{}</tool_call>", stop_reason=close_id)
     sampler = VLLMPolicySampler(
         client=client,
         behavior_policy=POLICY,
@@ -442,6 +439,39 @@ def test_run_bound_suffix_may_include_native_eos_when_golden_selects_it() -> Non
         turn_index=0,
     )
     assert sampled.text.endswith(f"</tool_call>{suffix}")
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "r</think><tool_call>{}</tool_call>trailing",
+        "r</think><tool_call>{}</tool_call><tool_call>{}</tool_call>",
+    ),
+)
+def test_direct_only_contract_preserves_invalid_tool_output_for_penalty(
+    text: str,
+) -> None:
+    client = _Client(text, finish_reason="stop", stop_reason=151645)
+    sampler = VLLMPolicySampler(
+        client=client,
+        behavior_policy=POLICY,
+        rng=_RNG(),
+        request_context=_Context(),
+        decoding=VLLMOutputDecodingContract(True, False, False, "final_only"),
+        termination=_termination(
+            required_stop_strings=(),
+            required_stop_token_ids=(151645,),
+            tool_outcomes=(VLLMTerminationOutcome("stop", 151645),),
+            preserve_invalid_tool_call_output=True,
+        ),
+    )
+
+    sampled = sampler.sample(
+        (1,),
+        _parameters(stop=[], stop_token_ids=[151645]),
+        turn_index=0,
+    )
+    assert sampled.text == text
 
 
 def test_response_hash_changes_when_actual_behavior_logprob_changes() -> None:

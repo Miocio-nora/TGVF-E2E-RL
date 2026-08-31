@@ -2,15 +2,16 @@
 
 Pinned veRL instantiates the Hydra ``invocation_factory`` partial once for
 every configured agent-loop entry.  That construction surface must not create
-another local Qwen model, reset the n=8 rollout counter, or forget the exact
-LoRA version already served by vLLM.  This module therefore owns one
+another local Qwen model, reset the rollout counter, or forget the behavior
+version already accepted by vLLM.  This module therefore owns one
 process-local runtime per run identity and upstream AgentLoop worker.
 
 The boundary deliberately does not synthesize visual observations or behavior
 log probabilities.  A live builder must provide the existing trajectory
-components port and an exact LoRA snapshot consumer.  Until that builder is
-registered, construction fails with a precise error rather than running a
-text-only or stale-policy substitute.
+components port and a consumer for the configured publication kind: exact
+legacy LoRA, or a request-scoped accepted full-Qwen/composite receipt.  Until
+that builder is registered, construction fails with a precise error rather
+than running a text-only or stale-policy substitute.
 """
 
 from __future__ import annotations
@@ -47,12 +48,16 @@ from .native_agent_loop import (
 )
 from .policy_runtime_contract import (
     PolicyAgentLoopWorkerPlacement,
+    PolicyBehaviorSnapshotConsumer,
     PolicyE2ERuntimeBuildContext,
     PolicyE2ERuntimeProduct,
     PolicyLoRASnapshotConsumer,
 )
 
 if TYPE_CHECKING:
+    from tgvf_rl.framework.verl.policy_behavior_version import (
+        PolicyBehaviorSnapshot,
+    )
     from tgvf_rl.framework.verl.policy_weight_sync import (
         PolicyLoRASnapshot,
         PolicyWeightSyncState,
@@ -76,7 +81,9 @@ class PolicyE2ERuntimeBuilder(Protocol):
     @property
     def singleton_identity(self) -> str: ...
 
-    def build(self, context: PolicyE2ERuntimeBuildContext, /) -> PolicyE2ERuntimeProduct: ...
+    def build(
+        self, context: PolicyE2ERuntimeBuildContext, /
+    ) -> PolicyE2ERuntimeProduct: ...
 
 
 class PeftPolicyLoRASnapshotConsumer:
@@ -119,7 +126,9 @@ class PeftPolicyLoRASnapshotConsumer:
         except ImportError as error:  # pragma: no cover - accepted env owns PEFT
             raise RuntimeError("exact local LoRA loading requires PEFT") from error
 
-        source = {name: tensor.detach().cpu() for name, tensor in snapshot.tensors.items()}
+        source = {
+            name: tensor.detach().cpu() for name, tensor in snapshot.tensors.items()
+        }
         with self._lock, torch.no_grad():
             set_peft_model_state_dict(
                 self.model,
@@ -151,7 +160,10 @@ class PeftPolicyLoRASnapshotConsumer:
                 )
         from .policy_weight_sync import lora_parameter_mapping_sha256
 
-        if lora_parameter_mapping_sha256(installed) != snapshot.policy_version.weights_sha256:
+        if (
+            lora_parameter_mapping_sha256(installed)
+            != snapshot.policy_version.weights_sha256
+        ):
             raise ReplayMismatchError(
                 "local PEFT state digest differs from the served behavior policy"
             )
@@ -170,7 +182,9 @@ class ExactLoRASnapshotPolicyVersionPort:
         snapshot_loader: Callable[..., "PolicyLoRASnapshot"] | None = None,
     ) -> None:
         if not callable(getattr(consumer, "apply_policy_lora_snapshot", None)):
-            raise TypeError("snapshot consumer must implement apply_policy_lora_snapshot()")
+            raise TypeError(
+                "snapshot consumer must implement apply_policy_lora_snapshot()"
+            )
         _require_policy_lora_snapshot(initial_snapshot)
         if initial_snapshot.policy_version.run_id != state.run_id:
             raise IdentityMismatchError("initial snapshot and weight-sync run differ")
@@ -195,11 +209,15 @@ class ExactLoRASnapshotPolicyVersionPort:
             _require_policy_lora_snapshot(snapshot)
             candidate = snapshot.policy_version
             if candidate.run_id != self.state.run_id:
-                raise IdentityMismatchError("latest LoRA snapshot belongs to another run")
+                raise IdentityMismatchError(
+                    "latest LoRA snapshot belongs to another run"
+                )
             if snapshot.run_identity_sha256 != self.state.run_identity_sha256:
                 raise IdentityMismatchError("latest LoRA snapshot run identity changed")
             if candidate.optimizer_step < self._current.optimizer_step:
-                raise ReplayMismatchError("latest LoRA snapshot regressed in optimizer step")
+                raise ReplayMismatchError(
+                    "latest LoRA snapshot regressed in optimizer step"
+                )
             if candidate != self._current:
                 if candidate.optimizer_step == self._current.optimizer_step:
                     raise ReplayMismatchError(
@@ -220,6 +238,76 @@ class ExactLoRASnapshotPolicyVersionPort:
         return installed
 
 
+class ExactPolicyBehaviorSnapshotVersionPort:
+    """Refresh a method-matrix behavior identity without requiring LoRA."""
+
+    def __init__(
+        self,
+        *,
+        state: "PolicyWeightSyncState",
+        consumer: PolicyBehaviorSnapshotConsumer,
+        initial_snapshot: "PolicyBehaviorSnapshot",
+        snapshot_loader: Callable[..., "PolicyBehaviorSnapshot"] | None = None,
+    ) -> None:
+        if not callable(getattr(consumer, "apply_policy_behavior_snapshot", None)):
+            raise TypeError(
+                "behavior consumer must implement apply_policy_behavior_snapshot()"
+            )
+        _require_policy_behavior_snapshot(initial_snapshot)
+        if initial_snapshot.policy_version.run_id != state.run_id:
+            raise IdentityMismatchError("initial behavior and weight-sync run differ")
+        if initial_snapshot.run_identity_sha256 != state.run_identity_sha256:
+            raise IdentityMismatchError("initial behavior and run identities differ")
+        self.state = state
+        self.consumer = consumer
+        self.snapshot_loader = snapshot_loader or _load_latest_behavior_snapshot
+        self._lock = RLock()
+        self._current = self._apply(initial_snapshot)
+        self._latest_pointer_signature = _latest_behavior_pointer_signature(state)
+
+    def current_policy_version(self) -> PolicyVersion:
+        with self._lock:
+            pointer_signature = _latest_behavior_pointer_signature(self.state)
+            if (
+                pointer_signature is not None
+                and pointer_signature == self._latest_pointer_signature
+            ):
+                return self._current
+            snapshot = self.snapshot_loader(self.state)
+            _require_policy_behavior_snapshot(snapshot)
+            candidate = snapshot.policy_version
+            if candidate.run_id != self.state.run_id:
+                raise IdentityMismatchError(
+                    "latest behavior snapshot belongs to another run"
+                )
+            if snapshot.run_identity_sha256 != self.state.run_identity_sha256:
+                raise IdentityMismatchError(
+                    "latest behavior snapshot run identity changed"
+                )
+            if candidate.optimizer_step < self._current.optimizer_step:
+                raise ReplayMismatchError(
+                    "latest behavior snapshot regressed in optimizer step"
+                )
+            if candidate != self._current:
+                if candidate.optimizer_step == self._current.optimizer_step:
+                    raise ReplayMismatchError(
+                        "one optimizer step was published with two behavior identities"
+                    )
+                self._current = self._apply(snapshot)
+            self._latest_pointer_signature = pointer_signature
+            return self._current
+
+    def _apply(self, snapshot: "PolicyBehaviorSnapshot") -> PolicyVersion:
+        installed = self.consumer.apply_policy_behavior_snapshot(snapshot)
+        if not isinstance(installed, PolicyVersion):
+            raise TypeError("behavior consumer must return PolicyVersion")
+        if installed != snapshot.policy_version:
+            raise IdentityMismatchError(
+                "behavior consumer did not prove the accepted publication identity"
+            )
+        return installed
+
+
 @dataclass(frozen=True, slots=True)
 class PolicyE2ERuntimeIdentity:
     schema_version: str
@@ -233,7 +321,9 @@ class PolicyE2ERuntimeIdentity:
 class _ProcessRuntimeCore:
     identity: PolicyE2ERuntimeIdentity
     bound_factory: BoundVerlNativeAgentLoopInvocationFactory
-    policy_version: ExactLoRASnapshotPolicyVersionPort
+    policy_version: (
+        ExactLoRASnapshotPolicyVersionPort | ExactPolicyBehaviorSnapshotVersionPort
+    )
     construction_fingerprint: tuple[int, ...]
 
 
@@ -253,9 +343,16 @@ def register_policy_e2e_live_runtime_builder(
     global _REGISTERED_LIVE_BUILDER
     with _PROCESS_RUNTIME_LOCK:
         if _PROCESS_RUNTIMES:
-            raise RuntimeError("cannot register a live builder after runtime construction")
-        if _REGISTERED_LIVE_BUILDER is not None and _REGISTERED_LIVE_BUILDER is not builder:
-            raise RuntimeError("a different Policy live runtime builder is already registered")
+            raise RuntimeError(
+                "cannot register a live builder after runtime construction"
+            )
+        if (
+            _REGISTERED_LIVE_BUILDER is not None
+            and _REGISTERED_LIVE_BUILDER is not builder
+        ):
+            raise RuntimeError(
+                "a different Policy live runtime builder is already registered"
+            )
         _REGISTERED_LIVE_BUILDER = builder
 
 
@@ -281,6 +378,7 @@ class PolicyE2ERuntimeInvocationFactory:
             load_policy_e2e_smoke_run_config
         ),
         snapshot_loader: Callable[..., "PolicyLoRASnapshot"] | None = None,
+        behavior_snapshot_loader: Callable[..., "PolicyBehaviorSnapshot"] | None = None,
     ) -> None:
         if not callable(config_loader):
             raise TypeError("config_loader must be callable")
@@ -303,9 +401,7 @@ class PolicyE2ERuntimeInvocationFactory:
         state = _weight_sync_state(values)
         if state.run_id != config.run_id:
             raise IdentityMismatchError("weight-sync state belongs to another run")
-        if not hmac.compare_digest(
-            state.run_identity_sha256, config.identity_sha256
-        ):
+        if not hmac.compare_digest(state.run_identity_sha256, config.identity_sha256):
             raise IdentityMismatchError("weight-sync state run identity differs")
         selected_builder = (
             runtime_builder
@@ -326,8 +422,15 @@ class PolicyE2ERuntimeInvocationFactory:
         with _PROCESS_RUNTIME_LOCK:
             core = _PROCESS_RUNTIMES.get(key)
             if core is None:
-                initial_snapshot = (snapshot_loader or _load_latest_snapshot)(state)
-                _require_policy_lora_snapshot(initial_snapshot)
+                method_behavior = config.method is not None
+                if method_behavior:
+                    initial_snapshot = (
+                        behavior_snapshot_loader or _load_latest_behavior_snapshot
+                    )(state)
+                    _require_policy_behavior_snapshot(initial_snapshot)
+                else:
+                    initial_snapshot = (snapshot_loader or _load_latest_snapshot)(state)
+                    _require_policy_lora_snapshot(initial_snapshot)
                 context = PolicyE2ERuntimeBuildContext(
                     config=config,
                     placement=placement,
@@ -342,13 +445,31 @@ class PolicyE2ERuntimeInvocationFactory:
                 )
                 product = selected_builder.build(context)
                 if not isinstance(product, PolicyE2ERuntimeProduct):
-                    raise TypeError("live runtime builder must return PolicyE2ERuntimeProduct")
-                policy_version = ExactLoRASnapshotPolicyVersionPort(
-                    state=state,
-                    consumer=product.snapshot_consumer,
-                    initial_snapshot=initial_snapshot,
-                    snapshot_loader=snapshot_loader,
-                )
+                    raise TypeError(
+                        "live runtime builder must return PolicyE2ERuntimeProduct"
+                    )
+                if method_behavior:
+                    if product.behavior_snapshot_consumer is None:
+                        raise TypeError(
+                            "method runtime requires a behavior snapshot consumer"
+                        )
+                    policy_version = ExactPolicyBehaviorSnapshotVersionPort(
+                        state=state,
+                        consumer=product.behavior_snapshot_consumer,
+                        initial_snapshot=initial_snapshot,
+                        snapshot_loader=behavior_snapshot_loader,
+                    )
+                else:
+                    if product.snapshot_consumer is None:
+                        raise TypeError(
+                            "legacy runtime requires a LoRA snapshot consumer"
+                        )
+                    policy_version = ExactLoRASnapshotPolicyVersionPort(
+                        state=state,
+                        consumer=product.snapshot_consumer,
+                        initial_snapshot=initial_snapshot,
+                        snapshot_loader=snapshot_loader,
+                    )
                 bound = BoundVerlNativeAgentLoopInvocationFactory(
                     run_id=config.run_id,
                     model=config.model,
@@ -472,25 +593,36 @@ def _policy_decoding_contract() -> VLLMOutputDecodingContract:
 def _policy_termination_contract(
     config: PolicyE2ESmokeRunConfig,
 ) -> VLLMTurnTerminationContract:
+    from tgvf_rl.protocol.schema import NativeToolCapabilityProfile
+
     sampling = config.policy.sampling
     if not sampling.is_run_bound:
         raise ValueError("Policy runtime requires a run-bound sampling contract")
     stop_strings = tuple(sampling.stop_strings or ())
     stop_token_ids = tuple(sampling.stop_token_ids or ())
-    if "</tool_call>" not in stop_strings:
-        raise ValueError("native multi-turn execution requires </tool_call> stop")
     final_outcomes = tuple(
         VLLMTerminationOutcome("stop", token_id) for token_id in stop_token_ids
     ) + (VLLMTerminationOutcome("length", None),)
+    if config.policy.tool_profile is NativeToolCapabilityProfile.NO_TOOL:
+        # A direct-only arm deliberately has no tool-call stop string.  If it
+        # nevertheless samples one complete terminal tool block, retain that
+        # behavior row so the strict action boundary can classify it and the
+        # direct-only loop can reject/measure it without executing a tool.
+        tool_call_outcomes = final_outcomes
+    else:
+        if "</tool_call>" not in stop_strings:
+            raise ValueError("native multi-turn execution requires </tool_call> stop")
+        tool_call_outcomes = (VLLMTerminationOutcome("stop", "</tool_call>"),)
     return VLLMTurnTerminationContract(
         required_request_stop_strings=stop_strings,
         required_request_stop_token_ids=stop_token_ids,
         include_stop_str_in_output=bool(sampling.include_stop_str_in_output),
         tool_call_terminal_suffixes=("",),
-        tool_call_outcomes=(
-            VLLMTerminationOutcome("stop", "</tool_call>"),
-        ),
+        tool_call_outcomes=tool_call_outcomes,
         final_turn_outcomes=final_outcomes,
+        preserve_invalid_tool_call_output=(
+            config.policy.tool_profile is NativeToolCapabilityProfile.NO_TOOL
+        ),
     )
 
 
@@ -546,11 +678,31 @@ def _load_latest_snapshot(state: "PolicyWeightSyncState") -> "PolicyLoRASnapshot
     return load_latest_lora_snapshot(state)
 
 
+def _load_latest_behavior_snapshot(
+    state: "PolicyWeightSyncState",
+) -> "PolicyBehaviorSnapshot":
+    from .policy_behavior_version import load_latest_policy_behavior_snapshot
+
+    return load_latest_policy_behavior_snapshot(state)
+
+
 def _latest_pointer_signature(state: "PolicyWeightSyncState") -> str | None:
     """Cheaply avoid reloading the same LoRA tensors for every n-way rollout."""
 
     try:
         payload = state.latest_path.read_bytes()
+    except FileNotFoundError:
+        return None
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _latest_behavior_pointer_signature(
+    state: "PolicyWeightSyncState",
+) -> str | None:
+    from .policy_behavior_version import POLICY_BEHAVIOR_LATEST_FILENAME
+
+    try:
+        payload = (state.directory / POLICY_BEHAVIOR_LATEST_FILENAME).read_bytes()
     except FileNotFoundError:
         return None
     return hashlib.sha256(payload).hexdigest()
@@ -575,6 +727,13 @@ def _require_policy_lora_snapshot(value: object) -> None:
         raise TypeError("snapshot loader must return PolicyLoRASnapshot")
 
 
+def _require_policy_behavior_snapshot(value: object) -> None:
+    from .policy_behavior_version import PolicyBehaviorSnapshot
+
+    if not isinstance(value, PolicyBehaviorSnapshot):
+        raise TypeError("behavior snapshot loader must return PolicyBehaviorSnapshot")
+
+
 def _ray_actor_name() -> str:
     try:
         import ray
@@ -591,8 +750,10 @@ def _ray_actor_name() -> str:
 
 
 def _require_sha256(value: object, name: str) -> str:
-    if not isinstance(value, str) or len(value) != 64 or any(
-        character not in "0123456789abcdef" for character in value
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
     ):
         raise ValueError(f"{name} must be a lowercase SHA-256")
     return value
@@ -609,10 +770,12 @@ def _reset_policy_e2e_runtime_singletons_for_tests() -> None:
 
 __all__ = [
     "ExactLoRASnapshotPolicyVersionPort",
+    "ExactPolicyBehaviorSnapshotVersionPort",
     "POLICY_AGENT_LOOP_WORKER_INDEX_ENV",
     "POLICY_E2E_RUNTIME_SCHEMA",
     "PeftPolicyLoRASnapshotConsumer",
     "PolicyAgentLoopWorkerPlacement",
+    "PolicyBehaviorSnapshotConsumer",
     "PolicyE2ELiveRuntimeUnavailableError",
     "PolicyE2ERuntimeBuildContext",
     "PolicyE2ERuntimeBuilder",

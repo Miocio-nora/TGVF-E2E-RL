@@ -13,6 +13,9 @@ import math
 
 
 STAGE3_SHAPED_REWARD_VERSION = "stage3-shaped-v1"
+STAGE3_ANSWER_REWARD_SCALE = 2.0
+STAGE3_REPEATED_CALL_PENALTY = 0.05
+STAGE3_PROTOCOL_ERROR_PENALTY = 1.0
 
 
 class ToolNecessityLabel(str, Enum):
@@ -47,26 +50,39 @@ class Stage3ShapedRewardFacts:
     term. ``successful_tgvf_observation_count`` records calls that actually
     triggered the tool and produced a TGVF observation; matching old Stage3's
     ``native_result.triggered``, it controls both the tool-choice reward and the
-    answer gate. A successful observation must have both quality-judge scores;
-    without an observation, those scores must be absent because there is no D to
-    judge.
+    answer gate. When visual-quality rewards are enabled, a successful
+    observation must have both quality-judge scores; without an observation,
+    those scores must be absent because there is no D to judge. A run may
+    explicitly disable both quality components, in which case judge facts are
+    forbidden and both components remain zero.
     """
 
     answer_correct: bool
-    tool_label: ToolNecessityLabel
+    tool_label: ToolNecessityLabel | None
     tool_call_count: int = 0
     successful_tgvf_observation_count: int = 0
     focus_score: QualityJudgeScore | None = None
     grounding_score: QualityJudgeScore | None = None
     quality_judge_failure: str | None = None
-    label_confidence: float = 0.5
+    quality_rewards_enabled: bool = True
+    label_confidence: float | None = 0.5
+    tool_utility_reward_enabled: bool = True
     protocol_errors: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.answer_correct) is not bool:
             raise TypeError("answer_correct must be bool")
-        if type(self.tool_label) is not ToolNecessityLabel:
-            raise TypeError("tool_label must be ToolNecessityLabel")
+        if type(self.quality_rewards_enabled) is not bool:
+            raise TypeError("quality_rewards_enabled must be bool")
+        if type(self.tool_utility_reward_enabled) is not bool:
+            raise TypeError("tool_utility_reward_enabled must be bool")
+        if self.tool_utility_reward_enabled:
+            if type(self.tool_label) is not ToolNecessityLabel:
+                raise TypeError(
+                    "enabled tool-utility reward requires a ToolNecessityLabel"
+                )
+        elif self.tool_label is not None:
+            raise ValueError("disabled tool-utility reward cannot carry a tool label")
         for field_name, value in (
             ("tool_call_count", self.tool_call_count),
             (
@@ -83,12 +99,19 @@ class Stage3ShapedRewardFacts:
                 "successful TGVF observations cannot exceed attempted tool calls"
             )
 
-        if type(self.label_confidence) is not float:
-            raise TypeError("label_confidence must be float")
-        if not math.isfinite(self.label_confidence):
-            raise ValueError("label_confidence must be finite")
-        if not 0.0 <= self.label_confidence <= 1.0:
-            raise ValueError("label_confidence must be within [0, 1]")
+        if self.tool_utility_reward_enabled:
+            if type(self.label_confidence) is not float:
+                raise TypeError(
+                    "enabled tool-utility reward requires float label_confidence"
+                )
+            if not math.isfinite(self.label_confidence):
+                raise ValueError("label_confidence must be finite")
+            if not 0.0 <= self.label_confidence <= 1.0:
+                raise ValueError("label_confidence must be within [0, 1]")
+        elif self.label_confidence is not None:
+            raise ValueError(
+                "disabled tool-utility reward cannot carry label confidence"
+            )
 
         for field_name, score in (
             ("focus_score", self.focus_score),
@@ -110,7 +133,12 @@ class Stage3ShapedRewardFacts:
                 "quality_judge_failure must be non-empty stripped text when present"
             )
         judge_failed = self.quality_judge_failure is not None
-        if has_observation and has_both_scores == judge_failed:
+        if not self.quality_rewards_enabled:
+            if has_any_score or judge_failed:
+                raise ValueError(
+                    "disabled quality rewards cannot carry judge scores or failures"
+                )
+        elif has_observation and has_both_scores == judge_failed:
             raise ValueError(
                 "successful TGVF observations require focus and grounding scores "
                 "or one explicit sample-local judge failure"
@@ -221,8 +249,15 @@ class Stage3ShapedRewardResult:
         return self.components[tuple(Stage3ShapedComponentName).index(name)]
 
 
+@dataclass(frozen=True, slots=True)
 class Stage3ShapedRewardKernel:
-    """Implement ``2*A_gated + T + F + G + P`` exactly."""
+    """Implement the configured Stage3-shaped component equation exactly.
+
+    The default remains the historical ``2*A_gated + T + F + G + P``. A run
+    may explicitly disable tool-utility supervision, which removes both the
+    label-dependent decision score and answer gate while retaining the
+    label-independent repeated-call penalty in the TOOL component.
+    """
 
     _TOOL_DECISION_BASE = {
         ToolNecessityLabel.NEEDED: (1.0, -2.0),
@@ -240,25 +275,62 @@ class Stage3ShapedRewardKernel:
         QualityJudgeScore.FAIL: -1.0,
     }
 
+    answer_reward_scale: float = STAGE3_ANSWER_REWARD_SCALE
+    repeated_call_penalty: float = STAGE3_REPEATED_CALL_PENALTY
+    protocol_error_penalty: float = STAGE3_PROTOCOL_ERROR_PENALTY
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("answer_reward_scale", self.answer_reward_scale),
+            ("repeated_call_penalty", self.repeated_call_penalty),
+            ("protocol_error_penalty", self.protocol_error_penalty),
+        ):
+            if type(value) is not float:
+                raise TypeError(f"{field_name} must be float")
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{field_name} must be finite and non-negative")
+
     def score(self, facts: Stage3ShapedRewardFacts) -> Stage3ShapedRewardResult:
         if type(facts) is not Stage3ShapedRewardFacts:
             raise TypeError("facts must be Stage3ShapedRewardFacts")
 
         tool_attempted = facts.tool_call_count >= 1
         tool_succeeded = facts.successful_tgvf_observation_count >= 1
-        answer_gated = (
-            facts.tool_label is ToolNecessityLabel.NEEDED and not tool_succeeded
+        answer_gated = bool(
+            facts.tool_utility_reward_enabled
+            and facts.tool_label is ToolNecessityLabel.NEEDED
+            and not tool_succeeded
         )
-        answer_score = 2.0 * float(facts.answer_correct and not answer_gated)
+        answer_score = self.answer_reward_scale * float(
+            facts.answer_correct and not answer_gated
+        )
 
-        used_base, unused_base = self._TOOL_DECISION_BASE[facts.tool_label]
-        tool_decision_base = used_base if tool_succeeded else unused_base
-        decision_score = facts.label_confidence * tool_decision_base
+        if facts.tool_utility_reward_enabled:
+            assert facts.tool_label is not None
+            assert facts.label_confidence is not None
+            used_base, unused_base = self._TOOL_DECISION_BASE[facts.tool_label]
+            tool_decision_base = used_base if tool_succeeded else unused_base
+            decision_score = facts.label_confidence * tool_decision_base
+            decision_evidence = (
+                f"label={facts.tool_label.value}; "
+                f"decision_base={tool_decision_base}; "
+                f"label_confidence={facts.label_confidence}; "
+                f"decision_score={decision_score}"
+            )
+        else:
+            decision_score = 0.0
+            decision_evidence = "tool_utility_reward=disabled; decision_score=0.0"
         extra_call_count = max(0, facts.tool_call_count - 1)
-        extra_call_penalty = -0.05 * extra_call_count
+        extra_call_penalty = -self.repeated_call_penalty * extra_call_count
         tool_score = decision_score + extra_call_penalty
 
-        if tool_succeeded and facts.quality_judge_failure is None:
+        if not facts.quality_rewards_enabled:
+            focus_score = 0.0
+            grounding_score = 0.0
+            focus_evidence = "disabled_by_run_config"
+            grounding_evidence = "disabled_by_run_config"
+            quality_judge_covered = False
+        elif tool_succeeded and facts.quality_judge_failure is None:
             assert facts.focus_score is not None
             assert facts.grounding_score is not None
             focus_score = self._FOCUS_SCORE[facts.focus_score]
@@ -288,7 +360,7 @@ class Stage3ShapedRewardKernel:
             grounding_evidence = "not_applicable=no_successful_tgvf_observation"
             quality_judge_covered = False
 
-        protocol_score = -1.0 if facts.protocol_errors else 0.0
+        protocol_score = -self.protocol_error_penalty if facts.protocol_errors else 0.0
         error_summary = ",".join(facts.protocol_errors) or "none"
         components = (
             Stage3ShapedRewardComponent(
@@ -297,18 +369,15 @@ class Stage3ShapedRewardKernel:
                 (
                     f"answer_correct={facts.answer_correct}; "
                     f"answer_gated={answer_gated}; tool_succeeded={tool_succeeded}; "
-                    "multiplier=2.0"
+                    f"multiplier={self.answer_reward_scale}"
                 ),
             ),
             Stage3ShapedRewardComponent(
                 Stage3ShapedComponentName.TOOL,
                 tool_score,
                 (
-                    f"label={facts.tool_label.value}; tool_attempted={tool_attempted}; "
+                    f"{decision_evidence}; tool_attempted={tool_attempted}; "
                     f"tool_used={tool_succeeded}; "
-                    f"decision_base={tool_decision_base}; "
-                    f"label_confidence={facts.label_confidence}; "
-                    f"decision_score={decision_score}; "
                     f"extra_call_count={extra_call_count}; "
                     f"extra_call_penalty={extra_call_penalty}"
                 ),
@@ -326,14 +395,18 @@ class Stage3ShapedRewardKernel:
             Stage3ShapedRewardComponent(
                 Stage3ShapedComponentName.PROTOCOL,
                 protocol_score,
-                f"protocol_errors={error_summary}; any_error={bool(facts.protocol_errors)}",
+                (
+                    f"protocol_errors={error_summary}; "
+                    f"any_error={bool(facts.protocol_errors)}; "
+                    f"penalty={self.protocol_error_penalty}"
+                ),
             ),
         )
         return Stage3ShapedRewardResult(
             total=float(math.fsum(component.score for component in components)),
             components=components,
             answer_gated=answer_gated,
-            quality_judge_applicable=tool_succeeded,
+            quality_judge_applicable=(tool_succeeded and facts.quality_rewards_enabled),
             quality_judge_covered=quality_judge_covered,
             quality_judge_failure=facts.quality_judge_failure,
         )
@@ -341,6 +414,9 @@ class Stage3ShapedRewardKernel:
 
 __all__ = [
     "QualityJudgeScore",
+    "STAGE3_ANSWER_REWARD_SCALE",
+    "STAGE3_PROTOCOL_ERROR_PENALTY",
+    "STAGE3_REPEATED_CALL_PENALTY",
     "STAGE3_SHAPED_REWARD_VERSION",
     "Stage3ShapedComponentName",
     "Stage3ShapedRewardComponent",

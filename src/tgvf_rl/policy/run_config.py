@@ -69,6 +69,8 @@ from .config import (
     POLICY_PILOT_V1_MODEL_NAME,
     POLICY_PILOT_V1_MODEL_PATH,
     POLICY_PILOT_V1_TOKENIZER_LENGTH,
+    PolicyMethodExperimentConfig as PolicyMethodExperimentConfig,
+    PolicyMethodProfile as PolicyMethodProfile,
     PolicyPilotV1Config as PolicyPilotV1Config,
     PolicyTGVFStage3ExperimentConfig as PolicyTGVFStage3ExperimentConfig,
     PolicyVisualToolExperimentConfig as PolicyVisualToolExperimentConfig,
@@ -80,6 +82,9 @@ from .deepeyes_strict_control import (
 from .run_config_canonical_launch import bind_canonical_policy_launch
 from .run_config_schema import (
     POLICY_E2E_AGENT_LOOP_CONFIG_PATH,
+    POLICY_E2E_ATOMIC_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_CROP_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
     POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA,
@@ -90,6 +95,11 @@ from .run_config_schema import (
     POLICY_E2E_MIXED_JUDGE_MODE,
     POLICY_E2E_MIXED_REWARD_TASK,
     POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_METHOD_RUN_CONFIG_SCHEMAS,
+    POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
+    POLICY_E2E_PIXEL512_SIX_CALL_CAP_ERROR_SHA256,
     POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN,
     POLICY_E2E_SMOKE_ANSWER_VERIFIER,
     POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256,
@@ -103,7 +113,12 @@ from .run_config_schema import (
     POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256,
     POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256,
     POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
+    POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
+    PolicyMethodMatrixBinding,
+    RP66AdapterUpdateMode,
     SmokeAccumulationBinding,
     SmokeCapacityBinding,
     SmokeDatasetSelection,
@@ -119,6 +134,7 @@ from .run_config_schema import (
     SmokeSchedulerBinding,
     SmokeSelectedMCQSample,
     SmokeTrainingBinding,
+    pixel512_parity_method_for_schema,
 )
 from .run_config_validation import (
     _absolute_path as _absolute_path,
@@ -271,16 +287,19 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
         POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA,
+        *POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
     }:
         raise ValueError("policy E2E run config schema mismatch")
     deepeyes_strict_control_run = (
         schema_version == POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA
     )
-    expected_top_level_fields = (
-        _TOP_LEVEL_FIELDS | {"deepeyes_control"}
-        if deepeyes_strict_control_run
-        else _TOP_LEVEL_FIELDS
-    )
+    if deepeyes_strict_control_run:
+        expected_top_level_fields = _TOP_LEVEL_FIELDS | {"deepeyes_control"}
+    elif schema_version == POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA:
+        expected_top_level_fields = _TOP_LEVEL_FIELDS | {"method"}
+    else:
+        expected_top_level_fields = _TOP_LEVEL_FIELDS
     if set(payload) != expected_top_level_fields:
         raise ValueError("policy E2E smoke top-level fields differ")
     if deepeyes_strict_control_run and not allow_historical_read_only_contract:
@@ -288,11 +307,38 @@ def load_policy_e2e_smoke_run_config(
             "historical PRL12 strict-control v1 is read-only; explicit historical "
             "contract loading is required"
         )
+    legacy_method_profile = pixel512_parity_method_for_schema(schema_version)
+    if legacy_method_profile is not None and not allow_historical_read_only_contract:
+        raise ValueError(
+            "historical resolution-named PRL26 schemas are read-only; use the "
+            "method-matrix schema for new runs"
+        )
+    if schema_version == POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA:
+        method_table = _table(payload, "method", {"matrix_id", "profile"})
+        try:
+            method_profile = PolicyMethodProfile(method_table["profile"])
+        except (TypeError, ValueError) as error:
+            raise ValueError("method.profile is invalid") from error
+        method_binding = PolicyMethodMatrixBinding(
+            matrix_id=_safe_run_id(method_table["matrix_id"]),
+            profile=method_profile,
+        )
+    elif legacy_method_profile is not None:
+        method_binding = PolicyMethodMatrixBinding(
+            matrix_id="prl26-pixel512-parity-legacy",
+            profile=legacy_method_profile,
+            legacy_schema_alias=schema_version,
+        )
+    else:
+        method_binding = None
     formal_pilot = schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
     if payload["formal_pilot"] is not formal_pilot:
         raise ValueError("policy E2E run formal_pilot mode differs from schema")
     mixed_run = schema_version != POLICY_E2E_SMOKE_CONFIG_SCHEMA
-    stage3_shaped_run = schema_version == POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA
+    method_run = method_binding is not None
+    stage3_shaped_run = (
+        schema_version == POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA or method_run
+    )
     deepeyes_scaled_crop_run = schema_version in {
         POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
         POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA,
@@ -304,6 +350,7 @@ def load_policy_e2e_smoke_run_config(
     )
     explicit_observation_run = (
         schema_version == POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA
+        or method_run
     )
     run_id = _safe_run_id(payload["run_id"])
 
@@ -350,15 +397,26 @@ def load_policy_e2e_smoke_run_config(
             "Qwen3-VL 8B edition"
         )
     assistant_dialect = native_assistant_dialect_for_model(model_name)
-    _require_exact(
-        model_table["native_deepstack_enabled"], True, "model.native_deepstack_enabled"
+    native_deepstack_enabled = _boolean(
+        model_table["native_deepstack_enabled"],
+        name="model.native_deepstack_enabled",
     )
-    expected_image_max_pixels = 1_003_520 if deepeyes_scaled_crop_run else 512 * 512
-    _require_exact(
-        model_table["image_max_pixels"],
-        expected_image_max_pixels,
-        "model.image_max_pixels",
+    if not method_run:
+        _require_exact(
+            native_deepstack_enabled,
+            True,
+            "model.native_deepstack_enabled",
+        )
+    image_max_pixels = _positive_int(
+        model_table["image_max_pixels"], name="model.image_max_pixels"
     )
+    if not method_run:
+        expected_image_max_pixels = 1_003_520 if deepeyes_scaled_crop_run else 512 * 512
+        _require_exact(
+            image_max_pixels,
+            expected_image_max_pixels,
+            "model.image_max_pixels",
+        )
     model = ModelIdentity(
         family=model_table["family"],
         model_name=model_name,
@@ -598,20 +656,32 @@ def load_policy_e2e_smoke_run_config(
         selected_sample=selected_sample,
     )
 
+    representation_fields = {
+        "artifact_path",
+        "artifact_file_sha256",
+        "artifact_manifest_sha256",
+        "artifact_namespace",
+        "artifact_name",
+        "artifact_version",
+        "expected_run_id",
+        "expected_run_identity_sha256",
+        "conditioning",
+    }
+    adapter_backed_method_run = (
+        method_binding is not None
+        and method_binding.profile
+        in {
+            PolicyMethodProfile.TGVF_SHORT,
+            PolicyMethodProfile.TGVF_TARGET_GUIDE_V2,
+            PolicyMethodProfile.ATOMIC,
+        }
+    )
+    if adapter_backed_method_run:
+        representation_fields.add("adapter_update_mode")
     representation_table = _table(
         payload,
         "representation",
-        {
-            "artifact_path",
-            "artifact_file_sha256",
-            "artifact_manifest_sha256",
-            "artifact_namespace",
-            "artifact_name",
-            "artifact_version",
-            "expected_run_id",
-            "expected_run_identity_sha256",
-            "conditioning",
-        },
+        representation_fields,
     )
     artifact_path = _existing_file(
         representation_table["artifact_path"], name="representation.artifact_path"
@@ -643,6 +713,15 @@ def load_policy_e2e_smoke_run_config(
         ),
     )
     conditioning = _conditioning(representation_table["conditioning"])
+    if adapter_backed_method_run:
+        try:
+            adapter_update_mode = RP66AdapterUpdateMode(
+                representation_table["adapter_update_mode"]
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError("representation.adapter_update_mode is invalid") from error
+    else:
+        adapter_update_mode = RP66AdapterUpdateMode.JOINT
     representation = SmokeRepresentationBinding(
         artifact_path=artifact_path,
         artifact_file_sha256=artifact_file_sha256,
@@ -656,6 +735,7 @@ def load_policy_e2e_smoke_run_config(
             name="representation.expected_run_identity_sha256",
         ),
         conditioning=conditioning,
+        adapter_update_mode=adapter_update_mode,
     )
 
     visual_always_judge = (
@@ -676,6 +756,7 @@ def load_policy_e2e_smoke_run_config(
         mixed_run=mixed_run,
         model=model,
         model_table=model_table,
+        method_binding=method_binding,
         runtime_binding=runtime_binding,
         stage3_shaped_reward_version=STAGE3_SHAPED_REWARD_VERSION,
         stage3_shaped_run=stage3_shaped_run,
@@ -835,6 +916,7 @@ def load_policy_e2e_smoke_run_config(
         source_path=source_path,
         source_sha256=hashlib.sha256(raw).hexdigest(),
         canonical_json=canonical_json,
+        method=method_binding,
         deepeyes_control=deepeyes_control,
         formal_pilot=payload["formal_pilot"],
         schema_version=schema_version,
@@ -986,6 +1068,9 @@ def _verify_selected_mcq_sample(
 
 __all__ = [
     "POLICY_E2E_AGENT_LOOP_CONFIG_PATH",
+    "POLICY_E2E_ATOMIC_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_CROP_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA",
@@ -998,6 +1083,11 @@ __all__ = [
     "POLICY_E2E_MIXED_JUDGE_MODE",
     "POLICY_E2E_MIXED_REWARD_TASK",
     "POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_METHOD_RUN_CONFIG_SCHEMAS",
+    "POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS",
+    "POLICY_E2E_PIXEL512_SIX_CALL_CAP_ERROR_SHA256",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER_V2_SHA256",
@@ -1009,7 +1099,11 @@ __all__ = [
     "POLICY_E2E_SMOKE_SEED_DERIVATION_NAME",
     "POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256",
     "POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN",
+    "POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS",
     "PolicyE2ESmokeRunConfig",
+    "PolicyMethodMatrixBinding",
     "SmokeAccumulationBinding",
     "SmokeCapacityBinding",
     "SmokeDatasetSelection",
@@ -1027,4 +1121,5 @@ __all__ = [
     "SmokeTrainingBinding",
     "formal_deepeyes47k_iteration_identity_sha256",
     "load_policy_e2e_smoke_run_config",
+    "pixel512_parity_method_for_schema",
 ]

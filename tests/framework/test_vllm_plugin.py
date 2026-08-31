@@ -521,3 +521,22 @@ def test_live_plugin_preserves_vllm_new_style_model_signature() -> None:
     assert tuple(signature.parameters) == ("vllm_config", "prefix")
     assert signature.parameters["vllm_config"].kind is inspect.Parameter.KEYWORD_ONLY
     assert signature.parameters["prefix"].default == "model"
+
+
+@pytest.mark.parametrize("enabled", (True, False))
+def test_vllm_native_deepstack_control_preserves_shape_and_controls_values(
+    enabled: bool,
+) -> None:
+    from tgvf_rl.framework.vllm.qwen3_plugin import (
+        apply_native_deepstack_tensor_control,
+    )
+
+    source = torch.arange(24, dtype=torch.float32).reshape(3, 2, 4)
+    observed = apply_native_deepstack_tensor_control(source, enabled=enabled)
+
+    assert observed.shape == source.shape
+    assert observed.dtype == source.dtype
+    if enabled:
+        assert observed is source
+    else:
+        assert torch.count_nonzero(observed).item() == 0

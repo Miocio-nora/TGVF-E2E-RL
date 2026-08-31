@@ -38,6 +38,7 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _RemoteTGVFFocusToolRuntime,
     _BoundTGVFVisualQualityRuntimeJudge,
     _build_reward_pipeline,
+    _build_stage3_reward_runtime,
     _default_metrics_factory,
     _required_success_observation_protocol_id,
     _required_action_boundary_protocol_id,
@@ -113,6 +114,60 @@ def test_no_tool_live_profile_requires_no_tool_rpc_and_runtime_fails_closed() ->
 
     with pytest.raises(RuntimeError, match="cannot execute"):
         _DisabledNoToolRuntime().execute(object(), object())
+
+
+def test_tfree_stage3_runtime_builds_without_utility_or_visual_judge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answer_identity = ArtifactIdentity("test", "answer", "v1", "1" * 64)
+    answer_verifier = SimpleNamespace(verify=lambda _context: None)
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.policy_live_runtime._build_rule_first_answer_verifier",
+        lambda _config: (answer_identity, answer_verifier),
+    )
+
+    def reject_visual_load(*_args, **_kwargs):
+        raise AssertionError("disabled visual judge must not be loaded")
+
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.policy_live_runtime.load_tgvf_visual_quality_judge",
+        reject_visual_load,
+    )
+    config = SimpleNamespace(
+        identity_sha256="2" * 64,
+        reward=SimpleNamespace(
+            profile="stage3-shaped-v1",
+            answer_weight=None,
+            format_weight=None,
+            conditional_tool_weight=None,
+            answer_verifier="fixture",
+            answer_verifier_sha256="3" * 64,
+            judge_config_sha256="4" * 64,
+            tool_utility=None,
+            tool_utility_reward_enabled=False,
+            focus_reward_enabled=False,
+            grounding_reward_enabled=False,
+            visual_quality_judge_mode="disabled",
+            visual_quality_judge_config_path=None,
+            visual_quality_judge_config_sha256=None,
+            visual_quality_judge_identity=None,
+            answer_reward_scale=2.0,
+            repeated_call_penalty=0.05,
+            protocol_error_penalty=2.0,
+        ),
+    )
+
+    spec, verifier, visual_provider = _build_stage3_reward_runtime(config)
+
+    assert verifier is answer_verifier
+    assert visual_provider is None
+    assert spec.tool_utility_reward_enabled is False
+    assert spec.visual_quality_enabled is False
+    assert spec.answer_reward_scale == 2.0
+    assert spec.repeated_call_penalty == 0.05
+    assert spec.protocol_error_penalty == 2.0
+    assert spec.tool_utility_sidecar_sha256 is None
+    assert spec.visual_judge_identity is None
 
 
 def _teacher25_runtime_binding() -> PolicyTeacherQuarterMixRuntimeBinding:
@@ -352,6 +407,26 @@ def test_live_observation_contract_never_infers_crop_renderer() -> None:
     assert matched.protocol_id is (
         NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1
     )
+
+    exact_profiles = {
+        NativeSuccessObservationProtocolId.NO_TOOL_NO_EXECUTION_V1: (
+            NativeToolCapabilityProfile.NO_TOOL
+        ),
+        NativeSuccessObservationProtocolId.DEEPEYES_TGVF_MATCHED_V1: (
+            NativeToolCapabilityProfile.TGVF_ONLY
+        ),
+        NativeSuccessObservationProtocolId.DEEPEYES_ATOMIC_MATCHED_V1: (
+            NativeToolCapabilityProfile.CROP_TGVF
+        ),
+    }
+    for protocol_id, profile in exact_profiles.items():
+        contract = _success_observation_contract(
+            protocol_id=protocol_id,
+            tool_profile=profile,
+            assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+        )
+        assert contract.protocol_id is protocol_id
+        assert contract.tool_profile is profile
 
     with pytest.raises(ValueError, match="explicit matched or legacy Crop protocol"):
         _success_observation_contract(

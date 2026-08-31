@@ -8,6 +8,7 @@ filesystem validation; those responsibilities remain in :mod:`.run_config`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 import hashlib
 import json
 from pathlib import Path
@@ -18,6 +19,8 @@ from tgvf_rl.protocol import (
     StandardToolError,
     ToolErrorCode,
 )
+
+from .config import PolicyMethodProfile
 
 if TYPE_CHECKING:
     from tgvf_rl.conditioning import TargetConditioningConfig
@@ -51,6 +54,46 @@ POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA = (
 )
 POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA = (
     "policy-e2e-explicit-observation-run-config-v1"
+)
+POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA = "policy-e2e-method-matrix-run-config-v1"
+POLICY_E2E_CROP_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-crop-tgvf-tfree-deepeyes-matched-pixel512-parity-run-config-v1"
+)
+POLICY_E2E_ATOMIC_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA = (
+    POLICY_E2E_CROP_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA
+)
+POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-crop-tfree-exact-deepeyes-matched-pixel512-parity-run-config-v1"
+)
+POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-no-tool-tfree-deepeyes-matched-pixel512-parity-run-config-v1"
+)
+POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-tgvf-short-tfree-deepeyes-matched-pixel512-parity-run-config-v1"
+)
+POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-tgvf-target-guide-v2-tfree-deepeyes-matched-"
+    "pixel512-parity-run-config-v1"
+)
+POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS = frozenset(
+    {
+        POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    }
+)
+POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS = frozenset(
+    {
+        POLICY_E2E_CROP_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+        *POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
+    }
+)
+POLICY_E2E_METHOD_RUN_CONFIG_SCHEMAS = frozenset(
+    {
+        POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA,
+        *POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
+    }
 )
 # Stabilization bridge for this historical run-config family. It proves that
 # observation and action identities are explicit, but it is not a replacement
@@ -185,6 +228,16 @@ POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256 = StandardToolError(
     recoverable=True,
     maximum_tool_calls=1,
 ).payload_sha256
+POLICY_E2E_PIXEL512_SIX_CALL_CAP_ERROR_SHA256 = StandardToolError(
+    code=ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value,
+    message=(
+        "The maximum of 6 tool-call attempts has been reached; "
+        "this call was not executed."
+    ),
+    attempt_index=6,
+    recoverable=True,
+    maximum_tool_calls=6,
+).payload_sha256
 POLICY_E2E_AGENT_LOOP_CONFIG_PATH = (
     Path(__file__).resolve().parents[3]
     / "configs"
@@ -225,6 +278,69 @@ class SmokeDatasetSelection:
     selected_sample: SmokeSelectedMCQSample | None
 
 
+_PIXEL512_PARITY_METHOD_BY_SCHEMA = {
+    POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA: (
+        PolicyMethodProfile.NO_TOOL
+    ),
+    POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA: (
+        PolicyMethodProfile.CROP
+    ),
+    POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA: (
+        PolicyMethodProfile.TGVF_SHORT
+    ),
+    POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA: (
+        PolicyMethodProfile.TGVF_TARGET_GUIDE_V2
+    ),
+    POLICY_E2E_CROP_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA: (
+        PolicyMethodProfile.ATOMIC
+    ),
+}
+
+
+def pixel512_parity_method_for_schema(
+    schema_version: object,
+) -> PolicyMethodProfile | None:
+    """Classify one run schema without treating unrelated historical schemas alike."""
+
+    if not isinstance(schema_version, str):
+        return None
+    return _PIXEL512_PARITY_METHOD_BY_SCHEMA.get(schema_version)
+
+
+# Import compatibility for the unfinished historical launcher overlay. New code
+# reads ``PolicyE2ESmokeRunConfig.method.profile`` instead of inferring from a
+# resolution-bearing schema name.
+PolicyPixel512ParityMethod = PolicyMethodProfile
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyMethodMatrixBinding:
+    """Explicit method identity shared by arbitrary-resolution matrix arms."""
+
+    matrix_id: str
+    profile: PolicyMethodProfile
+    legacy_schema_alias: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.matrix_id, str) or not self.matrix_id.strip():
+            raise ValueError("method.matrix_id must be a non-empty string")
+        if not isinstance(self.profile, PolicyMethodProfile):
+            raise TypeError("method.profile must be PolicyMethodProfile")
+        if self.legacy_schema_alias is not None and (
+            not isinstance(self.legacy_schema_alias, str)
+            or self.legacy_schema_alias
+            not in POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS
+        ):
+            raise ValueError("method legacy schema alias is invalid")
+
+
+class RP66AdapterUpdateMode(str, Enum):
+    """Optimizer ownership of the RP67/RP66-compatible TGVF adapter."""
+
+    JOINT = "joint"
+    FROZEN_ADAPTER = "frozen_adapter"
+
+
 @dataclass(frozen=True, slots=True)
 class SmokeRepresentationBinding:
     artifact_path: Path
@@ -233,6 +349,11 @@ class SmokeRepresentationBinding:
     expected_run_id: str
     expected_run_identity_sha256: str
     conditioning: TargetConditioningConfig
+    adapter_update_mode: RP66AdapterUpdateMode = RP66AdapterUpdateMode.JOINT
+
+    @property
+    def adapter_trainable(self) -> bool:
+        return self.adapter_update_mode is RP66AdapterUpdateMode.JOINT
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,12 +386,19 @@ class SmokeRewardBinding:
     answer_weight: float | None
     format_weight: float | None
     conditional_tool_weight: float | None
+    protocol_error_penalty: float | None = None
+    answer_reward_scale: float | None = None
+    repeated_call_penalty: float | None = None
     judge_config_path: Path | None = None
     judge_config_sha256: str | None = None
     tool_utility: TGVFToolUtilityRuntimeBinding | None = None
+    tool_utility_reward_enabled: bool | None = None
+    focus_reward_enabled: bool | None = None
+    grounding_reward_enabled: bool | None = None
     visual_quality_judge_config_path: Path | None = None
     visual_quality_judge_config_sha256: str | None = None
     visual_quality_judge_identity: ArtifactIdentity | None = None
+    visual_quality_judge_mode: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -400,6 +528,7 @@ class PolicyE2ESmokeRunConfig:
     source_path: Path
     source_sha256: str
     canonical_json: str
+    method: PolicyMethodMatrixBinding | None = None
     deepeyes_control: DeepEyesStrictControlBinding | None = None
     formal_pilot: bool = False
     schema_version: str = POLICY_E2E_SMOKE_CONFIG_SCHEMA
@@ -413,11 +542,31 @@ class PolicyE2ESmokeRunConfig:
             POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA: False,
+            **{
+                schema: False
+                for schema in POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS
+            },
         }
         if self.schema_version not in accepted:
             raise ValueError("policy E2E run config schema mismatch")
         if self.formal_pilot is not accepted[self.schema_version]:
             raise ValueError("policy E2E run formal_pilot mode differs from schema")
+        legacy_profile = pixel512_parity_method_for_schema(self.schema_version)
+        if self.schema_version == POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA:
+            if self.method is None or self.method.legacy_schema_alias is not None:
+                raise ValueError(
+                    "method-matrix schema requires an explicit method binding"
+                )
+        elif legacy_profile is not None:
+            if (
+                self.method is None
+                or self.method.profile is not legacy_profile
+                or self.method.legacy_schema_alias != self.schema_version
+            ):
+                raise ValueError("legacy PRL26 schema method binding differs")
+        elif self.method is not None:
+            raise ValueError("non-method run config cannot carry a method binding")
 
     @property
     def identity_sha256(self) -> str:
@@ -434,6 +583,7 @@ _PUBLIC_RUN_CONFIG_MODULE = "tgvf_rl.policy.run_config"
 _RUN_CONFIG_SCHEMA_TYPES = (
     SmokeSelectedMCQSample,
     SmokeDatasetSelection,
+    PolicyMethodMatrixBinding,
     SmokeRepresentationBinding,
     SmokeProtocolBinding,
     SmokeRolloutRNGBinding,
@@ -463,6 +613,9 @@ del _schema_type
 
 __all__ = [
     "POLICY_E2E_AGENT_LOOP_CONFIG_PATH",
+    "POLICY_E2E_ATOMIC_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_CROP_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA",
@@ -473,6 +626,11 @@ __all__ = [
     "POLICY_E2E_MIXED_JUDGE_MODE",
     "POLICY_E2E_MIXED_REWARD_TASK",
     "POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_METHOD_RUN_CONFIG_SCHEMAS",
+    "POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS",
+    "POLICY_E2E_PIXEL512_SIX_CALL_CAP_ERROR_SHA256",
     "POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256",
@@ -486,7 +644,11 @@ __all__ = [
     "POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256",
     "POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256",
     "POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS",
     "PolicyE2ESmokeRunConfig",
+    "PolicyMethodMatrixBinding",
     "SmokeAccumulationBinding",
     "SmokeCapacityBinding",
     "SmokeDatasetSelection",
@@ -502,4 +664,5 @@ __all__ = [
     "SmokeSchedulerBinding",
     "SmokeSelectedMCQSample",
     "SmokeTrainingBinding",
+    "pixel512_parity_method_for_schema",
 ]

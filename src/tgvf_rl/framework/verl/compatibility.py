@@ -26,6 +26,9 @@ from tgvf_rl.framework.vllm import (
     TGVF_QWEN3_VLLM_ARCHITECTURE,
     TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
 )
+from tgvf_rl.qwen.deepstack_control import (
+    TGVF_NATIVE_DEEPSTACK_ENABLED_CONFIG_FIELD,
+)
 from tgvf_rl.policy.config import PolicyPilotV1Config
 
 
@@ -520,10 +523,26 @@ def validate_verl_config_mapping(
         raise VerlConfigurationError(
             "vLLM hf_overrides must select the repo-owned Qwen3 latent model"
         )
-    limit_images = _path_value(config, "actor_rollout_ref.rollout.limit_images")
-    if type(limit_images) is not int or limit_images < 3:
+    native_deepstack_enabled = hf_overrides.get(
+        TGVF_NATIVE_DEEPSTACK_ENABLED_CONFIG_FIELD
+    )
+    actor_native_deepstack_enabled = _path_value(
+        config,
+        "actor_rollout_ref.model.override_config."
+        + TGVF_NATIVE_DEEPSTACK_ENABLED_CONFIG_FIELD,
+    )
+    if (
+        type(native_deepstack_enabled) is not bool
+        or actor_native_deepstack_enabled is not native_deepstack_enabled
+    ):
         raise VerlConfigurationError(
-            "vLLM image limit must cover source image plus at least two tool calls"
+            "actor/reference and vLLM native DeepStack controls must be the same bool"
+        )
+    limit_images = _path_value(config, "actor_rollout_ref.rollout.limit_images")
+    if type(limit_images) is not int or limit_images < 1:
+        raise VerlConfigurationError(
+            "vLLM image limit must cover the source image; an expected policy "
+            "binding validates the exact config-derived tool-call capacity"
         )
     if expected_policy_pilot is not None and not expected_use_v1:
         if (

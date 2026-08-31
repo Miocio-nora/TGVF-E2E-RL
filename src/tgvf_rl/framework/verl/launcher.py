@@ -12,12 +12,16 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 from types import MappingProxyType
 
 from tgvf_rl.policy.horizon_extension import PolicyHorizonExtension
 from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
+from tgvf_rl.qwen.deepstack_control import (
+    TGVF_NATIVE_DEEPSTACK_ENABLED_CONFIG_FIELD,
+)
 from tgvf_rl.data import (
     PolicyT1MixedRuntimeBinding,
     PolicyT1RLRuntimeBinding,
@@ -214,17 +218,34 @@ class UpstreamVerlLaunchPlan:
             != "sdpa"
         ):
             raise ValueError("Policy actor/reference replay must use explicit SDPA")
+        native_deepstack_path = (
+            "actor_rollout_ref.model.override_config."
+            + TGVF_NATIVE_DEEPSTACK_ENABLED_CONFIG_FIELD
+        )
+        native_deepstack_enabled = self.overrides.get(native_deepstack_path)
+        if type(native_deepstack_enabled) is not bool:
+            raise ValueError("Policy native DeepStack control must be explicit bool")
+        hf_overrides = self.overrides.get(
+            "actor_rollout_ref.rollout.engine_kwargs.vllm.hf_overrides"
+        )
+        if (
+            not isinstance(hf_overrides, Mapping)
+            or hf_overrides.get(TGVF_NATIVE_DEEPSTACK_ENABLED_CONFIG_FIELD)
+            is not native_deepstack_enabled
+        ):
+            raise ValueError(
+                "actor/reference and vLLM native DeepStack controls differ"
+            )
         for role in ("actor", "ref"):
             prefix = f"actor_rollout_ref.{role}.fsdp_config"
             if self.overrides.get(f"{prefix}.model_dtype") != "bf16":
                 raise ValueError(f"Policy {role} model load dtype must be BF16")
             if self.overrides.get(f"{prefix}.use_torch_compile") is not False:
                 raise ValueError(f"Policy {role} smoke must disable torch.compile")
-        if (
-            self.overrides.get("actor_rollout_ref.rollout.checkpoint_manager_class")
-            != POLICY_CHECKPOINT_ENGINE_MANAGER_FQN
-        ):
-            raise ValueError("launch plan lost the Policy checkpoint engine manager")
+        _assert_checkpoint_and_method_matrix_surface(
+            self.overrides,
+            self.external_components,
+        )
         if self.environment.get("RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES") != "1":
             raise ValueError(
                 "local AgentLoop workers must retain the physical GPU view"
@@ -1019,28 +1040,94 @@ def _reward_custom_config(config: PolicyE2ESmokeRunConfig) -> dict[str, object]:
             "format_weight": reward.format_weight,
             "conditional_tool_weight": reward.conditional_tool_weight,
         }
-    if reward.profile != "stage3-shaped-v1" or reward.tool_utility is None:
-        raise ValueError("unsupported or incomplete reward profile")
-    if (
-        reward.visual_quality_judge_config_path is None
-        or reward.visual_quality_judge_config_sha256 is None
+    if reward.profile != "stage3-shaped-v1":
+        raise ValueError("unsupported reward profile")
+    utility_enabled = reward.tool_utility_reward_enabled
+    if type(utility_enabled) is not bool:
+        raise ValueError("Stage3 tool-utility reward switch is missing")
+    if utility_enabled != (reward.tool_utility is not None):
+        raise ValueError("Stage3 tool-utility binding differs from its switch")
+    focus_enabled = reward.focus_reward_enabled
+    grounding_enabled = reward.grounding_reward_enabled
+    if type(focus_enabled) is not bool or type(grounding_enabled) is not bool:
+        raise ValueError("Stage3 visual reward switches are missing")
+    if focus_enabled != grounding_enabled:
+        raise ValueError("Stage3 Focus/Grounding reward switches must agree")
+    quality_enabled = focus_enabled
+    visual_bound = (
+        reward.visual_quality_judge_config_path is not None
+        and reward.visual_quality_judge_config_sha256 is not None
+    )
+    if quality_enabled != visual_bound:
+        raise ValueError("Stage3 visual-quality binding differs from its switch")
+    visual_mode = reward.visual_quality_judge_mode
+    if quality_enabled and visual_mode == "disabled":
+        raise ValueError("enabled visual quality cannot use disabled judge mode")
+    if not quality_enabled and visual_mode != "disabled":
+        raise ValueError("disabled visual quality requires judge mode=disabled")
+    coefficients = {
+        "answer_reward_scale": reward.answer_reward_scale,
+        "repeated_call_penalty": reward.repeated_call_penalty,
+        "protocol_error_penalty": reward.protocol_error_penalty,
+    }
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) < 0.0
+        for value in coefficients.values()
     ):
-        raise ValueError("Stage3-shaped visual-quality judge binding is incomplete")
-    return {
+        raise ValueError("Stage3 reward coefficients must be non-negative numbers")
+    if utility_enabled and quality_enabled:
+        assert reward.tool_utility is not None
+        assert reward.visual_quality_judge_config_path is not None
+        assert reward.visual_quality_judge_config_sha256 is not None
+        return {
+            "pipeline_fqn": STAGE3_REWARD_PIPELINE_FQN,
+            "profile": reward.profile,
+            **common,
+            "tool_utility_sidecar_path": str(reward.tool_utility.sidecar_path),
+            "tool_utility_sidecar_sha256": reward.tool_utility.sidecar_sha256,
+            "tool_utility_manifest_path": str(reward.tool_utility.manifest_path),
+            "tool_utility_manifest_sha256": reward.tool_utility.manifest_sha256,
+            "visual_quality_judge_config_path": str(
+                reward.visual_quality_judge_config_path
+            ),
+            "visual_quality_judge_config_sha256": (
+                reward.visual_quality_judge_config_sha256
+            ),
+        }
+    shaped = {
         "pipeline_fqn": STAGE3_REWARD_PIPELINE_FQN,
         "profile": reward.profile,
         **common,
-        "tool_utility_sidecar_path": str(reward.tool_utility.sidecar_path),
-        "tool_utility_sidecar_sha256": reward.tool_utility.sidecar_sha256,
-        "tool_utility_manifest_path": str(reward.tool_utility.manifest_path),
-        "tool_utility_manifest_sha256": reward.tool_utility.manifest_sha256,
-        "visual_quality_judge_config_path": str(
-            reward.visual_quality_judge_config_path
-        ),
-        "visual_quality_judge_config_sha256": (
-            reward.visual_quality_judge_config_sha256
-        ),
+        "tool_utility_reward_enabled": utility_enabled,
+        "focus_reward_enabled": quality_enabled,
+        "grounding_reward_enabled": quality_enabled,
+        "visual_quality_judge_mode": visual_mode,
+        **coefficients,
     }
+    if reward.tool_utility is not None:
+        shaped.update(
+            {
+                "tool_utility_sidecar_path": str(reward.tool_utility.sidecar_path),
+                "tool_utility_sidecar_sha256": reward.tool_utility.sidecar_sha256,
+                "tool_utility_manifest_path": str(reward.tool_utility.manifest_path),
+                "tool_utility_manifest_sha256": (reward.tool_utility.manifest_sha256),
+            }
+        )
+    if quality_enabled:
+        shaped.update(
+            {
+                "visual_quality_judge_config_path": str(
+                    reward.visual_quality_judge_config_path
+                ),
+                "visual_quality_judge_config_sha256": (
+                    reward.visual_quality_judge_config_sha256
+                ),
+            }
+        )
+    return shaped
 
 
 def _checkpoint_frequency(steps: Sequence[int], *, maximum_step: int) -> int:
@@ -1178,6 +1265,69 @@ def _hydra_literal(value: object) -> str:
 def _require_sha256(value: str, name: str) -> None:
     if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
         raise ValueError(f"{name} must be a lowercase SHA256")
+
+
+def _assert_checkpoint_and_method_matrix_surface(
+    overrides: Mapping[str, object],
+    external_components: Mapping[str, str],
+) -> None:
+    """Keep the legacy manager invariant or validate one narrow method overlay.
+
+    The method matrix deliberately reuses :class:`UpstreamVerlLaunchPlan`
+    instead of adding another launcher hierarchy.  Its profile marker is the
+    only condition under which the historical Policy-LoRA checkpoint-manager
+    invariant may differ: native full-Qwen NoTool/Crop wrap upstream veRL sync
+    only to publish its typed behavior receipt, while TGVF/Atomic additionally
+    publish frozen Adapter state after upstream Qwen sync.  Unknown markers
+    never relax the legacy path.
+    """
+
+    profile = external_components.get("method_matrix_profile")
+    manager_path = "actor_rollout_ref.rollout.checkpoint_manager_class"
+    engine_kwargs_path = "actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs"
+    if profile is None:
+        if overrides.get(manager_path) != POLICY_CHECKPOINT_ENGINE_MANAGER_FQN:
+            raise ValueError("launch plan lost the Policy checkpoint engine manager")
+        return
+
+    native_profiles = frozenset({"no_tool", "crop"})
+    tgvf_profiles = frozenset({"tgvf_short", "tgvf_target_guide_v2", "atomic"})
+    if profile in native_profiles:
+        expected_external = "tgvf_rl.framework.verl.trainable_crop_external"
+        expected_model_type = "tgvf_trainable_crop_language_model"
+        expected_manager = (
+            "tgvf_rl.framework.verl.full_qwen_checkpoint_manager."
+            "FullQwenBehaviorCheckpointEngineManager"
+        )
+        if external_components.get("adapter_update_mode") != "unused":
+            raise ValueError("method NoTool/Crop unexpectedly owns an Adapter")
+        if overrides.get(manager_path) != expected_manager:
+            raise ValueError("method NoTool/Crop behavior checkpoint manager differs")
+        if engine_kwargs_path in overrides:
+            raise ValueError("method NoTool/Crop unexpectedly owns Adapter controls")
+    elif profile in tgvf_profiles:
+        expected_external = "tgvf_rl.framework.verl.trainable_tgvf_external"
+        expected_model_type = "tgvf_trainable_rp66_language_model"
+        expected_manager = (
+            "tgvf_rl.framework.verl.trainable_tgvf_checkpoint_manager."
+            "TrainableTGVFCheckpointEngineManager"
+        )
+        if overrides.get(manager_path) != expected_manager:
+            raise ValueError("method TGVF/Atomic checkpoint manager differs")
+        adapter_update_mode = external_components.get("adapter_update_mode")
+        if adapter_update_mode not in {"joint", "frozen_adapter"}:
+            raise ValueError("method TGVF/Atomic Adapter ownership differs")
+        if overrides.get(engine_kwargs_path) != {
+            "tgvf_control": {"adapter_update_mode": adapter_update_mode}
+        }:
+            raise ValueError("method TGVF/Atomic Adapter checkpoint controls differ")
+    else:
+        raise ValueError(f"unknown method-matrix profile {profile!r}")
+
+    if overrides.get("actor_rollout_ref.model.external_lib") != expected_external:
+        raise ValueError("method external registration differs")
+    if overrides.get("actor_rollout_ref.model.model_type") != expected_model_type:
+        raise ValueError("method actor engine differs")
 
 
 __all__ = [

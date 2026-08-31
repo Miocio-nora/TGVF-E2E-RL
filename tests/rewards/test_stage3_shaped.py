@@ -159,6 +159,57 @@ def test_each_extra_call_costs_point_zero_five_without_confidence_scaling() -> N
     assert "extra_call_penalty=-0.1" in tool.evidence
 
 
+def test_tfree_coefficients_are_configured_and_have_no_answer_gate() -> None:
+    result = Stage3ShapedRewardKernel(
+        answer_reward_scale=2.0,
+        repeated_call_penalty=0.05,
+        protocol_error_penalty=2.0,
+    ).score(
+        Stage3ShapedRewardFacts(
+            answer_correct=True,
+            tool_label=None,
+            tool_call_count=3,
+            successful_tgvf_observation_count=0,
+            quality_rewards_enabled=False,
+            label_confidence=None,
+            tool_utility_reward_enabled=False,
+            protocol_errors=("tool_execution_failed",),
+        )
+    )
+
+    assert result.answer_gated is False
+    assert _component_scores(result) == {
+        Stage3ShapedComponentName.ANSWER: 2.0,
+        Stage3ShapedComponentName.TOOL: pytest.approx(-0.1),
+        Stage3ShapedComponentName.FOCUS: 0.0,
+        Stage3ShapedComponentName.GROUNDING: 0.0,
+        Stage3ShapedComponentName.PROTOCOL: -2.0,
+    }
+    assert result.total == pytest.approx(-0.1)
+    assert result.quality_judge_applicable is False
+
+
+def test_zero_coefficients_disable_each_answer_protocol_repeat_term() -> None:
+    result = Stage3ShapedRewardKernel(
+        answer_reward_scale=0.0,
+        repeated_call_penalty=0.0,
+        protocol_error_penalty=0.0,
+    ).score(
+        Stage3ShapedRewardFacts(
+            answer_correct=True,
+            tool_label=None,
+            tool_call_count=4,
+            quality_rewards_enabled=False,
+            label_confidence=None,
+            tool_utility_reward_enabled=False,
+            protocol_errors=("protocol_invalid",),
+        )
+    )
+
+    assert result.total == 0.0
+    assert all(component.score == 0.0 for component in result.components)
+
+
 @pytest.mark.parametrize(
     ("raw_score", "focus", "grounding"),
     (

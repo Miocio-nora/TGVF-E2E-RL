@@ -35,6 +35,7 @@ from .crop_coordinates import (
     CropCoordinateMapping,
     map_qwen3_crop_bbox_to_source,
 )
+from .deepstack_control import native_deepstack_enabled_from_model
 
 
 class Qwen3VLAdapter(QwenVLMFamilyAdapter):
@@ -92,10 +93,14 @@ class Qwen3VLAdapter(QwenVLMFamilyAdapter):
                 f"Qwen3 replay requires {self.capabilities.deepstack_branch_count} exact DeepStack branches for every visual block"
             )
         inputs_embeds, visual_mask = materialize_inputs_embeds(model, request)
-        deepstack = materialize_deepstack(
-            request,
-            visual_mask,
-            target_dtype=inputs_embeds.dtype,
+        deepstack = (
+            materialize_deepstack(
+                request,
+                visual_mask,
+                target_dtype=inputs_embeds.dtype,
+            )
+            if native_deepstack_enabled_from_model(model)
+            else None
         )
         language_model = resolve_language_model(model)
         outputs = language_model(
@@ -135,10 +140,14 @@ class Qwen3VLAdapter(QwenVLMFamilyAdapter):
                 "Qwen3 cached prefill requires exact DeepStack branches for every visual block"
             )
         inputs_embeds, visual_mask = materialize_inputs_embeds(model, request)
-        deepstack = materialize_deepstack(
-            request,
-            visual_mask,
-            target_dtype=inputs_embeds.dtype,
+        deepstack = (
+            materialize_deepstack(
+                request,
+                visual_mask,
+                target_dtype=inputs_embeds.dtype,
+            )
+            if native_deepstack_enabled_from_model(model)
+            else None
         )
         language_model = resolve_language_model(model)
         cache_position = torch.arange(

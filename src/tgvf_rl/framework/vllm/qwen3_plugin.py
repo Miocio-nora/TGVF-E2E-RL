@@ -13,6 +13,11 @@ from typing import Any
 
 import torch
 
+from tgvf_rl.qwen.deepstack_control import (
+    apply_native_deepstack_tensor_control,
+    native_deepstack_enabled_from_config,
+)
+
 from .preexpanded_prompt import split_preexpanded_prompt_contract
 
 
@@ -289,10 +294,32 @@ if VLLM_IMPORT_ERROR is None:
             # wrapper is classified as an old-style model and receives legacy
             # constructor arguments before this class can validate anything.
             super().__init__(vllm_config=vllm_config, prefix=prefix)
+            self._tgvf_native_deepstack_enabled = native_deepstack_enabled_from_config(
+                self.config
+            )
             if not self.use_deepstack or self.deepstack_num_level != 3:
                 raise ValueError(
                     "TGVF Qwen3 vLLM plugin requires exactly three DeepStack levels"
                 )
+
+        def _compute_deepstack_embeds(
+            self,
+            inputs_embeds: torch.Tensor,
+            multimodal_embeddings: Any,
+            is_multimodal: torch.Tensor,
+        ) -> tuple[torch.Tensor, Any]:
+            deepstack, main = super()._compute_deepstack_embeds(
+                inputs_embeds,
+                multimodal_embeddings,
+                is_multimodal,
+            )
+            return (
+                apply_native_deepstack_tensor_control(
+                    deepstack,
+                    enabled=self._tgvf_native_deepstack_enabled,
+                ),
+                main,
+            )
 
         def _process_image_input(self, image_input: Any) -> tuple[torch.Tensor, ...]:
             if image_input["type"] != "image_embeds":

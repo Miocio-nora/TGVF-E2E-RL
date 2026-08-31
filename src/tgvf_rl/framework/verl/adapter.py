@@ -15,6 +15,9 @@ from tgvf_rl.framework.vllm import (
     TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
 )
 from tgvf_rl.policy.config import PolicyPilotV1Config
+from tgvf_rl.qwen.deepstack_control import (
+    TGVF_NATIVE_DEEPSTACK_ENABLED_CONFIG_FIELD,
+)
 
 from .checkpoint_bridge import (
     SDPOTeacherCheckpointContributor,
@@ -119,6 +122,11 @@ class VerlAdapterConfig:
                 "max_tool_calls is an unset research choice; live rollout must set it explicitly"
             )
         fsdp = self.runtime.fsdp2
+        native_deepstack_enabled = (
+            self.policy_pilot.native_deepstack_enabled
+            if self.policy_pilot is not None
+            else True
+        )
         values = {
             "actor_rollout_ref.rollout.name": self.runtime.rollout_backend,
             "actor_rollout_ref.rollout.calculate_log_probs": True,
@@ -136,8 +144,13 @@ class VerlAdapterConfig:
                 TGVF_VLLM_MM_ENCODER_ATTN_BACKEND
             ),
             "actor_rollout_ref.rollout.engine_kwargs.vllm.hf_overrides": {
-                "architectures": [TGVF_QWEN3_VLLM_ARCHITECTURE]
+                "architectures": [TGVF_QWEN3_VLLM_ARCHITECTURE],
+                TGVF_NATIVE_DEEPSTACK_ENABLED_CONFIG_FIELD: (native_deepstack_enabled),
             },
+            (
+                "actor_rollout_ref.model.override_config."
+                + TGVF_NATIVE_DEEPSTACK_ENABLED_CONFIG_FIELD
+            ): native_deepstack_enabled,
             "actor_rollout_ref.rollout.limit_images": 1 + self.max_tool_calls,
             # The accepted e003 colocated path alternates rollout and actor
             # residency.  Keep the separate Torch 2.11 spike on its pinned

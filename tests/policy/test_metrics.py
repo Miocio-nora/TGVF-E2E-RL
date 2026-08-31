@@ -198,6 +198,118 @@ def test_n16_metrics_round_trip_and_reject_mixed_group_sizes() -> None:
         PilotMetricsCheckpointState(prompts=0, trajectories=16)
 
 
+def test_config_owned_n3_metrics_round_trip() -> None:
+    observation = PilotOptimizerStepMetricsObservation(
+        optimizer_step=1,
+        step_time_seconds=1.0,
+        trajectories=_rows("prompt-n3")[:3],
+        trajectories_per_prompt=3,
+    )
+    accumulator = PilotMetricsAccumulator()
+
+    summary = accumulator.record_optimizer_step(observation)
+    restored = PilotMetricsAccumulator.from_checkpoint_state(
+        accumulator.checkpoint_state()
+    )
+
+    assert summary.trajectories == 3
+    assert accumulator.state.trajectories_per_prompt == 3
+    assert restored.state == accumulator.state
+
+
+def test_stage3_metrics_bind_configured_six_call_cap_and_checkpoint_it() -> None:
+    cap_code = ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value
+    rows = tuple(
+        PilotTrajectoryMetricsObservation(
+            prompt_id="prompt-method",
+            trajectory_id=f"method-trajectory-{index}",
+            generated_policy_tokens=20,
+            successful_tgvf_observations=6 if index == 0 else 0,
+            tool_call_attempts=7 if index == 0 else 0,
+            answer_reward=1.0,
+            format_error=False,
+            conditional_tool_reward=0.0,
+            reasoning_tokens=5,
+            original_visual_tokens=4,
+            total_visual_tokens=16 if index == 0 else 4,
+            tool_error_codes=(cap_code,) if index == 0 else (),
+            reward_profile="stage3-shaped-v1",
+            stage3_reward_components=(2.0, -0.3, 0.0, 0.0, 0.0),
+            maximum_tool_calls=6,
+        )
+        for index in range(8)
+    )
+    accumulator = PilotMetricsAccumulator()
+
+    accumulator.record_optimizer_step(
+        PilotOptimizerStepMetricsObservation(1, 1.0, rows)
+    )
+
+    assert accumulator.state.maximum_tool_calls == 6
+    payload = accumulator.checkpoint_state()
+    assert payload["maximum_tool_calls"] == 6
+    restored = PilotMetricsAccumulator.from_checkpoint_state(payload)
+    assert restored.state == accumulator.state
+
+    incompatible = tuple(
+        replace(
+            row,
+            successful_tgvf_observations=0,
+            tool_call_attempts=0,
+            total_visual_tokens=4,
+            tool_error_codes=(),
+            maximum_tool_calls=5,
+        )
+        for row in rows
+    )
+    with pytest.raises(ValueError, match="cannot mix maximum_tool_calls"):
+        restored.record_optimizer_step(
+            PilotOptimizerStepMetricsObservation(2, 1.0, incompatible)
+        )
+
+
+def test_legacy_metrics_checkpoint_rebinds_cap_and_group_without_digest_drift() -> None:
+    rows = tuple(
+        replace(
+            row,
+            successful_tgvf_observations=0,
+            tool_call_attempts=0,
+            total_visual_tokens=row.original_visual_tokens,
+            tool_error_codes=(),
+            conditional_tool_reward=0.0,
+            maximum_tool_calls=1,
+        )
+        for row in _rows("prompt-a")
+    )
+    first = PilotOptimizerStepMetricsObservation(1, 1.0, rows)
+    second = PilotOptimizerStepMetricsObservation(
+        2,
+        1.0,
+        tuple(
+            replace(
+                row,
+                prompt_id="prompt-b",
+                trajectory_id=row.trajectory_id.replace("prompt-a", "prompt-b"),
+            )
+            for row in rows
+        ),
+    )
+    accumulator = PilotMetricsAccumulator()
+    accumulator.record_optimizer_step(first)
+    payload = accumulator.checkpoint_state()
+    del payload["maximum_tool_calls"]
+    del payload["trajectories_per_prompt"]
+
+    restored = PilotMetricsAccumulator.from_checkpoint_state(payload)
+
+    assert restored.state.maximum_tool_calls is None
+    assert restored.state.trajectories_per_prompt is None
+    assert restored.checkpoint_state() == payload
+    restored.record_optimizer_step(second)
+    assert restored.state.maximum_tool_calls == 1
+    assert restored.state.trajectories_per_prompt == 8
+
+
 def test_observation_step_and_atomic_restore_validation_fail_closed() -> None:
     valid = _rows("prompt-a")[0]
     with pytest.raises(ValueError, match="conditional tool reward"):
@@ -231,7 +343,7 @@ def test_observation_step_and_atomic_restore_validation_fail_closed() -> None:
 
     corrupt = deepcopy(accumulator.checkpoint_state())
     corrupt["trajectories"] = 7
-    with pytest.raises(ValueError, match="multiplied by 8"):
+    with pytest.raises(ValueError, match="multiplied by trajectories_per_prompt"):
         accumulator.restore_checkpoint_state(corrupt)
     assert accumulator.state == before
 

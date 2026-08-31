@@ -23,6 +23,9 @@ from tgvf_rl.framework.verl.launcher import (
     UpstreamVerlLaunchPlan,
     build_policy_e2e_smoke_verl_plan,
 )
+from tgvf_rl.framework.verl.method_matrix_launcher import (
+    route_policy_method_matrix_plan,
+)
 from tgvf_rl.ops.child_environment import (
     CLI_WORKER_LATE_ENVIRONMENT_NAMES,
     POLICY_COMPILE_RECEIPT_LATE_ENVIRONMENT_NAMES,
@@ -260,9 +263,7 @@ class PreparedPolicyLaunch:
             name for name in merged if name.startswith("runtime_locator_")
         }
         if runtime_locator_names != POLICY_RUNTIME_LOCATOR_AUTHORIZATION_KEYS:
-            raise RuntimeError(
-                "Policy runtime-locator authorization namespace differs"
-            )
+            raise RuntimeError("Policy runtime-locator authorization namespace differs")
         try:
             reconstructed = WorkerStartupEnvelope.from_authorization_parameters(
                 merged,
@@ -298,9 +299,7 @@ class PreparedPolicyLaunch:
             _canonical_json_sha256(parameters)
             != self._runtime_locator_authorization_sha256
         ):
-            raise RuntimeError(
-                "prepared Policy runtime-locator authorization changed"
-            )
+            raise RuntimeError("prepared Policy runtime-locator authorization changed")
         return parameters
 
     def _validated_worker_startup_envelope(self) -> WorkerStartupEnvelope:
@@ -331,11 +330,12 @@ def build_policy_launch_record(
     compile_prerequisites = _load_compile_prerequisites(
         compile_prerequisite_manifest_path
     )
-    plan = build_policy_e2e_smoke_verl_plan(
+    base_plan = build_policy_e2e_smoke_verl_plan(
         config,
         horizon_extension=horizon_extension,
         compile_prerequisites=compile_prerequisites,
     )
+    plan = route_policy_method_matrix_plan(config, base_plan)
     executable = Path(python_executable or sys.executable).absolute()
     record = plan.as_record()
     record["python_executable"] = str(executable)
@@ -370,11 +370,12 @@ def preflight_policy_launch_for_authorization(
     compile_prerequisites = _load_compile_prerequisites(
         compile_prerequisite_manifest_path
     )
-    plan = build_policy_e2e_smoke_verl_plan(
+    base_plan = build_policy_e2e_smoke_verl_plan(
         config,
         horizon_extension=horizon_extension,
         compile_prerequisites=compile_prerequisites,
     )
+    plan = route_policy_method_matrix_plan(config, base_plan)
     if compile_prerequisites is None:
         plan.assert_launch_ready()
         raise AssertionError("missing compile manifest unexpectedly became ready")
@@ -727,14 +728,9 @@ def execute_policy_e2e_smoke(
         expected_parameters = prepared.authorization_parameters()
         observed_parameters = dict(launch_identity.parameters)
         observed_runtime_locator_names = {
-            name
-            for name in observed_parameters
-            if name.startswith("runtime_locator_")
+            name for name in observed_parameters if name.startswith("runtime_locator_")
         }
-        if (
-            observed_runtime_locator_names
-            != POLICY_RUNTIME_LOCATOR_AUTHORIZATION_KEYS
-        ):
+        if observed_runtime_locator_names != POLICY_RUNTIME_LOCATOR_AUTHORIZATION_KEYS:
             raise RuntimeError(
                 "consumed Policy runtime-locator authorization namespace differs"
             )

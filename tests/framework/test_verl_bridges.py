@@ -85,6 +85,7 @@ from tgvf_rl.policy import (
     POLICY_PILOT_V1_VERL_EXTERNAL_LOSS_MODULE,
     QWEN3_DECODER_LORA_TARGET_MODULE_PATTERN,
     PilotSamplingConfig,
+    PolicyNoToolMatchedExperimentConfig,
     PolicyPilotV1Config,
 )
 from tgvf_rl.trajectories import BehaviorTraceStore, VLLMBehaviorRecorder
@@ -578,13 +579,17 @@ def test_concrete_verl_config_mapping_checks_public_paths() -> None:
                         "mm_processor_cache_gb": 0,
                         "mm_encoder_attn_backend": "TORCH_SDPA",
                         "hf_overrides": {
-                            "architectures": ["TGVFQwen3VLForConditionalGeneration"]
+                            "architectures": ["TGVFQwen3VLForConditionalGeneration"],
+                            "tgvf_native_deepstack_enabled": True,
                         },
                     }
                 },
                 "limit_images": 3,
             },
-            "model": {"lora": {"dropout": 0.0}},
+            "model": {
+                "lora": {"dropout": 0.0},
+                "override_config": {"tgvf_native_deepstack_enabled": True},
+            },
             "actor": {
                 "strategy": "fsdp2",
                 "fsdp_config": {"fsdp_size": 2, "full_determinism": True},
@@ -1212,7 +1217,8 @@ def test_adapter_config_exposes_only_accepted_public_overrides() -> None:
         == "TORCH_SDPA"
     )
     assert overrides["actor_rollout_ref.rollout.engine_kwargs.vllm.hf_overrides"] == {
-        "architectures": ["TGVFQwen3VLForConditionalGeneration"]
+        "architectures": ["TGVFQwen3VLForConditionalGeneration"],
+        "tgvf_native_deepstack_enabled": True,
     }
     assert config.required_environment() == {
         "VLLM_PLUGINS": TGVF_VLLM_PLUGIN_NAME,
@@ -1319,6 +1325,18 @@ def test_policy_pilot_requires_distinct_aligned_response_transport_width() -> No
         validate_verl_config_mapping(concrete, expected_policy_pilot=pilot)
 
 
+def test_no_tool_image_limit_is_derived_from_its_configured_call_cap() -> None:
+    pilot = PolicyNoToolMatchedExperimentConfig()
+    overrides = VerlAdapterConfig(
+        policy_pilot=pilot,
+        response_transport_length=16_384,
+    ).public_config_overrides()
+    concrete = _materialize_dotted_overrides(overrides)
+
+    assert concrete["actor_rollout_ref"]["rollout"]["limit_images"] == 2
+    validate_verl_config_mapping(concrete, expected_policy_pilot=pilot)
+
+
 @pytest.mark.skipif(not verl_is_available(), reason="pinned veRL is not installed")
 def test_pinned_verl_bypass_grpo_fails_exact_unclamped_pilot_oracle() -> None:
     api = _load_trusted_verl_or_skip()
@@ -1376,13 +1394,17 @@ def test_candidate_adapter_selects_v1_transfer_queue_and_no_sleep() -> None:
                         "mm_processor_cache_gb": 0,
                         "mm_encoder_attn_backend": "TORCH_SDPA",
                         "hf_overrides": {
-                            "architectures": ["TGVFQwen3VLForConditionalGeneration"]
+                            "architectures": ["TGVFQwen3VLForConditionalGeneration"],
+                            "tgvf_native_deepstack_enabled": True,
                         },
                     }
                 },
                 "limit_images": 3,
             },
-            "model": {"lora": {"dropout": 0.0}},
+            "model": {
+                "lora": {"dropout": 0.0},
+                "override_config": {"tgvf_native_deepstack_enabled": True},
+            },
             "actor": {
                 "strategy": "fsdp2",
                 "fsdp_config": {"fsdp_size": 2, "full_determinism": True},

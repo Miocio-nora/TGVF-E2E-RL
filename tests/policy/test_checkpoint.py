@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import FrozenInstanceError, replace
+import hashlib
 import json
 
 import pytest
@@ -132,6 +133,30 @@ def test_project_checkpoint_json_round_trip_restores_every_owned_state() -> None
     assert destination.state == checkpoint.metrics_state
 
 
+def test_historical_metrics_fields_keep_project_checkpoint_digest_stable() -> None:
+    payload = _checkpoint().to_checkpoint_mapping()
+    del payload["metrics_state"]["maximum_tool_calls"]
+    del payload["metrics_state"]["trajectories_per_prompt"]
+    content = {
+        key: value for key, value in payload.items() if key != "integrity_sha256"
+    }
+    payload["integrity_sha256"] = hashlib.sha256(
+        json.dumps(
+            content,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    restored = PilotProjectCheckpointState.from_checkpoint_mapping(payload)
+
+    assert restored.metrics_state.maximum_tool_calls is None
+    assert restored.metrics_state.trajectories_per_prompt is None
+    assert restored.to_checkpoint_mapping() == payload
+
+
 def test_restore_fails_closed_on_run_or_framework_weight_identity_mismatch() -> None:
     checkpoint = _checkpoint()
     destination = PilotMetricsAccumulator()
@@ -151,7 +176,9 @@ def test_restore_fails_closed_on_run_or_framework_weight_identity_mismatch() -> 
         restore_pilot_project_checkpoint(
             checkpoint,
             expected_run_identity=checkpoint.run_identity,
-            loaded_policy_version=replace(checkpoint.policy_version, weights_sha256=SHA2),
+            loaded_policy_version=replace(
+                checkpoint.policy_version, weights_sha256=SHA2
+            ),
             loaded_reference_version=checkpoint.reference_version,
             metrics_accumulator=destination,
         )

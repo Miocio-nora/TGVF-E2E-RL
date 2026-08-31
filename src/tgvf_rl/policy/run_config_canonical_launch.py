@@ -24,6 +24,8 @@ from tgvf_rl.protocol import (
     NativeAssistantDialect,
     NativeSuccessObservationProtocolId,
     NativeToolCapabilityProfile,
+    StandardToolError,
+    ToolErrorCode,
     validate_success_observation_protocol,
     visual_tool_prompt_identity,
 )
@@ -35,6 +37,9 @@ from .config import (
     DecoderLoRAConfig,
     PilotGRPOConfig,
     PilotSamplingConfig,
+    PolicyMethodExperimentConfig,
+    PolicyMethodProfile,
+    PolicyMethodSamplingConfig,
     PolicyNoToolMatchedExperimentConfig,
     PolicyPilotV1Config,
     PolicyTGVFStage3ExperimentConfig,
@@ -55,6 +60,7 @@ from .run_config_schema import (
     POLICY_E2E_SMOKE_SEED_DERIVATION_NAME,
     POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256,
     POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256,
+    PolicyMethodMatrixBinding,
     SmokeAccumulationBinding,
     SmokeCapacityBinding,
     SmokeDistributedBinding,
@@ -135,6 +141,60 @@ _TEACHER_QUARTER_PROMPT_BUNDLES = {
     ),
 }
 
+_TOOL_PROFILE_BY_METHOD = {
+    PolicyMethodProfile.NO_TOOL: NativeToolCapabilityProfile.NO_TOOL,
+    PolicyMethodProfile.CROP: NativeToolCapabilityProfile.CROP_ONLY,
+    PolicyMethodProfile.TGVF_SHORT: NativeToolCapabilityProfile.TGVF_ONLY,
+    PolicyMethodProfile.TGVF_TARGET_GUIDE_V2: (NativeToolCapabilityProfile.TGVF_ONLY),
+    PolicyMethodProfile.ATOMIC: NativeToolCapabilityProfile.CROP_TGVF,
+}
+
+
+def _method_prompt_sha256(method: PolicyMethodProfile) -> str:
+    if method is PolicyMethodProfile.NO_TOOL:
+        return NO_TOOL_RL_PROMPT_IDENTITY.bundle_sha256
+    if method is PolicyMethodProfile.CROP:
+        return VISUAL_PROMPT_IDENTITY.bundle_sha256
+    if method is PolicyMethodProfile.TGVF_SHORT:
+        return TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+    if method is PolicyMethodProfile.TGVF_TARGET_GUIDE_V2:
+        return TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256
+    if method is PolicyMethodProfile.ATOMIC:
+        return CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+    raise AssertionError(f"unsupported method profile: {method!r}")
+
+
+_SUCCESS_OBSERVATION_BY_METHOD = {
+    PolicyMethodProfile.NO_TOOL: (
+        NativeSuccessObservationProtocolId.NO_TOOL_NO_EXECUTION_V1
+    ),
+    PolicyMethodProfile.CROP: (
+        NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1
+    ),
+    PolicyMethodProfile.TGVF_SHORT: (
+        NativeSuccessObservationProtocolId.DEEPEYES_TGVF_MATCHED_V1
+    ),
+    PolicyMethodProfile.TGVF_TARGET_GUIDE_V2: (
+        NativeSuccessObservationProtocolId.DEEPEYES_TGVF_MATCHED_V1
+    ),
+    PolicyMethodProfile.ATOMIC: (
+        NativeSuccessObservationProtocolId.DEEPEYES_ATOMIC_MATCHED_V1
+    ),
+}
+
+
+def _call_cap_error_sha256(maximum_tool_calls: int) -> str:
+    return StandardToolError(
+        code=ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value,
+        message=(
+            f"The maximum of {maximum_tool_calls} tool-call attempts has been "
+            "reached; this call was not executed."
+        ),
+        attempt_index=maximum_tool_calls,
+        recoverable=True,
+        maximum_tool_calls=maximum_tool_calls,
+    ).payload_sha256
+
 
 @dataclass(frozen=True, slots=True)
 class _CanonicalLaunchBindings:
@@ -153,6 +213,7 @@ class _CanonicalLaunchBindings:
     output: SmokeOutputBinding
     policy: (
         PolicyPilotV1Config
+        | PolicyMethodExperimentConfig
         | PolicyNoToolMatchedExperimentConfig
         | PolicyTGVFStage3ExperimentConfig
         | PolicyVisualToolExperimentConfig
@@ -173,6 +234,7 @@ def bind_canonical_policy_launch(
     mixed_run: bool,
     model: ModelIdentity,
     model_table: Mapping[str, object],
+    method_binding: PolicyMethodMatrixBinding | None,
     runtime_binding: (
         DeepEyes47KRuntimeBinding
         | PolicyT1RLRuntimeBinding
@@ -188,6 +250,9 @@ def bind_canonical_policy_launch(
     load_tgvf_visual_quality_judge: Callable[..., Any],
 ) -> _CanonicalLaunchBindings:
     """Validate and bind every canonical launch-owned configuration section."""
+
+    method_profile = None if method_binding is None else method_binding.profile
+    method_run = method_profile is not None
 
     protocol_fields = {
         "prompt_sha256",
@@ -222,25 +287,29 @@ def bind_canonical_policy_launch(
         tool_profile.tool_set_sha256,
         "protocol.tool_schema_sha256",
     )
-    one_call_protocol = (
+    one_call_protocol = not method_run and (
         stage3_shaped_run or tool_profile is NativeToolCapabilityProfile.NO_TOOL
     )
-    expected_maximum_tool_calls = 1 if one_call_protocol else 4
-    _require_exact(
+    maximum_tool_calls = _positive_int(
         protocol_table["maximum_tool_calls"],
-        expected_maximum_tool_calls,
-        "protocol.maximum_tool_calls",
+        name="protocol.maximum_tool_calls",
     )
+    if not method_run:
+        _require_exact(
+            maximum_tool_calls,
+            1 if one_call_protocol else 4,
+            "protocol.maximum_tool_calls",
+        )
     cap_error_sha256 = _sha256(
         protocol_table["cap_error_sha256"], name="protocol.cap_error_sha256"
     )
     _require_exact(
         cap_error_sha256,
-        (
-            POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256
-            if one_call_protocol
-            else POLICY_E2E_SMOKE_CAP_ERROR_SHA256
-        ),
+        _call_cap_error_sha256(maximum_tool_calls)
+        if method_run
+        else POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256
+        if one_call_protocol
+        else POLICY_E2E_SMOKE_CAP_ERROR_SHA256,
         "protocol.cap_error_sha256",
     )
     success_observation_protocol_id: NativeSuccessObservationProtocolId | None = None
@@ -259,6 +328,17 @@ def bind_canonical_policy_launch(
             raise ValueError(
                 "protocol.action_boundary_protocol_id is invalid"
             ) from error
+        if method_profile is not None:
+            _require_exact(
+                success_observation_protocol_id,
+                _SUCCESS_OBSERVATION_BY_METHOD[method_profile],
+                "method success-observation protocol",
+            )
+            _require_exact(
+                action_boundary_protocol_id,
+                NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2,
+                "method action-boundary protocol",
+            )
     protocol = SmokeProtocolBinding(
         prompt_sha256=_sha256(
             protocol_table["prompt_sha256"], name="protocol.prompt_sha256"
@@ -267,15 +347,27 @@ def bind_canonical_policy_launch(
         tool_profile=tool_profile,
         tool_schema_sha256=protocol_table["tool_schema_sha256"],
         enabled_tool_names=enabled_tools,
-        maximum_tool_calls=protocol_table["maximum_tool_calls"],
+        maximum_tool_calls=maximum_tool_calls,
         success_observation_protocol_id=success_observation_protocol_id,
         action_boundary_protocol_id=action_boundary_protocol_id,
     )
+    if method_profile is not None:
+        _require_exact(
+            protocol.tool_profile,
+            _TOOL_PROFILE_BY_METHOD[method_profile],
+            "method tool profile",
+        )
     if deepeyes_control is not None:
         _require_exact(
             protocol.prompt_sha256,
             deepeyes_control.prompt_bundle_sha256(assistant_dialect),
             "protocol.prompt_sha256",
+        )
+    elif method_profile is not None:
+        _require_exact(
+            protocol.prompt_sha256,
+            _method_prompt_sha256(method_profile),
+            "method prompt profile",
         )
     elif mixed_run:
         if isinstance(runtime_binding, PolicyTeacherQuarterMixRuntimeBinding):
@@ -324,7 +416,8 @@ def bind_canonical_policy_launch(
             "seed_derivation_sha256",
         },
     )
-    sampling = PilotSamplingConfig(
+    sampling_type = PolicyMethodSamplingConfig if method_run else PilotSamplingConfig
+    sampling = sampling_type(
         trajectories_per_prompt=_integer(
             sampling_table["trajectories_per_prompt"],
             name="sampling.trajectories_per_prompt",
@@ -370,12 +463,13 @@ def bind_canonical_policy_launch(
         ),
         ignore_eos=_boolean(sampling_table["ignore_eos"], name="sampling.ignore_eos"),
     )
-    expected_sampling_scale = (16, 20480) if deepeyes_scaled_crop_run else (8, 8192)
-    _require_exact(
-        (sampling.trajectories_per_prompt, sampling.max_response_length),
-        expected_sampling_scale,
-        "sampling DeepEyes-reference scale",
-    )
+    if not method_run:
+        expected_sampling_scale = (16, 20480) if deepeyes_scaled_crop_run else (8, 8192)
+        _require_exact(
+            (sampling.trajectories_per_prompt, sampling.max_response_length),
+            expected_sampling_scale,
+            "sampling DeepEyes-reference scale",
+        )
     if (
         "</tool_call>" in (sampling.stop_strings or ())
         and sampling.include_stop_str_in_output is not True
@@ -410,12 +504,27 @@ def bind_canonical_policy_launch(
         derivation_name=derivation_name,
         derivation_sha256=derivation_sha256,
     )
+    if method_profile is not None:
+        expected_stop_strings = (
+            () if method_profile is PolicyMethodProfile.NO_TOOL else ("</tool_call>",)
+        )
+        _require_exact(
+            (
+                sampling.stop_token_ids,
+                sampling.stop_strings,
+                sampling.include_stop_str_in_output,
+                sampling.ignore_eos,
+            ),
+            ((151645,), expected_stop_strings, True, False),
+            "method complete stop contract",
+        )
     reward = bind_policy_reward(
         payload,
         allow_historical_reward_contract=allow_historical_reward_contract,
         deepeyes_control_present=deepeyes_control is not None,
         formal_pilot=formal_pilot,
         iteration_sha256=iteration_sha256,
+        method_binding=method_binding,
         mixed_run=mixed_run,
         runtime_binding=runtime_binding,
         stage3_shaped_reward_version=stage3_shaped_reward_version,
@@ -650,16 +759,6 @@ def bind_canonical_policy_launch(
         raise ValueError(
             "capacity.vllm_max_model_len cannot hold max prompt plus response"
         )
-    minimum_actor_tokens = (
-        accumulation.prompt_micro_batch_size_per_rank
-        * sampling.trajectories_per_prompt
-        * minimum_context
-    )
-    if capacity.actor_ppo_max_token_len_per_gpu < minimum_actor_tokens:
-        raise ValueError(
-            "capacity.actor_ppo_max_token_len_per_gpu is smaller than one "
-            "expanded Policy Pilot micro-batch"
-        )
     if (
         capacity.rollout_log_prob_max_token_len_per_gpu
         < capacity.actor_ppo_max_token_len_per_gpu
@@ -812,7 +911,6 @@ def bind_canonical_policy_launch(
         )
     if scheduler.warmup_steps >= scheduler.total_steps:
         raise ValueError("scheduler warmup_steps must be smaller than total_steps")
-
     output_table = _table(
         payload, "output", {"root", "checkpoint_directory", "metrics_path"}
     )
@@ -833,7 +931,9 @@ def bind_canonical_policy_launch(
         _require_within(resume_from_path, output_root, name="training.resume_from_path")
     output = SmokeOutputBinding(output_root, checkpoint_directory, metrics_path)
 
-    if stage3_shaped_run:
+    if method_profile is not None:
+        policy_type = PolicyMethodExperimentConfig
+    elif stage3_shaped_run:
         policy_type = PolicyTGVFStage3ExperimentConfig
     elif protocol.tool_profile is NativeToolCapabilityProfile.NO_TOOL:
         policy_type = PolicyNoToolMatchedExperimentConfig
@@ -841,6 +941,9 @@ def bind_canonical_policy_launch(
         policy_type = PolicyPilotV1Config
     else:
         policy_type = PolicyVisualToolExperimentConfig
+    policy_kwargs: dict[str, object] = {}
+    if method_profile is not None:
+        policy_kwargs["method"] = method_profile
     policy = policy_type(
         model_family=model.family,
         model_path=model.revision_or_path,
@@ -852,6 +955,7 @@ def bind_canonical_policy_launch(
         sampling=sampling,
         lora=DecoderLoRAConfig(initial_learning_rate=optimizer.learning_rate),
         grpo=PilotGRPOConfig(total_training_epochs=training.total_training_epochs),
+        **policy_kwargs,
     )
     if sampling.backend_version != POLICY_PILOT_V1_VLLM_VERSION:
         raise ValueError("sampling backend version differs from Policy Pilot v1")

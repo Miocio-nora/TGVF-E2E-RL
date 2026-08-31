@@ -13,6 +13,7 @@ import asyncio
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -420,9 +421,11 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
             observation_contract=observation_contract,
             action_boundary_protocol_id=action_boundary_protocol_id,
         )
+        identity_consumer = _IdentityOnlyBehaviorSnapshotConsumer()
         return PolicyE2ERuntimeProduct(
             trajectory_components=components,
-            snapshot_consumer=_IdentityOnlyLoRASnapshotConsumer(),
+            snapshot_consumer=identity_consumer,
+            behavior_snapshot_consumer=identity_consumer,
         )
 
 
@@ -702,7 +705,7 @@ class _Qwen3PolicyTrajectoryComponents:
             )
         else:
             runtime = self.stage3_reward_runtime
-            if runtime is None or self.config.reward.tool_utility is None:
+            if runtime is None:
                 raise RuntimeError("Stage3-shaped reward runtime is incomplete")
             spec, answer_verifier, visual_provider = runtime
             scorer = Stage3VerlTrajectoryRewardScorer(
@@ -710,10 +713,14 @@ class _Qwen3PolicyTrajectoryComponents:
                 answer_verifier=answer_verifier,
                 context_provider=reward_context,
                 tool_utility=self.config.reward.tool_utility,
-                visual_quality_judge=_BoundTGVFVisualQualityRuntimeJudge(
-                    provider=visual_provider,
-                    image_path=Path(_scalar(sample_fields["source_image_path"])),
-                    image_sha256=str(_scalar(sample_fields["source_image_sha256"])),
+                visual_quality_judge=(
+                    None
+                    if visual_provider is None
+                    else _BoundTGVFVisualQualityRuntimeJudge(
+                        provider=visual_provider,
+                        image_path=Path(_scalar(sample_fields["source_image_path"])),
+                        image_sha256=str(_scalar(sample_fields["source_image_sha256"])),
+                    )
                 ),
             )
         finalizer = _ExactQwen3RewardedTrajectoryFinalizer(
@@ -742,8 +749,8 @@ class _Qwen3PolicyTrajectoryComponents:
         )
 
 
-class _IdentityOnlyLoRASnapshotConsumer:
-    """Validate snapshot identity without constructing a local policy model."""
+class _IdentityOnlyBehaviorSnapshotConsumer:
+    """Validate served-state identity without constructing a local policy."""
 
     def apply_policy_lora_snapshot(self, snapshot: object, /) -> PolicyVersion:
         from .policy_weight_sync import (
@@ -756,6 +763,17 @@ class _IdentityOnlyLoRASnapshotConsumer:
         digest = lora_parameter_mapping_sha256(snapshot.tensors)
         if digest != snapshot.policy_version.weights_sha256:
             raise ReplayMismatchError("LoRA snapshot tensor identity differs")
+        return snapshot.policy_version
+
+    def apply_policy_behavior_snapshot(self, snapshot: object, /) -> PolicyVersion:
+        from .policy_behavior_version import PolicyBehaviorSnapshot
+
+        if not isinstance(snapshot, PolicyBehaviorSnapshot):
+            raise TypeError("Policy version consumer requires PolicyBehaviorSnapshot")
+        if hashlib.sha256(snapshot.pointer_bytes).hexdigest() != (
+            snapshot.pointer_file_sha256
+        ):
+            raise ReplayMismatchError("behavior pointer byte identity differs")
         return snapshot.policy_version
 
 
@@ -1729,53 +1747,133 @@ def _build_stage3_reward_runtime(
 ) -> tuple[
     Stage3ShapedRewardSpec,
     RuleFirstAnswerVerifier,
-    TGVFVisualQualityJudgeProvider,
+    TGVFVisualQualityJudgeProvider | None,
 ]:
     reward = config.reward
-    if reward.profile != "stage3-shaped-v1" or reward.tool_utility is None:
-        raise ValueError("Stage3-shaped reward binding is incomplete")
+    if reward.profile != "stage3-shaped-v1":
+        raise ValueError("Stage3-shaped reward profile differs")
     if (
         reward.answer_weight is not None
         or reward.format_weight is not None
         or reward.conditional_tool_weight is not None
     ):
         raise ValueError("Stage3-shaped reward cannot carry Pilot-v1 weights")
-    if (
-        reward.visual_quality_judge_config_path is None
-        or reward.visual_quality_judge_config_sha256 is None
-        or reward.visual_quality_judge_identity is None
-    ):
-        raise ValueError("Stage3-shaped visual-quality judge binding is incomplete")
-    answer_identity, answer_verifier = _build_rule_first_answer_verifier(config)
-    bound_visual = load_tgvf_visual_quality_judge(
+    utility_enabled = reward.tool_utility_reward_enabled
+    if type(utility_enabled) is not bool:
+        raise ValueError("Stage3 tool-utility reward switch is missing")
+    if utility_enabled != (reward.tool_utility is not None):
+        raise ValueError("Stage3 tool-utility binding differs from its switch")
+    focus_enabled = reward.focus_reward_enabled
+    grounding_enabled = reward.grounding_reward_enabled
+    if type(focus_enabled) is not bool or type(grounding_enabled) is not bool:
+        raise ValueError("Stage3 visual reward switches are missing")
+    if focus_enabled != grounding_enabled:
+        raise ValueError("Stage3 Focus/Grounding reward switches differ")
+    quality_enabled = focus_enabled
+    visual_binding = (
         reward.visual_quality_judge_config_path,
-        expected_file_sha256=reward.visual_quality_judge_config_sha256,
+        reward.visual_quality_judge_config_sha256,
+        reward.visual_quality_judge_identity,
     )
-    if bound_visual.config_identity != reward.visual_quality_judge_identity:
-        raise IdentityMismatchError("visual-quality judge config identity changed")
-    bound_visual.provider.validate_credentials()
-    pipeline_identity = _artifact_identity(
-        "policy-reward",
-        "stage3-shaped-reward-equation",
-        "stage3-shaped-v1",
-        {
+    if quality_enabled != all(value is not None for value in visual_binding):
+        raise ValueError("Stage3 visual-quality binding differs from its switches")
+    if not quality_enabled and any(value is not None for value in visual_binding):
+        raise ValueError("disabled visual quality cannot bind a judge")
+    visual_mode = reward.visual_quality_judge_mode
+    if quality_enabled and visual_mode == "disabled":
+        raise ValueError("enabled visual quality cannot use disabled judge mode")
+    if not quality_enabled and visual_mode != "disabled":
+        raise ValueError("disabled visual quality requires judge mode=disabled")
+    coefficients = (
+        reward.answer_reward_scale,
+        reward.repeated_call_penalty,
+        reward.protocol_error_penalty,
+    )
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) < 0.0
+        for value in coefficients
+    ):
+        raise ValueError(
+            "Stage3 reward coefficients must be finite non-negative bindings"
+        )
+    answer_scale, repeated_penalty, protocol_penalty = (
+        float(value) for value in coefficients
+    )
+    answer_identity, answer_verifier = _build_rule_first_answer_verifier(config)
+    if quality_enabled:
+        bound_visual = load_tgvf_visual_quality_judge(
+            reward.visual_quality_judge_config_path,
+            expected_file_sha256=reward.visual_quality_judge_config_sha256,
+        )
+        if bound_visual.config_identity != reward.visual_quality_judge_identity:
+            raise IdentityMismatchError("visual-quality judge config identity changed")
+        bound_visual.provider.validate_credentials()
+        visual_identity = bound_visual.config_identity
+        visual_provider = bound_visual.provider
+    else:
+        visual_identity = None
+        visual_provider = None
+    if utility_enabled and quality_enabled:
+        assert reward.tool_utility is not None
+        assert visual_identity is not None
+        identity_fields: dict[str, object] = {
             "run": config.identity_sha256,
             "answer": answer_identity.sha256,
             "answer_judge_config": reward.judge_config_sha256,
             "tool_utility_sidecar": reward.tool_utility.sidecar_sha256,
             "tool_utility_manifest": reward.tool_utility.manifest_sha256,
-            "visual_quality_judge_config": bound_visual.config_identity.sha256,
+            "visual_quality_judge_config": visual_identity.sha256,
             "equation": "2*A_gated+T+F+G+P",
-        },
+        }
+    else:
+        identity_fields = {
+            "run": config.identity_sha256,
+            "answer": answer_identity.sha256,
+            "answer_judge_config": reward.judge_config_sha256,
+            "answer_reward_scale": answer_scale,
+            "repeated_call_penalty": repeated_penalty,
+            "protocol_error_penalty": protocol_penalty,
+            "tool_utility_reward_enabled": utility_enabled,
+            "focus_reward_enabled": quality_enabled,
+            "grounding_reward_enabled": quality_enabled,
+            "visual_quality_judge_mode": visual_mode,
+            "equation": "configured*A+configured*R_repeat+configured*P",
+        }
+        if reward.tool_utility is not None:
+            identity_fields.update(
+                {
+                    "tool_utility_sidecar": reward.tool_utility.sidecar_sha256,
+                    "tool_utility_manifest": reward.tool_utility.manifest_sha256,
+                }
+            )
+        if visual_identity is not None:
+            identity_fields["visual_quality_judge_config"] = visual_identity.sha256
+    pipeline_identity = _artifact_identity(
+        "policy-reward",
+        "stage3-shaped-reward-equation",
+        "stage3-shaped-v1",
+        identity_fields,
     )
     spec = Stage3ShapedRewardSpec(
         pipeline_identity=pipeline_identity,
         answer_verifier_identity=answer_identity,
-        visual_judge_identity=bound_visual.config_identity,
-        tool_utility_sidecar_sha256=reward.tool_utility.sidecar_sha256,
-        tool_utility_manifest_sha256=reward.tool_utility.manifest_sha256,
+        visual_judge_identity=visual_identity,
+        tool_utility_sidecar_sha256=(
+            None if reward.tool_utility is None else reward.tool_utility.sidecar_sha256
+        ),
+        tool_utility_manifest_sha256=(
+            None if reward.tool_utility is None else reward.tool_utility.manifest_sha256
+        ),
+        visual_quality_enabled=quality_enabled,
+        tool_utility_reward_enabled=utility_enabled,
+        answer_reward_scale=answer_scale,
+        repeated_call_penalty=repeated_penalty,
+        protocol_error_penalty=protocol_penalty,
     )
-    return spec, answer_verifier, bound_visual.provider
+    return spec, answer_verifier, visual_provider
 
 
 def _validate_sample_fields(

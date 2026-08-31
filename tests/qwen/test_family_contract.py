@@ -47,6 +47,7 @@ class TinyLanguageModel(nn.Module):
         super().__init__()
         self.embed_tokens = nn.Embedding(32, 8)
         self.proj = nn.Linear(8, 8, bias=False)
+        self.last_deepstack_visual_embeds = None
 
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -59,6 +60,7 @@ class TinyLanguageModel(nn.Module):
         deepstack_visual_embeds=None,
         **kwargs,
     ):
+        self.last_deepstack_visual_embeds = deepstack_visual_embeds
         hidden = self.proj(inputs_embeds)
         if deepstack_visual_embeds:
             for branch in deepstack_visual_embeds:
@@ -68,8 +70,11 @@ class TinyLanguageModel(nn.Module):
 
 
 class TinyQwen(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, *, native_deepstack_enabled: bool = True) -> None:
         super().__init__()
+        self.config = SimpleNamespace(
+            tgvf_native_deepstack_enabled=native_deepstack_enabled
+        )
         self.model = SimpleNamespace(language_model=TinyLanguageModel())
         self.lm_head = nn.Linear(8, 32, bias=False)
 
@@ -203,6 +208,28 @@ def test_qwen3_recorded_forward_is_deterministic_and_uses_all_branches() -> None
     second = adapter.forward_recorded(model, store, replay, ReplayConsumer.POLICY)
     torch.testing.assert_close(first.logits, second.logits, rtol=0, atol=0)
     assert first.visual_position_mask.sum().item() == 6
+
+
+@pytest.mark.parametrize("native_deepstack_enabled", (True, False))
+def test_qwen3_recorded_forward_applies_native_deepstack_control(
+    native_deepstack_enabled: bool,
+) -> None:
+    model = TinyQwen(native_deepstack_enabled=native_deepstack_enabled)
+    store, replay = _replay(branches=3, calls=1)
+
+    Qwen3VLAdapter().forward_recorded(
+        model,
+        store,
+        replay,
+        ReplayConsumer.POLICY,
+    )
+
+    observed = model.model.language_model.last_deepstack_visual_embeds
+    if native_deepstack_enabled:
+        assert isinstance(observed, (list, tuple))
+        assert len(observed) == 3
+    else:
+        assert observed is None
 
 
 def test_zero_tool_policy_and_reference_consume_the_same_source_bundle() -> None:

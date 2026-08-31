@@ -1079,6 +1079,13 @@ class _UnreachableNoToolDependency:
             TrajectoryStop.INVALID_FORMAT,
             None,
         ),
+        (
+            "reason</think><tool_call>"
+            '{"name":"tgvf_focus_tool","arguments":{"target":"label"}}'
+            "</tool_call>trailing",
+            TrajectoryStop.INVALID_FORMAT,
+            None,
+        ),
     ),
 )
 def test_direct_only_empty_tool_loop_never_parses_appends_or_executes(

@@ -7,6 +7,10 @@ import hashlib
 import json
 from typing import Any
 
+from tgvf_rl.protocol.observation_contract import (
+    NativeSuccessObservationProtocolId,
+)
+
 from .deepeyes_official_protocol import USER_PROMPT_V2
 
 
@@ -71,6 +75,7 @@ class TGVFDeepEyesMatchedPromptIdentity:
     bundle_sha256: str
     version: str
     tool_parser: str
+    success_observation_protocol_id: NativeSuccessObservationProtocolId
 
 
 TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY = TGVFDeepEyesMatchedPromptIdentity(
@@ -90,6 +95,9 @@ TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY = TGVFDeepEyesMatchedPromptIdentity(
     ),
     version=TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
     tool_parser=TGVF_DEEPEYES_MATCHED_TOOL_PARSER,
+    success_observation_protocol_id=(
+        NativeSuccessObservationProtocolId.DEEPEYES_TGVF_MATCHED_V1
+    ),
 )
 
 

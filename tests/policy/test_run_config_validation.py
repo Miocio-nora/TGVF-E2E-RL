@@ -58,6 +58,29 @@ def test_extracted_validation_type_hints_resolve_from_the_facade() -> None:
         assert get_type_hints(getattr(run_config, name)) == get_type_hints(helper)
 
 
+def test_absolute_path_expands_only_the_repository_root_token() -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+
+    assert run_config_validation._absolute_path(  # noqa: SLF001
+        "${TGVF_REPOSITORY_ROOT}/configs/policy",
+        name="config path",
+    ) == (repository_root / "configs" / "policy")
+
+
+def test_absolute_path_does_not_expand_arbitrary_environment_syntax() -> None:
+    for value in (
+        "${HOME}/config.toml",
+        "$TGVF_REPOSITORY_ROOT/config.toml",
+        "${TGVF_REPOSITORY_ROOT_SUFFIX}/config.toml",
+    ):
+        try:
+            run_config_validation._absolute_path(value, name="config path")  # noqa: SLF001
+        except ValueError as error:
+            assert "absolute normalized path" in str(error)
+        else:  # pragma: no cover - assertion branch
+            raise AssertionError(f"unexpected path-token expansion for {value!r}")
+
+
 def test_validation_leaf_does_not_import_facade_judges_or_tomllib() -> None:
     repository_root = Path(__file__).resolve().parents[2]
     policy_directory = repository_root / "src" / "tgvf_rl" / "policy"

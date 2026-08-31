@@ -106,6 +106,16 @@ def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
     )
     if len(rollout) % tp != 0:
         raise ValueError("vLLM tensor parallel size must divide rollout GPUs")
+    weight_sync_interval = _positive_int(
+        table["weight_sync_interval_optimizer_steps"],
+        name="distributed.weight_sync_interval_optimizer_steps",
+    )
+    if weight_sync_interval != 1:
+        raise ValueError(
+            "distributed.weight_sync_interval_optimizer_steps must be 1: "
+            "the pinned synchronous veRL trainer publishes actor weights after "
+            "every optimizer step and has no interval scheduler"
+        )
     return SmokeDistributedBinding(
         physical_gpu_ids=physical,
         logical_gpu_ids=logical,
@@ -123,10 +133,7 @@ def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
         weight_sync_mode=_text(
             table["weight_sync_mode"], name="distributed.weight_sync_mode"
         ),
-        weight_sync_interval_optimizer_steps=_positive_int(
-            table["weight_sync_interval_optimizer_steps"],
-            name="distributed.weight_sync_interval_optimizer_steps",
-        ),
+        weight_sync_interval_optimizer_steps=weight_sync_interval,
     )
 
 
@@ -341,6 +348,10 @@ def _existing_directory(value: object, *, name: str) -> Path:
 
 def _absolute_path(value: object, *, name: str) -> Path:
     raw = str(value) if isinstance(value, Path) else _text(value, name=name)
+    repository_token = "${TGVF_REPOSITORY_ROOT}"
+    if raw == repository_token or raw.startswith(repository_token + "/"):
+        suffix = raw.removeprefix(repository_token).lstrip("/")
+        raw = str(Path(__file__).resolve().parents[3] / suffix)
     path = Path(raw)
     if not path.is_absolute() or ".." in path.parts:
         raise ValueError(f"{name} must be an absolute normalized path")

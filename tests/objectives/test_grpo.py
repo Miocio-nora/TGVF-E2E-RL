@@ -271,8 +271,18 @@ def test_policy_pilot_v1_factory_freezes_math_but_requires_kl_identity() -> None
     assert deepeyes.expected_group_size == 16
     assert deepeyes.identity_sha256 != spec.identity_sha256
 
-    for unsupported_group_size in (1, 7, 32):
-        with pytest.raises(ValueError, match="one of"):
+    config_owned = policy_pilot_v1_grpo_spec(
+        diagnostic_kl_estimator=ReferenceKLEstimator.K3_LOW_VARIANCE,
+        expected_group_size=3,
+    )
+    assert config_owned.expected_group_size == 3
+    assert config_owned.identity_sha256 not in {
+        spec.identity_sha256,
+        deepeyes.identity_sha256,
+    }
+
+    for unsupported_group_size in (0, -1, True):
+        with pytest.raises(ValueError, match="positive integer"):
             policy_pilot_v1_grpo_spec(
                 diagnostic_kl_estimator=ReferenceKLEstimator.K3_LOW_VARIANCE,
                 expected_group_size=unsupported_group_size,

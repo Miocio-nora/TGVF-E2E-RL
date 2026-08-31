@@ -9,6 +9,7 @@ must be supplied explicitly before a live sampling request is constructed.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
+from enum import Enum
 import hashlib
 import json
 import math
@@ -30,6 +31,7 @@ POLICY_TGVF_STAGE3_EXPERIMENT_CONFIG_SCHEMA = (
 POLICY_NO_TOOL_MATCHED_EXPERIMENT_CONFIG_SCHEMA = (
     "policy-no-tool-deepeyes-matched-experiment-v1"
 )
+POLICY_METHOD_EXPERIMENT_CONFIG_SCHEMA = "policy-method-experiment-v1"
 POLICY_PILOT_V1_MODEL_PATH = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
 POLICY_PILOT_V1_MODEL_FAMILY = "qwen3_vl"
 POLICY_PILOT_V1_MODEL_NAME = "Qwen3-VL-8B-Instruct"
@@ -122,6 +124,13 @@ class PilotSamplingConfig:
     )
 
     def __post_init__(self) -> None:
+        self._validate(accepted_scales=POLICY_PILOT_ACCEPTED_SAMPLING_SCALES)
+
+    def _validate(
+        self,
+        *,
+        accepted_scales: tuple[tuple[int, int], ...] | None,
+    ) -> None:
         if self.stop_token_ids is not None:
             object.__setattr__(self, "stop_token_ids", tuple(self.stop_token_ids))
             if any(
@@ -145,12 +154,17 @@ class PilotSamplingConfig:
             self.trajectories_per_prompt,
             self.max_response_length,
         )
-        if sampling_scale not in POLICY_PILOT_ACCEPTED_SAMPLING_SCALES:
+        if any(type(value) is not int or value <= 0 for value in sampling_scale):
+            raise ValueError(
+                "trajectories_per_prompt and max_response_length must be positive "
+                "integers"
+            )
+        if accepted_scales is not None and sampling_scale not in accepted_scales:
             raise ValueError(
                 "Policy sampling requires one accepted "
                 "(trajectories_per_prompt, max_response_length) scale, got "
                 f"{sampling_scale!r}; accepted="
-                f"{POLICY_PILOT_ACCEPTED_SAMPLING_SCALES!r}"
+                f"{accepted_scales!r}"
             )
         fixed_values = {
             "temperature": (self.temperature, 1.0),
@@ -316,6 +330,14 @@ class PilotSamplingConfig:
             raise IdentityMismatchError(
                 f"behavior SamplingIdentity differs from Policy Pilot v1: {mismatches!r}"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyMethodSamplingConfig(PilotSamplingConfig):
+    """Sampling contract whose positive scale is owned by a method run config."""
+
+    def __post_init__(self) -> None:
+        self._validate(accepted_scales=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -691,8 +713,92 @@ class PolicyNoToolMatchedExperimentConfig(PolicyPilotV1Config):
             raise TypeError("grpo must be PilotGRPOConfig")
 
 
+class PolicyMethodProfile(str, Enum):
+    """Method identity independent of resolution, horizon, seed, and group size."""
+
+    NO_TOOL = "no_tool"
+    CROP = "crop"
+    TGVF_SHORT = "tgvf_short"
+    TGVF_TARGET_GUIDE_V2 = "tgvf_target_guide_v2"
+    ATOMIC = "atomic"
+
+
+_TOOL_PROFILE_BY_METHOD = {
+    PolicyMethodProfile.NO_TOOL: NativeToolCapabilityProfile.NO_TOOL,
+    PolicyMethodProfile.CROP: NativeToolCapabilityProfile.CROP_ONLY,
+    PolicyMethodProfile.TGVF_SHORT: NativeToolCapabilityProfile.TGVF_ONLY,
+    PolicyMethodProfile.TGVF_TARGET_GUIDE_V2: NativeToolCapabilityProfile.TGVF_ONLY,
+    PolicyMethodProfile.ATOMIC: NativeToolCapabilityProfile.CROP_TGVF,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyMethodExperimentConfig(PolicyPilotV1Config):
+    """One method arm with experiment values supplied entirely by run config."""
+
+    schema_version: str = POLICY_METHOD_EXPERIMENT_CONFIG_SCHEMA
+    method: PolicyMethodProfile = PolicyMethodProfile.NO_TOOL
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.method, PolicyMethodProfile):
+            raise TypeError("method must be PolicyMethodProfile")
+        if not isinstance(self.tool_profile, NativeToolCapabilityProfile):
+            raise TypeError("tool_profile must be NativeToolCapabilityProfile")
+        if not isinstance(self.enabled_tool_names, (tuple, list)):
+            raise TypeError("enabled_tool_names must be a tuple or list")
+        if any(
+            not isinstance(name, str) or not name for name in self.enabled_tool_names
+        ):
+            raise TypeError("enabled_tool_names must contain non-empty strings")
+        object.__setattr__(self, "enabled_tool_names", tuple(self.enabled_tool_names))
+        for name, value in (
+            ("model_family", self.model_family),
+            ("model_path", self.model_path),
+            ("schema_version", self.schema_version),
+        ):
+            if not isinstance(value, str) or not value:
+                raise TypeError(f"{name} must be a non-empty string")
+        if type(self.native_deepstack_enabled) is not bool:
+            raise TypeError("native_deepstack_enabled must be bool")
+        if (
+            type(self.max_tgvf_call_attempts) is not int
+            or self.max_tgvf_call_attempts <= 0
+        ):
+            raise ValueError("max_tgvf_call_attempts must be a positive integer")
+        if type(self.image_max_pixels) is not int or self.image_max_pixels <= 0:
+            raise ValueError("image_max_pixels must be a positive integer")
+        if not isinstance(self.sampling, PolicyMethodSamplingConfig):
+            raise TypeError("sampling must be PolicyMethodSamplingConfig")
+        if not isinstance(self.lora, DecoderLoRAConfig):
+            raise TypeError("lora must be DecoderLoRAConfig")
+        if not isinstance(self.grpo, PilotGRPOConfig):
+            raise TypeError("grpo must be PilotGRPOConfig")
+
+        required_tool_profile = _TOOL_PROFILE_BY_METHOD[self.method]
+        expected = {
+            "schema_version": (
+                self.schema_version,
+                POLICY_METHOD_EXPERIMENT_CONFIG_SCHEMA,
+            ),
+            "model_family": (self.model_family, POLICY_PILOT_V1_MODEL_FAMILY),
+            "tool_profile": (self.tool_profile, required_tool_profile),
+            "enabled_tool_names": (
+                self.enabled_tool_names,
+                required_tool_profile.tool_names,
+            ),
+        }
+        for name, (actual, required) in expected.items():
+            if actual != required:
+                raise ValueError(
+                    f"method experiment requires {name}={required!r}, got {actual!r}"
+                )
+        if self.model_path not in POLICY_PILOT_V1_SUPPORTED_MODEL_PATHS:
+            raise ValueError("method experiment model_path is not supported")
+
+
 __all__ = [
     "POLICY_PILOT_ACCEPTED_SAMPLING_SCALES",
+    "POLICY_METHOD_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_NO_TOOL_MATCHED_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_PILOT_V1_CONFIG_SCHEMA",
     "POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA",
@@ -719,6 +825,9 @@ __all__ = [
     "DecoderLoRAConfig",
     "PilotGRPOConfig",
     "PilotSamplingConfig",
+    "PolicyMethodExperimentConfig",
+    "PolicyMethodProfile",
+    "PolicyMethodSamplingConfig",
     "PolicyNoToolMatchedExperimentConfig",
     "PolicyPilotV1Config",
     "PolicyTGVFStage3ExperimentConfig",

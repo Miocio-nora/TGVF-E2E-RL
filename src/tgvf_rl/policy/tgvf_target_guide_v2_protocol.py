@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 from .tgvf_deepeyes_matched_protocol import (
+    TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
     TGVF_DEEPEYES_MATCHED_SYSTEM_PROMPT,
     TGVF_DEEPEYES_MATCHED_TOOL_NAME,
     TGVF_DEEPEYES_MATCHED_TOOL_PARSER,
@@ -93,6 +94,9 @@ TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY = TGVFDeepEyesMatchedPromptIdentity(
     ),
     version=TGVF_TARGET_GUIDE_V2_PROMPT_VERSION,
     tool_parser=TGVF_DEEPEYES_MATCHED_TOOL_PARSER,
+    success_observation_protocol_id=(
+        TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.success_observation_protocol_id
+    ),
 )
 
 

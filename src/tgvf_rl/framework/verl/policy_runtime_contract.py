@@ -20,6 +20,7 @@ from tgvf_rl.public_api_compat import rebind_public_class
 
 if TYPE_CHECKING:
     from .native_agent_loop import VerlNativeTrajectoryComponentsPort
+    from .policy_behavior_version import PolicyBehaviorSnapshot
     from .policy_weight_sync import PolicyLoRASnapshot, PolicyWeightSyncState
 
 
@@ -59,13 +60,21 @@ class PolicyLoRASnapshotConsumer(Protocol):
     ) -> PolicyVersion: ...
 
 
+class PolicyBehaviorSnapshotConsumer(Protocol):
+    """Accept and prove a full-Qwen or Qwen+RP66 behavior identity."""
+
+    def apply_policy_behavior_snapshot(
+        self, snapshot: "PolicyBehaviorSnapshot", /
+    ) -> PolicyVersion: ...
+
+
 @dataclass(frozen=True, slots=True)
 class PolicyE2ERuntimeBuildContext:
     """Identity-complete inputs supplied to one live runtime builder."""
 
     config: PolicyE2ESmokeRunConfig
     placement: PolicyAgentLoopWorkerPlacement
-    initial_snapshot: "PolicyLoRASnapshot"
+    initial_snapshot: "PolicyLoRASnapshot | PolicyBehaviorSnapshot"
     weight_sync_state: "PolicyWeightSyncState"
     trainer_config: object
     server_manager: object
@@ -81,16 +90,17 @@ class PolicyE2ERuntimeBuildContext:
             raise TypeError("runtime context requires a worker placement")
         if self.initial_snapshot.policy_version.run_id != self.config.run_id:
             raise IdentityMismatchError(
-                "initial local LoRA snapshot belongs to another run"
+                "initial behavior snapshot belongs to another run"
             )
 
 
 @dataclass(frozen=True, slots=True)
 class PolicyE2ERuntimeProduct:
-    """Real trajectory components and the local exact-weight consumer."""
+    """Real trajectory components and configured behavior-publication consumer."""
 
     trajectory_components: VerlNativeTrajectoryComponentsPort
-    snapshot_consumer: PolicyLoRASnapshotConsumer
+    snapshot_consumer: PolicyLoRASnapshotConsumer | None = None
+    behavior_snapshot_consumer: PolicyBehaviorSnapshotConsumer | None = None
 
     def __post_init__(self) -> None:
         sync_builder = getattr(
@@ -103,10 +113,18 @@ class PolicyE2ERuntimeProduct:
             raise TypeError(
                 "runtime product must provide a sync or async trajectory builder"
             )
-        if not callable(
+        lora_consumer = callable(
             getattr(self.snapshot_consumer, "apply_policy_lora_snapshot", None)
-        ):
-            raise TypeError("runtime product must provide apply_policy_lora_snapshot()")
+        )
+        behavior_consumer = callable(
+            getattr(
+                self.behavior_snapshot_consumer,
+                "apply_policy_behavior_snapshot",
+                None,
+            )
+        )
+        if not lora_consumer and not behavior_consumer:
+            raise TypeError("runtime product must provide a behavior snapshot consumer")
 
 
 # These contracts historically lived in ``policy_runtime``.  Keep the public
@@ -115,6 +133,7 @@ class PolicyE2ERuntimeProduct:
 _LEGACY_PUBLIC_MODULE = "tgvf_rl.framework.verl.policy_runtime"
 for _public_contract in (
     PolicyAgentLoopWorkerPlacement,
+    PolicyBehaviorSnapshotConsumer,
     PolicyLoRASnapshotConsumer,
     PolicyE2ERuntimeBuildContext,
     PolicyE2ERuntimeProduct,
@@ -129,6 +148,7 @@ del _public_contract
 
 __all__ = [
     "PolicyAgentLoopWorkerPlacement",
+    "PolicyBehaviorSnapshotConsumer",
     "PolicyE2ERuntimeBuildContext",
     "PolicyE2ERuntimeProduct",
     "PolicyLoRASnapshotConsumer",

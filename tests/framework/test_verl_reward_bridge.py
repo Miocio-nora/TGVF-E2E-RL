@@ -110,8 +110,9 @@ def _real_data_proto(
         -0.2,
         correct_with_tool,
     ]
-    assert group_size % len(reward_pattern) == 0
-    rewards = reward_pattern * (group_size // len(reward_pattern))
+    rewards = (
+        reward_pattern * ((group_size + len(reward_pattern) - 1) // len(reward_pattern))
+    )[:group_size]
     rewards.extend([0.8] * (group_size - 1 if incomplete else group_size))
     trajectories = []
     exact_groups = []
@@ -279,6 +280,21 @@ def test_real_dataproto_binds_deepeyes_n16_groups() -> None:
     assert torch.equal(data.batch["advantages"], expected)
 
 
+def test_real_dataproto_binds_config_owned_n3_groups() -> None:
+    data = _real_data_proto(group_size=3)
+
+    view = bind_policy_pilot_exact_grpo_fields(
+        data,
+        diagnostic_kl_estimator=ReferenceKLEstimator.K3_LOW_VARIANCE,
+        expected_group_size=3,
+    )
+
+    assert len(view.trajectory_ids) == 6
+    assert view.group_uids[:3] == ("exact-group-0",) * 3
+    assert view.group_uids[3:] == ("exact-group-1",) * 3
+    assert torch.equal(data.batch["returns"], data.batch["advantages"])
+
+
 def test_answer_primary_reward_crosses_dataproto_sidecar_gate() -> None:
     data = _real_data_proto(tool_weight=0.2)
 
@@ -407,6 +423,82 @@ def test_stage3_five_component_reward_crosses_dataproto_sidecar_gate() -> None:
 
     assert view.reward_bridge_schema_version == STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION
     assert view.rewards[3] == pytest.approx(4.5)
+
+
+def test_tfree_stage3_sidecars_and_configured_protocol_penalty_cross_gate() -> None:
+    data = _real_data_proto()
+    trajectories = data.non_tensor_batch[TRAJECTORY_PAYLOAD_FIELD]
+    components = []
+    for trajectory in trajectories:
+        protocol = -2.0 if trajectory.stop is TrajectoryStop.INVALID_FORMAT else 0.0
+        answer = 0.0 if protocol else 2.0
+        components.append(
+            (
+                ("answer", answer),
+                ("tool", 0.0),
+                ("focus", 0.0),
+                ("grounding", 0.0),
+                ("protocol", protocol),
+            )
+        )
+    rewards = [sum(score for _name, score in row) for row in components]
+    batch_size = len(components)
+    data.non_tensor_batch[PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD] = [
+        STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION
+    ] * batch_size
+    data.non_tensor_batch[PILOT_VERL_REWARD_COMPONENTS_FIELD] = components
+    data.non_tensor_batch[PILOT_EXACT_REWARD_FIELD] = rewards
+    for field in (
+        STAGE3_VERL_TOOL_LABEL_FIELD,
+        STAGE3_VERL_TOOL_LABEL_CONFIDENCE_FIELD,
+        STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD,
+        STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD,
+    ):
+        data.non_tensor_batch[field] = [None] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_QUALITY_APPLICABLE_FIELD] = [False] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_QUALITY_COVERED_FIELD] = [False] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_QUALITY_FAILURE_FIELD] = [None] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_VISUAL_JUDGE_USAGE_FIELD] = [None] * batch_size
+    data.batch["rm_scores"].zero_()
+    data.batch["rm_scores"][:, -1] = torch.tensor(rewards)
+
+    view = validate_policy_pilot_reward_data_proto(
+        data,
+        expected_stage3_answer_reward_scale=2.0,
+        expected_stage3_repeated_call_penalty=0.05,
+        expected_stage3_protocol_error_penalty=2.0,
+        expected_stage3_tool_utility_reward_enabled=False,
+        expected_stage3_visual_quality_enabled=False,
+    )
+
+    assert view.rewards[0] == 2.0
+    assert -2.0 in (dict(row)["protocol"] for row in components)
+
+    data.non_tensor_batch[STAGE3_VERL_TOOL_LABEL_FIELD][0] = "needed"
+    data.non_tensor_batch[STAGE3_VERL_TOOL_LABEL_CONFIDENCE_FIELD][0] = 0.5
+    data.non_tensor_batch[STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD][0] = "b" * 64
+    data.non_tensor_batch[STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD][0] = "c" * 64
+    with pytest.raises(ValueError, match="configured switch"):
+        validate_policy_pilot_reward_data_proto(
+            data,
+            expected_stage3_protocol_error_penalty=2.0,
+            expected_stage3_tool_utility_reward_enabled=False,
+            expected_stage3_visual_quality_enabled=False,
+        )
+
+    data.non_tensor_batch[STAGE3_VERL_TOOL_LABEL_FIELD][0] = None
+    data.non_tensor_batch[STAGE3_VERL_TOOL_LABEL_CONFIDENCE_FIELD][0] = None
+    data.non_tensor_batch[STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD][0] = None
+    data.non_tensor_batch[STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD][0] = None
+    data.non_tensor_batch[STAGE3_VERL_QUALITY_APPLICABLE_FIELD][0] = True
+    data.non_tensor_batch[STAGE3_VERL_QUALITY_COVERED_FIELD][0] = True
+    with pytest.raises(ValueError, match="configured switch"):
+        validate_policy_pilot_reward_data_proto(
+            data,
+            expected_stage3_protocol_error_penalty=2.0,
+            expected_stage3_tool_utility_reward_enabled=False,
+            expected_stage3_visual_quality_enabled=False,
+        )
 
 
 def test_dataproto_sidecar_rejects_unnamed_reward_total() -> None:

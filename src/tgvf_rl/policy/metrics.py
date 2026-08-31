@@ -12,6 +12,8 @@ from tgvf_rl.protocol.schema import ToolErrorCode
 
 POLICY_PILOT_V1_METRICS_SCHEMA = "policy-pilot-v1-metrics-v1"
 POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT = 8
+# Historical checkpoint inference only. New method configs carry any positive
+# group size explicitly through each step and checkpoint state.
 POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT = (8, 16)
 POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS = 4
 POLICY_PILOT_V1_MAX_RECORDED_TOOL_ATTEMPTS = 5
@@ -80,9 +82,10 @@ class PilotTrajectoryMetricsObservation:
     """Raw metric facts for one retained Pilot trajectory.
 
     ``tool_call_attempts`` includes every assistant tool-call attempt, including
-    the fifth cap-error attempt.  Each attempt must yield either one successful
-    TGVF observation or one typed error code.  Reward fields are the raw
-    unweighted Pilot components, not their weighted scalar contributions.
+    the one post-cap error attempt. ``maximum_tool_calls`` comes from the run
+    protocol; its legacy default remains four for Pilot-v1 and one for the old
+    Stage3 arm. Each attempt must yield either one successful visual observation
+    or one typed error code. Reward fields are the raw unweighted components.
     """
 
     prompt_id: str
@@ -110,6 +113,7 @@ class PilotTrajectoryMetricsObservation:
     stage3_visual_judge_prompt_tokens: int = 0
     stage3_visual_judge_completion_tokens: int = 0
     stage3_visual_judge_cost_usd: float = 0.0
+    maximum_tool_calls: int | None = None
 
     def __post_init__(self) -> None:
         if type(self.prompt_id) is not str or not self.prompt_id.strip():
@@ -145,16 +149,18 @@ class PilotTrajectoryMetricsObservation:
             raise ValueError("judge usage requires a judge call")
         if self.reward_profile not in {"pilot-v1", "stage3-shaped-v1"}:
             raise ValueError("unsupported trajectory metrics reward profile")
-        maximum_attempts = (
-            POLICY_PILOT_V1_MAX_RECORDED_TOOL_ATTEMPTS
-            if self.reward_profile == "pilot-v1"
-            else 2
-        )
-        admitted_attempts = (
-            POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS
-            if self.reward_profile == "pilot-v1"
-            else 1
-        )
+        configured_maximum = self.maximum_tool_calls
+        if configured_maximum is None:
+            configured_maximum = (
+                POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS
+                if self.reward_profile == "pilot-v1"
+                else 1
+            )
+        if type(configured_maximum) is not int or configured_maximum < 1:
+            raise ValueError("maximum_tool_calls must be a positive integer")
+        object.__setattr__(self, "maximum_tool_calls", configured_maximum)
+        maximum_attempts = configured_maximum + 1
+        admitted_attempts = configured_maximum
         if self.tool_call_attempts > maximum_attempts:
             raise ValueError("tool-call attempts exceed the reward profile bound")
         if self.successful_tgvf_observations > admitted_attempts:
@@ -193,15 +199,21 @@ class PilotTrajectoryMetricsObservation:
         cap_code = ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value
         if self.tool_call_attempts == maximum_attempts:
             if self.tool_error_codes.count(cap_code) != 1:
-                if self.reward_profile == "pilot-v1":
+                if (
+                    self.reward_profile == "pilot-v1"
+                    and configured_maximum == POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS
+                ):
                     raise ValueError(
                         "the fifth Pilot attempt must record one cap error"
                     )
-                raise ValueError("the second Stage3 attempt must record one cap error")
+                raise ValueError("the post-cap tool attempt must record one cap error")
         elif cap_code in self.tool_error_codes:
-            if self.reward_profile == "pilot-v1":
+            if (
+                self.reward_profile == "pilot-v1"
+                and configured_maximum == POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS
+            ):
                 raise ValueError("a cap error is valid only on the fifth attempt")
-            raise ValueError("a cap error is valid only on the second Stage3 attempt")
+            raise ValueError("a cap error is valid only on the post-cap attempt")
         if conditional == 1.0 and (
             answer != 1.0 or self.successful_tgvf_observations == 0
         ):
@@ -289,11 +301,6 @@ class PilotOptimizerStepMetricsObservation:
         object.__setattr__(self, "step_time_seconds", elapsed)
         object.__setattr__(self, "trajectories", tuple(self.trajectories))
         _positive_int(self.trajectories_per_prompt, "trajectories_per_prompt")
-        if self.trajectories_per_prompt not in POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT:
-            raise ValueError(
-                "unsupported trajectories_per_prompt; accepted="
-                f"{POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT!r}"
-            )
         if not self.trajectories:
             raise ValueError("an optimizer-step metric observation cannot be empty")
         if any(
@@ -354,6 +361,11 @@ class PilotMetricsCheckpointState:
     judge_cost_usd: float = 0.0
     step_time_seconds_total: float = 0.0
     tool_error_counts: tuple[ToolErrorCount, ...] = ()
+    # ``None`` is reserved for a successfully decoded historical checkpoint
+    # which predates these fields.  Fresh accumulators bind explicit values;
+    # the first post-resume observation reconciles an unbound legacy state.
+    maximum_tool_calls: int | None = POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS
+    trajectories_per_prompt: int | None = POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT
 
     def __post_init__(self) -> None:
         if self.schema_version != POLICY_PILOT_V1_METRICS_SCHEMA:
@@ -378,6 +390,10 @@ class PilotMetricsCheckpointState:
         )
         for name in integer_fields:
             _nonnegative_int(getattr(self, name), name)
+        if self.maximum_tool_calls is not None:
+            _positive_int(self.maximum_tool_calls, "maximum_tool_calls")
+        if self.trajectories_per_prompt is not None:
+            _positive_int(self.trajectories_per_prompt, "trajectories_per_prompt")
         elapsed = _finite_float(self.step_time_seconds_total, "step_time_seconds_total")
         if elapsed < 0.0:
             raise ValueError("step_time_seconds_total must be non-negative")
@@ -400,19 +416,25 @@ class PilotMetricsCheckpointState:
                 raise ValueError(
                     "zero-prompt metrics state cannot contain trajectories"
                 )
-            inferred_group_size = POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT
-        elif self.trajectories % self.prompts:
-            raise ValueError(
-                "Policy trajectory count must be divisible by prompt count"
-            )
         else:
-            inferred_group_size = self.trajectories // self.prompts
-        if inferred_group_size not in POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT:
-            raise ValueError(
-                "Policy trajectory count must equal prompts multiplied by 8 "
-                "or 16; inferred group size="
-                f"{inferred_group_size}"
-            )
+            group_size = self.trajectories_per_prompt
+            if group_size is None:
+                if self.trajectories % self.prompts:
+                    raise ValueError(
+                        "historical Policy trajectory count must be divisible "
+                        "by prompt count"
+                    )
+                group_size = self.trajectories // self.prompts
+                if group_size not in POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT:
+                    raise ValueError(
+                        "historical Policy checkpoint has an unsupported "
+                        "inferred trajectories-per-prompt value"
+                    )
+            if self.trajectories != self.prompts * group_size:
+                raise ValueError(
+                    "Policy trajectory count must equal prompts multiplied by "
+                    "trajectories_per_prompt"
+                )
         if self.optimizer_steps == 0:
             if self.prompts != 0 or self.step_time_seconds_total != 0.0:
                 raise ValueError(
@@ -433,14 +455,17 @@ class PilotMetricsCheckpointState:
         }
         if any(value > self.trajectories for value in bounded_by_trajectories.values()):
             raise ValueError("trajectory metric numerators cannot exceed trajectories")
-        if self.tool_call_attempts > (
-            POLICY_PILOT_V1_MAX_RECORDED_TOOL_ATTEMPTS * self.trajectories
-        ):
-            raise ValueError("tool-call attempts exceed the Pilot trajectory bound")
-        if self.successful_tgvf_observations > (
-            POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS * self.trajectories
-        ):
-            raise ValueError("successful observations exceed the Pilot bound")
+        if self.maximum_tool_calls is not None:
+            if self.tool_call_attempts > (
+                (self.maximum_tool_calls + 1) * self.trajectories
+            ):
+                raise ValueError(
+                    "tool-call attempts exceed the configured trajectory bound"
+                )
+            if self.successful_tgvf_observations > (
+                self.maximum_tool_calls * self.trajectories
+            ):
+                raise ValueError("successful observations exceed the configured bound")
         if self.successful_tgvf_observations > self.tool_call_attempts:
             raise ValueError("successful observations cannot exceed tool attempts")
         if self.trajectories_with_tool_call_attempts > self.tool_call_attempts:
@@ -471,7 +496,7 @@ class PilotMetricsCheckpointState:
     def to_checkpoint_mapping(self) -> dict[str, object]:
         """Return a deterministic JSON-compatible checkpoint payload."""
 
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "optimizer_steps": self.optimizer_steps,
             "prompts": self.prompts,
@@ -497,6 +522,14 @@ class PilotMetricsCheckpointState:
                 [item.code, item.count] for item in self.tool_error_counts
             ],
         }
+        # Preserve the exact nested payload of historical project checkpoints.
+        # Adding guessed compatibility fields here would change the enclosing
+        # project-state digest and make an otherwise valid resume impossible.
+        if self.maximum_tool_calls is not None:
+            payload["maximum_tool_calls"] = self.maximum_tool_calls
+        if self.trajectories_per_prompt is not None:
+            payload["trajectories_per_prompt"] = self.trajectories_per_prompt
+        return payload
 
     @classmethod
     def from_checkpoint_mapping(
@@ -525,8 +558,16 @@ class PilotMetricsCheckpointState:
             "total_visual_tokens",
             "step_time_seconds_total",
             "tool_error_counts",
+            "maximum_tool_calls",
+            "trajectories_per_prompt",
         }
-        if set(payload) != expected:
+        optional_compatibility_fields = {
+            "maximum_tool_calls",
+            "trajectories_per_prompt",
+        }
+        required = expected - optional_compatibility_fields
+        payload_fields = frozenset(payload)
+        if not required <= payload_fields <= expected:
             missing = tuple(sorted(expected - set(payload)))
             extra = tuple(sorted(set(payload) - expected))
             raise ValueError(
@@ -567,6 +608,8 @@ class PilotMetricsCheckpointState:
             total_visual_tokens=payload["total_visual_tokens"],
             step_time_seconds_total=payload["step_time_seconds_total"],
             tool_error_counts=tuple(errors),
+            maximum_tool_calls=payload.get("maximum_tool_calls"),
+            trajectories_per_prompt=payload.get("trajectories_per_prompt"),
         )
 
 
@@ -617,13 +660,29 @@ class PilotMetricsAccumulator:
                 f"expected {expected_step}, got {observation.optimizer_step}"
             )
         rows = observation.trajectories
+        observed_limits = {row.maximum_tool_calls for row in rows}
+        if len(observed_limits) != 1:
+            raise ValueError("one metrics step cannot mix maximum_tool_calls values")
+        observed_maximum_tool_calls = next(iter(observed_limits))
+        assert observed_maximum_tool_calls is not None
         if self._state.prompts:
-            existing_group_size = self._state.trajectories // self._state.prompts
+            existing_group_size = self._state.trajectories_per_prompt
+            if existing_group_size is None:
+                existing_group_size = self._state.trajectories // self._state.prompts
             if observation.trajectories_per_prompt != existing_group_size:
                 raise ValueError(
                     "metrics cannot mix trajectories-per-prompt group sizes: "
                     f"existing={existing_group_size} observed="
                     f"{observation.trajectories_per_prompt}"
+                )
+            if (
+                self._state.maximum_tool_calls is not None
+                and observed_maximum_tool_calls != self._state.maximum_tool_calls
+            ):
+                raise ValueError(
+                    "metrics cannot mix maximum_tool_calls values: "
+                    f"existing={self._state.maximum_tool_calls} observed="
+                    f"{observed_maximum_tool_calls}"
                 )
         errors = Counter(
             {item.code: item.count for item in self._state.tool_error_counts}
@@ -691,6 +750,8 @@ class PilotMetricsAccumulator:
             tool_error_counts=tuple(
                 ToolErrorCount(code, errors[code]) for code in sorted(errors)
             ),
+            maximum_tool_calls=observed_maximum_tool_calls,
+            trajectories_per_prompt=observation.trajectories_per_prompt,
         )
         return self.summary()
 

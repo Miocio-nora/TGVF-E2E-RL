@@ -15,6 +15,11 @@ from tgvf_rl.framework.verl.trainable_tgvf_checkpoint_manager import (
     TGVF_CHECKPOINT_ENGINE_CONTROL_KEY,
     TrainableTGVFCheckpointEngineManager,
 )
+from tgvf_rl.framework.verl.policy_behavior_version import (
+    PolicyBehaviorPayload,
+    load_latest_policy_behavior_snapshot,
+)
+from tgvf_rl.framework.verl.policy_weight_sync import PolicyWeightSyncState
 from tgvf_rl.framework.verl.trainable_tgvf_weight_sync import (
     split_trainable_rp66_parameter_stream_for_snapshot,
 )
@@ -161,6 +166,24 @@ def test_manager_syncs_step_zero_qwen_then_rp66_and_waits_for_all_acks(
     assert publication.adapter_state_sha256 == state_sha256
     assert publication.acknowledgement_count == 2
     assert publication.applied_count == 2
+    behavior = manager.last_behavior_snapshot
+    assert behavior is not None
+    assert behavior.payload is PolicyBehaviorPayload.FULL_QWEN_PLUS_RP66
+    assert behavior.adapter_state_sha256 == state_sha256
+    assert behavior.adapter_snapshot_storage_sha256 == (
+        publication.snapshot_storage_sha256
+    )
+    assert behavior.policy_version.weights_sha256 not in {
+        publication.adapter_state_sha256,
+        publication.snapshot_storage_sha256,
+    }
+    assert (
+        load_latest_policy_behavior_snapshot(
+            PolicyWeightSyncState.from_environment(environment),
+            expected_optimizer_step=0,
+        )
+        == behavior
+    )
 
 
 def test_manager_declares_post_checkpoint_full_weight_resync() -> None:

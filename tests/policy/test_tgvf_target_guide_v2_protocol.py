@@ -77,6 +77,9 @@ def test_target_guide_v2_changes_only_system_target_conditioning() -> None:
     assert TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.tool_parser == (
         TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.tool_parser
     )
+    assert TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.success_observation_protocol_id is (
+        TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.success_observation_protocol_id
+    )
 
 
 def test_target_guide_v2_rejects_ambiguous_normalization_and_empty_question() -> None:

@@ -172,6 +172,7 @@ class BoundVerlNativeAgentLoopInvocationFactory:
         from tgvf_rl.policy.config import (
             POLICY_PILOT_ACCEPTED_SAMPLING_SCALES,
             PilotSamplingConfig,
+            PolicyMethodSamplingConfig,
         )
 
         if not isinstance(run_id, str) or not run_id:
@@ -208,10 +209,15 @@ class BoundVerlNativeAgentLoopInvocationFactory:
         accepted_group_sizes = {
             group_size for group_size, _ in POLICY_PILOT_ACCEPTED_SAMPLING_SCALES
         }
-        if (
-            type(rollouts_per_prompt) is not int
-            or rollouts_per_prompt not in accepted_group_sizes
-        ):
+        valid_group_size = (
+            type(rollouts_per_prompt) is int
+            and rollouts_per_prompt > 0
+            and (
+                isinstance(sampling_contract, PolicyMethodSamplingConfig)
+                or rollouts_per_prompt in accepted_group_sizes
+            )
+        )
+        if not valid_group_size:
             raise ValueError(
                 "Policy native invocation group size is unsupported: "
                 f"{rollouts_per_prompt!r}"

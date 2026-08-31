@@ -211,7 +211,9 @@ def test_matched_no_tool_experiment_has_an_explicit_empty_capability_surface() -
     assert no_tool.tool_profile is NativeToolCapabilityProfile.NO_TOOL
     assert no_tool.enabled_tool_names == ()
     assert no_tool.max_tgvf_call_attempts == 1
-    assert no_tool.image_max_pixels == 1_003_520
+    # This legacy n=8 matched profile remains a read-only 512-pixel contract;
+    # new method-matrix profiles take resolution explicitly from run config.
+    assert no_tool.image_max_pixels == 262_144
     assert len(no_tool.identity_sha256) == 64
 
     with pytest.raises(ValueError, match="enabled_tool_names"):

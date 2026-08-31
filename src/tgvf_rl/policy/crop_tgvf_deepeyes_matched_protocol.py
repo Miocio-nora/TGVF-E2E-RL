@@ -12,6 +12,9 @@ from tgvf_rl.protocol.schema import (
     TGVF_CROP_TOOL_SCHEMA_SHA256,
     build_tgvf_crop_tool_schema,
 )
+from tgvf_rl.protocol.observation_contract import (
+    NativeSuccessObservationProtocolId,
+)
 
 from .deepeyes_official_protocol import (
     DEEPEYES_MAX_ACTIVE_PERCEPTION,
@@ -135,6 +138,7 @@ class CropTGVFDeepEyesMatchedPromptIdentity:
     version: str
     tool_parser: str
     maximum_tool_calls: int
+    success_observation_protocol_id: NativeSuccessObservationProtocolId
 
 
 CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY = CropTGVFDeepEyesMatchedPromptIdentity(
@@ -158,6 +162,9 @@ CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY = CropTGVFDeepEyesMatchedPromptIdenti
     version=CROP_TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
     tool_parser=CROP_TGVF_DEEPEYES_MATCHED_TOOL_PARSER,
     maximum_tool_calls=CROP_TGVF_DEEPEYES_MATCHED_MAXIMUM_TOOL_CALLS,
+    success_observation_protocol_id=(
+        NativeSuccessObservationProtocolId.DEEPEYES_ATOMIC_MATCHED_V1
+    ),
 )
 
 

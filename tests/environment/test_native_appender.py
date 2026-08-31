@@ -15,8 +15,12 @@ from tgvf_rl.environment.native_appender import (
     QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX,
     QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT,
     QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT_SHA256,
+    QWEN_NATIVE_MATCHED_ATOMIC_SUCCESS_TEXT,
+    QWEN_NATIVE_MATCHED_ATOMIC_SUCCESS_TEXT_SHA256,
     QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT,
     QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256,
+    QWEN_NATIVE_MATCHED_TGVF_SUCCESS_TEXT,
+    QWEN_NATIVE_MATCHED_TGVF_SUCCESS_TEXT_SHA256,
     QWEN_NATIVE_RESPONSE_SUFFIX,
     QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX,
     QwenNativeToolObservationAppender,
@@ -34,12 +38,8 @@ from tgvf_rl.protocol.schema import StandardToolError
 from tgvf_rl.protocol.schema import NativeToolCapabilityProfile
 
 
-_QWEN3_VL_INSTRUCT_PATH = Path(
-    "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
-)
-_QWEN3_VL_THINKING_PATH = Path(
-    "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
-)
+_QWEN3_VL_INSTRUCT_PATH = Path("/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct")
+_QWEN3_VL_THINKING_PATH = Path("/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking")
 
 
 class _CharacterTokenizer:
@@ -128,6 +128,24 @@ def _legacy_crop_contract() -> NativeSuccessObservationContract:
     return NativeSuccessObservationContract(
         protocol_id=(NativeSuccessObservationProtocolId.LEGACY_CROP_GENERIC86_V1),
         tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+
+
+def _matched_no_echo_contract(
+    profile: NativeToolCapabilityProfile,
+) -> NativeSuccessObservationContract:
+    protocol_id = {
+        NativeToolCapabilityProfile.TGVF_ONLY: (
+            NativeSuccessObservationProtocolId.DEEPEYES_TGVF_MATCHED_V1
+        ),
+        NativeToolCapabilityProfile.CROP_TGVF: (
+            NativeSuccessObservationProtocolId.DEEPEYES_ATOMIC_MATCHED_V1
+        ),
+    }[profile]
+    return NativeSuccessObservationContract(
+        protocol_id=protocol_id,
+        tool_profile=profile,
         assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
     )
 
@@ -326,6 +344,9 @@ def test_canonical_and_legacy_crop_contracts_are_distinct_and_byte_locked() -> N
     assert sha256(matched.encode("utf-8")).hexdigest() == (
         QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256
     )
+    assert QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256 == (
+        "f745fa6cfcc3ba9eb27125a49581fd823fb5930b7b0a51b28e51982999fa2d0a"
+    )
     assert sha256(legacy.encode("utf-8")).hexdigest() == (
         QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT_SHA256
     )
@@ -333,6 +354,98 @@ def test_canonical_and_legacy_crop_contracts_are_distinct_and_byte_locked() -> N
     assert "Zoomed-in visual observation" in legacy
     assert matched.count(QWEN_NATIVE_IMAGE_PLACEHOLDER) == 1
     assert legacy.count(QWEN_NATIVE_IMAGE_PLACEHOLDER) == 1
+
+
+@pytest.mark.parametrize(
+    ("profile", "tool_name", "arguments", "expected_text", "expected_sha256"),
+    (
+        (
+            NativeToolCapabilityProfile.TGVF_ONLY,
+            "tgvf_focus_tool",
+            {"target": "runtime-specific-target-sentinel-tgvf"},
+            QWEN_NATIVE_MATCHED_TGVF_SUCCESS_TEXT,
+            "62275af22c3d399f4fffa25bc2a722104fd7a485f90b9b48f55e56919c9c9f87",
+        ),
+        (
+            NativeToolCapabilityProfile.CROP_TGVF,
+            "tgvf_crop_tool",
+            {
+                "bbox_2d": [1, 2, 30, 40],
+                "target": "runtime-specific-target-sentinel-atomic",
+            },
+            QWEN_NATIVE_MATCHED_ATOMIC_SUCCESS_TEXT,
+            "116b57898845be6e784a1d5f2e23304bcf595146cc2d4f9d85028074f16aec1e",
+        ),
+    ),
+)
+def test_matched_tgvf_and_atomic_observations_never_echo_sampled_target(
+    profile: NativeToolCapabilityProfile,
+    tool_name: str,
+    arguments: dict[str, object],
+    expected_text: str,
+    expected_sha256: str,
+) -> None:
+    sampled_turn, parsed = _ascii_sampled_call(tool_name, arguments)
+    contract = _matched_no_echo_contract(profile)
+    rendered = contract.render(parsed)
+
+    assert rendered == expected_text
+    assert arguments["target"] not in rendered
+    assert rendered.count(QWEN_NATIVE_IMAGE_PLACEHOLDER) == 1
+    assert sha256(rendered.encode("utf-8")).hexdigest() == expected_sha256
+    assert (
+        QWEN_NATIVE_MATCHED_TGVF_SUCCESS_TEXT_SHA256
+        if profile is NativeToolCapabilityProfile.TGVF_ONLY
+        else QWEN_NATIVE_MATCHED_ATOMIC_SUCCESS_TEXT_SHA256
+    ) == expected_sha256
+
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=_CharacterTokenizer(),
+        registrar=_Registrar(),
+        observation_contract=contract,
+    )
+    _updated, environment_ids = appender.append(
+        (7, 8),
+        sampled_turn,
+        ObservationHandle(f"obs-{profile.value}", "5" * 64),
+        call_index=0,
+        parsed_call=parsed,
+    )
+    environment_text = "".join(map(chr, environment_ids))
+    assert environment_text == rendered
+    assert arguments["target"] not in environment_text
+
+    alternative_arguments = dict(arguments)
+    alternative_arguments["target"] = "a-completely-different-runtime-target"
+    _alternative_turn, alternative = _ascii_sampled_call(
+        tool_name, alternative_arguments
+    )
+    assert _matched_no_echo_contract(profile).render(alternative) == rendered
+
+
+def test_no_tool_observation_identity_cannot_append_any_tool_turn() -> None:
+    contract = NativeSuccessObservationContract(
+        protocol_id=NativeSuccessObservationProtocolId.NO_TOOL_NO_EXECUTION_V1,
+        tool_profile=NativeToolCapabilityProfile.NO_TOOL,
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+    sampled, parsed = _ascii_sampled_call(
+        "tgvf_focus_tool", {"target": "must-never-execute"}
+    )
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=_CharacterTokenizer(),
+        registrar=_Registrar(),
+        observation_contract=contract,
+    )
+
+    with pytest.raises(RuntimeError, match="forbids appending tool turns"):
+        appender.append(
+            (7, 8),
+            sampled,
+            ObservationHandle("obs-no-tool", "5" * 64),
+            call_index=0,
+            parsed_call=parsed,
+        )
 
 
 @pytest.mark.parametrize(

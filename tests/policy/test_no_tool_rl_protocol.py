@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from tgvf_rl.protocol import NativeSuccessObservationProtocolId
+
 from tgvf_rl.policy.no_tool_rl_protocol import (
     NO_TOOL_RL_PROMPT_IDENTITY,
     NO_TOOL_RL_PROMPT_VERSION,
@@ -40,6 +42,9 @@ def test_no_tool_visual_prompt_is_exact_user_only_image_bearing_and_direct() -> 
     assert NO_TOOL_RL_PROMPT_IDENTITY.system_prompt_sha256 is None
     assert NO_TOOL_RL_PROMPT_IDENTITY.version == NO_TOOL_RL_PROMPT_VERSION
     assert NO_TOOL_RL_PROMPT_IDENTITY.tool_parser == "none"
+    assert NO_TOOL_RL_PROMPT_IDENTITY.success_observation_protocol_id is (
+        NativeSuccessObservationProtocolId.NO_TOOL_NO_EXECUTION_V1
+    )
 
 
 @pytest.mark.parametrize("question", ("", "  ", 3))

@@ -9,6 +9,7 @@ from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     build_tgvf_tool_response_message,
     build_tgvf_visual_messages,
 )
+from tgvf_rl.protocol import NativeSuccessObservationProtocolId
 
 
 def test_matched_user_suffix_changes_only_tool_name() -> None:
@@ -59,3 +60,6 @@ def test_tool_observation_does_not_echo_target_into_text_channel() -> None:
 def test_prompt_identity_is_content_addressed() -> None:
     assert len(TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256) == 64
     assert TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.tool_parser == "hermes"
+    assert TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.success_observation_protocol_id is (
+        NativeSuccessObservationProtocolId.DEEPEYES_TGVF_MATCHED_V1
+    )

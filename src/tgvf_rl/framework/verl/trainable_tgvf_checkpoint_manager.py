@@ -20,6 +20,13 @@ from typing import Any
 
 from tgvf_rl.contracts.errors import IdentityMismatchError
 
+from .policy_behavior_version import (
+    FullQwenSyncReceipt,
+    PolicyBehaviorPayload,
+    PolicyBehaviorSnapshot,
+    adapter_acknowledgement_sha256,
+    publish_policy_behavior_snapshot,
+)
 from .policy_weight_sync import (
     PolicyWeightSyncState,
     _auto_await,
@@ -138,11 +145,16 @@ class TrainableTGVFCheckpointEngineManager:
             )
         self._expected_acknowledgement_count = _rollout_server_count(replicas)
         self._last_publication: TrainableTGVFRolloutPublication | None = None
+        self._last_behavior_snapshot: PolicyBehaviorSnapshot | None = None
         self._frozen_adapter_state_sha256: str | None = None
 
     @property
     def last_publication(self) -> TrainableTGVFRolloutPublication | None:
         return self._last_publication
+
+    @property
+    def last_behavior_snapshot(self) -> PolicyBehaviorSnapshot | None:
+        return self._last_behavior_snapshot
 
     @_auto_await
     async def update_weights(self, global_steps: int | None = None) -> object:
@@ -166,6 +178,7 @@ class TrainableTGVFCheckpointEngineManager:
         upstream_result = self._upstream.update_weights(global_steps=global_steps)
         if inspect.isawaitable(upstream_result):
             upstream_result = await upstream_result
+        full_qwen_receipt = FullQwenSyncReceipt.from_acknowledged_request(request)
 
         snapshot = load_latest_trainable_rp66_snapshot(
             self._state,
@@ -202,7 +215,7 @@ class TrainableTGVFCheckpointEngineManager:
             and self._frozen_adapter_state_sha256 is None
         ):
             self._frozen_adapter_state_sha256 = adapter_sha256
-        self._last_publication = TrainableTGVFRolloutPublication(
+        publication = TrainableTGVFRolloutPublication(
             optimizer_step=global_steps,
             adapter_state_sha256=adapter_sha256,
             snapshot_storage_sha256=snapshot.storage_sha256,
@@ -210,6 +223,26 @@ class TrainableTGVFCheckpointEngineManager:
             acknowledgement_count=len(validated),
             applied_count=sum(bool(ack["applied"]) for ack in validated),
         )
+        adapter_ack_sha256 = adapter_acknowledgement_sha256(
+            optimizer_step=global_steps,
+            state_sha256=adapter_sha256,
+            snapshot_storage_sha256=snapshot.storage_sha256,
+            request_sha256=request.request_sha256,
+            acknowledgement_count=publication.acknowledgement_count,
+            applied_count=publication.applied_count,
+        )
+        behavior = publish_policy_behavior_snapshot(
+            self._state,
+            full_qwen=full_qwen_receipt,
+            payload=PolicyBehaviorPayload.FULL_QWEN_PLUS_RP66,
+            adapter_state_sha256=adapter_sha256,
+            adapter_snapshot_storage_sha256=snapshot.storage_sha256,
+            adapter_acknowledgement_sha256=adapter_ack_sha256,
+            adapter_acknowledgement_count=publication.acknowledgement_count,
+            adapter_applied_count=publication.applied_count,
+        )
+        self._last_publication = publication
+        self._last_behavior_snapshot = behavior
         return upstream_result
 
     def __getattr__(self, name: str) -> object:

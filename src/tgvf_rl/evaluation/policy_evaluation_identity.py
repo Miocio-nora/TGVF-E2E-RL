@@ -298,7 +298,10 @@ def policy_eval_observation_identity(
     from tgvf_rl.environment.native_appender import (
         QWEN_NATIVE_IMAGE_PLACEHOLDER,
         QWEN_NATIVE_LEGACY_CROP_GENERIC86_SUCCESS_TEXT_SHA256,
+        QWEN_NATIVE_MATCHED_ATOMIC_SUCCESS_TEXT_SHA256,
         QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256,
+        QWEN_NATIVE_MATCHED_TGVF_SUCCESS_TEXT_SHA256,
+        QWEN_NATIVE_NO_TOOL_NO_EXECUTION_SHA256,
         QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX,
         qwen_native_response_suffix,
     )
@@ -314,6 +317,21 @@ def policy_eval_observation_identity(
         is NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1
     ):
         return QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256
+    if (
+        contract.protocol_id
+        is NativeSuccessObservationProtocolId.DEEPEYES_TGVF_MATCHED_V1
+    ):
+        return QWEN_NATIVE_MATCHED_TGVF_SUCCESS_TEXT_SHA256
+    if (
+        contract.protocol_id
+        is NativeSuccessObservationProtocolId.DEEPEYES_ATOMIC_MATCHED_V1
+    ):
+        return QWEN_NATIVE_MATCHED_ATOMIC_SUCCESS_TEXT_SHA256
+    if (
+        contract.protocol_id
+        is NativeSuccessObservationProtocolId.NO_TOOL_NO_EXECUTION_V1
+    ):
+        return QWEN_NATIVE_NO_TOOL_NO_EXECUTION_SHA256
     if (
         contract.protocol_id
         is NativeSuccessObservationProtocolId.LEGACY_CROP_GENERIC86_V1

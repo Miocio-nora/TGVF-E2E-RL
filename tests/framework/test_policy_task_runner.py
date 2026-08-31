@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -18,6 +19,7 @@ from tgvf_rl.framework.verl.policy_task_runner import (
     _append_policy_metrics_event,
     _completed_resume_checkpoint_step,
     _finish_tracking_backends,
+    _load_current_policy_version,
     _pilot_metrics_event,
     _policy_tracking_metrics,
     _torch_state,
@@ -26,6 +28,15 @@ from tgvf_rl.framework.verl.policy_task_runner import (
     make_policy_colocated_worker_class,
     make_policy_pilot_ray_trainer_class,
     policy_worker_logical_cuda_ordinal,
+)
+from tgvf_rl.framework.verl.policy_behavior_version import (
+    FullQwenSyncReceipt,
+    PolicyBehaviorPayload,
+    publish_policy_behavior_snapshot,
+)
+from tgvf_rl.framework.verl.policy_weight_sync import (
+    PolicyWeightSyncState,
+    publish_policy_weight_sync_request,
 )
 from tgvf_rl.policy.checkpoint import DATA_CURSOR_OWNER, PilotOptimizerDataCursor
 from tgvf_rl.policy.metrics import (
@@ -51,6 +62,32 @@ def _require_verl() -> None:
         "verl",
         reason="Policy trainer lifecycle integration requires optional pinned veRL",
     )
+
+
+def test_task_runner_method_version_loader_does_not_require_lora(
+    tmp_path: Path,
+) -> None:
+    environment = {
+        "TGVF_POLICY_STATE_DIR": str(tmp_path.resolve()),
+        "TGVF_POLICY_RUN_ID": "task-runner-method-test",
+        "TGVF_POLICY_RUN_IDENTITY_SHA256": "d" * 64,
+    }
+    state = PolicyWeightSyncState.from_environment(environment)
+    request = publish_policy_weight_sync_request(state, 4, nonce="task-runner-step-4")
+    behavior = publish_policy_behavior_snapshot(
+        state,
+        full_qwen=FullQwenSyncReceipt.from_acknowledged_request(request),
+        payload=PolicyBehaviorPayload.FULL_QWEN,
+    )
+
+    selected = _load_current_policy_version(
+        SimpleNamespace(method=object()),
+        state,
+        expected_optimizer_step=4,
+    )
+
+    assert selected == behavior.policy_version
+    assert not state.latest_path.exists()
 
 
 def test_live_agent_loop_dataproto_gets_driver_and_worker_release_lease() -> None:
@@ -315,6 +352,82 @@ def test_pending_checkpoint_commits_after_sync_while_rollout_is_asleep() -> None
     assert events[4][0] == "metrics"
     assert events[4][1]["weight_sync_seconds"] >= 0.0
     assert events[4][1]["checkpoint_seconds"] >= 0.0
+
+
+def test_full_model_checkpoint_resyncs_discarded_weights_instead_of_bare_wake() -> None:
+    events: list[object] = []
+
+    class UpstreamManager:
+        requires_post_checkpoint_weight_resync = True
+
+        def update_weights(self, step):
+            events.append(("sync", step))
+            return {"synced": step}
+
+        def sleep_replicas(self):
+            events.append("sleep")
+
+        def wake_up_replicas(self):
+            events.append("wake")
+
+    class Trainer:
+        _policy_checkpoint_pending = True
+
+        def _commit_policy_checkpoint_after_weight_sync(self, step):
+            events.append(("checkpoint", step))
+            self._policy_checkpoint_pending = False
+
+        def _complete_policy_metric_publication(self, **timings):
+            events.append(("metrics", timings))
+
+    manager = CheckpointAfterWeightSyncManager(UpstreamManager(), Trainer())
+
+    assert manager.update_weights(3) == {"synced": 3}
+    assert events[:4] == [
+        ("sync", 3),
+        "sleep",
+        ("checkpoint", 3),
+        ("sync", 3),
+    ]
+    assert "wake" not in events
+    assert manager._replicas_sleeping is False
+    assert events[4][0] == "metrics"
+
+
+def test_checkpoint_failure_wakes_replicas_without_attempting_resync() -> None:
+    events: list[object] = []
+
+    class UpstreamManager:
+        requires_post_checkpoint_weight_resync = True
+
+        def update_weights(self, step):
+            events.append(("sync", step))
+            return {"synced": step}
+
+        def sleep_replicas(self):
+            events.append("sleep")
+
+        def wake_up_replicas(self):
+            events.append("wake")
+
+    class Trainer:
+        _policy_checkpoint_pending = True
+
+        def _commit_policy_checkpoint_after_weight_sync(self, step):
+            events.append(("checkpoint", step))
+            raise OSError("synthetic checkpoint failure")
+
+    manager = CheckpointAfterWeightSyncManager(UpstreamManager(), Trainer())
+
+    with pytest.raises(OSError, match="synthetic checkpoint failure"):
+        manager.update_weights(3)
+    assert events == [
+        ("sync", 3),
+        "sleep",
+        ("checkpoint", 3),
+        "wake",
+    ]
+    assert manager._replicas_sleeping is False
 
 
 def test_policy_metrics_publish_step_and_cumulative_records_idempotently(

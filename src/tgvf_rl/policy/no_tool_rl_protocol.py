@@ -12,6 +12,10 @@ import hashlib
 import json
 from typing import Any
 
+from tgvf_rl.protocol.observation_contract import (
+    NativeSuccessObservationProtocolId,
+)
+
 
 NO_TOOL_RL_PROTOCOL_SCHEMA = "tgvf.no-tool-rl-clean-final-protocol.v1"
 NO_TOOL_RL_PROMPT_VERSION = "no-tool-reasoning-clean-final-v1"
@@ -48,6 +52,7 @@ class NoToolRLPromptIdentity:
     bundle_sha256: str
     version: str
     tool_parser: str
+    success_observation_protocol_id: NativeSuccessObservationProtocolId
 
 
 NO_TOOL_RL_PROMPT_IDENTITY = NoToolRLPromptIdentity(
@@ -67,6 +72,9 @@ NO_TOOL_RL_PROMPT_IDENTITY = NoToolRLPromptIdentity(
     ),
     version=NO_TOOL_RL_PROMPT_VERSION,
     tool_parser=NO_TOOL_RL_TOOL_PARSER,
+    success_observation_protocol_id=(
+        NativeSuccessObservationProtocolId.NO_TOOL_NO_EXECUTION_V1
+    ),
 )
 
 
