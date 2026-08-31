@@ -1,180 +1,143 @@
-# 主代码整合与审计进度（2026-08-31）
+# 主代码统一与协议整合审计（2026-08-31）
 
-本文档是当前论文实验代码的专属整合台账。它记录“统一分支上真实可用的代码”，不把历史 worktree 中出现过、但尚未移植和验证的实现算作完成。
+本文档记录统一分支上已经进入真实 `config -> loader -> typed config -> veRL plan -> Hydra compose -> runtime/reward` 链路的能力。历史 worktree 中存在但未进入该链路的实现，不计为完成。
 
-当前工作分支：`stabilize/protocol-contract-v1-20260830`。
+- 分支：`stabilize/protocol-contract-v1-20260830`
+- 实现代码提交：`d1e8bbe658217371bbe571e3217c00ca94950043`
+- 五臂共享配置指纹：`f3bf6a38ba36efd66537c211c05853d3c64001e923bd9247c0ac7018ebb49392`
+- 当前状态：CPU 合约与组合闭环已完成；尚未启动新的训练，GPU/Ray canary 仍是下一道验收门。
 
-## 当前结论
+## 结论
 
-四方法的环境、live runtime 和 exact replay 核心已经整合到同一分支，但尚未形成完整的 `train -> pause -> resume -> eval` 主链。当前剩余的主矛盾已经收敛为：
+本轮整合的核心结果不是“把 @512 写死”，而是建立了一个统一、显式、可审计的实验接口。当前 PRL28 选择 `262,144 = 512²` pixels、S32、BS16、`n=16`、seed 42、WS8 和 Teacher25，只是五臂 canonical 配置共同选定的一组值。分辨率、训练步数、checkpoint 节点、rollout 数、seed、batch/capacity、工具调用上限、reward 系数及开关、native DeepStack 和 Adapter 模式都由配置进入真实运行路径。
 
-1. method-specific veRL engine/checkpoint 选择尚未从历史专用 launcher 收敛成一个精简入口；
-2. canonical policy 目录还没有新的 @512、S32、Teacher25 方法矩阵配置；
-3. CPU composition 完成后仍需 step-1 GPU canary 验证真实 FSDP/vLLM 组合；
-4. 恢复身份仍需继续拆分“物理可加载性”和“论文复现资格”。
+五个 RL treatment 是 NoTool、Crop、TGVF-short、TGVF-target-guide-v2 和 Atomic。Original Qwen 保留为 **eval-only comparator**，不伪装成第六份训练配置，也不能与 NoTool RL checkpoint 混为一谈。正式比较时，Original 必须与五个 treatment 共享 resolution、benchmark subset、scorer 和 evaluator provenance。
 
-因此，现阶段主线目标是恢复科研代码的可运行性和一致性。runtime ZIP、trampoline、一次性 token、父进程 liveness 等启动封锁工作已经暂停，不再作为主线前置条件。
+跨臂 validator 默认要求五臂齐全，除方法定义与输出位置等明确白名单外，对其余加载后配置递归比较并生成共享指纹。整组统一改成其他 resolution 或 horizon 是合法的新矩阵；只改一臂会在具体配置路径上报错。
 
-暂停代码已可恢复地保存在：
+## 统一实验接口
 
-`stash@{0}: paused-runtime-zip-trampoline-overdesign-20260831`
+新配置 schema 为 `policy-e2e-method-matrix-run-config-v1`。canonical 文件如下：
 
-## 四方法整合矩阵
+| Treatment | 工具能力与 Prompt | 成功 observation | 训练行为 |
+|---|---|---|---|
+| [NoTool](../configs/policy/runs/prl_28_a_qwen3_instruct_no_tool_pixel512_s32_bs16_n16_teacher25_ws8.toml) | direct-only；无工具 schema | no-tool/no-execution | 更新完整 Qwen；所有工具尝试零执行 |
+| [Crop](../configs/policy/runs/prl_28_b_qwen3_instruct_crop_pixel512_s32_bs16_n16_teacher25_ws8.toml) | `image_zoom_in_tool`；DeepEyes matched prompt | Crop matched | 更新完整 Qwen，使用 exact crop replay |
+| [TGVF-short](../configs/policy/runs/prl_28_c_qwen3_instruct_tgvf_short_pixel512_s32_bs16_n16_teacher25_ws8.toml) | `tgvf_focus_tool`；short matched prompt | TGVF matched | 更新完整 Qwen，RP67 Adapter 冻结并参与 exact replay/发布身份 |
+| [TGVF-target-guide-v2](../configs/policy/runs/prl_28_d_qwen3_instruct_tgvf_target_guide_v2_pixel512_s32_bs16_n16_teacher25_ws8.toml) | 同一 TGVF 工具；只细化 Target 的视觉定义和 teacher-style 示例 | TGVF matched | 与 TGVF-short 相同，只把 Prompt 作为 treatment 差异 |
+| [Atomic](../configs/policy/runs/prl_28_e_qwen3_instruct_atomic_pixel512_s32_bs16_n16_teacher25_ws8.toml) | `tgvf_crop_tool`；Atomic matched prompt | Atomic matched | 更新完整 Qwen，冻结 RP67；source/crop 双路 exact record/replay |
 
-| 方法 | 环境工具 | 精确 Prompt | 数据/Schema | Live runtime | 训练 replay/engine | 当前判定 |
-|---|---|---|---|---|---|---|
-| Original / NoTool | 不需要工具 | direct-only prompt 已接入 | Teacher25 adapter 已接入，@512 schema 待定稿 | direct-only live route 已完成 | full-Qwen current replay 使用 Crop engine substrate，launcher 待选择 | 核心齐，入口未闭环 |
-| Crop | Crop 环境与精确 record 已完成 | DeepEyes matched prompt 已接入 | Teacher25 adapter 已接入，@512 schema 待定稿 | sticky vLLM crop route 已完成 | full-model Crop exact replay/engine 已完成 | 核心齐，入口未闭环 |
-| TGVF | TGVF 环境与精确 record 已完成 | Short 与 Target-guide-only 已接入 | Teacher25 adapter 已接入，@512 schema 待定稿 | source/Hq/Adapter sticky route 已完成 | trainable TGVF replay/engine/checkpoint/weight-sync 已完成 | 核心齐，入口未闭环 |
-| Atomic | Atomic schema-v3 record 已完成 | matched prompt 已接入 | Teacher25 adapter 已接入，@512 schema 待定稿 | 单 RPC crop vision+Hq+Adapter 已完成 | trainable TGVF replay 支持 Atomic crop pixels 与 D 重算 | 核心齐，入口未闭环 |
+Target-guide-v2 没有额外修改 `<think>`、final-only、observation 文本、工具次数或 action boundary，因此它能用于单独判断“更详细 Target 定义”是否有效。
 
-“Original”在文中必须继续作为比较基线；代码层面将它作为 NoTool/direct-only 方法，而不是无身份的特殊分支。
+当前接口明确暴露并向下传递：
 
-更准确地说，Original 是不经过 RL 的 evaluator baseline；NoTool 是相同工具能力面上的 RL treatment。两者必须共享像素、prompt edition、subset 和 scorer，但不能在训练配置中被写成同一个 checkpoint。
+- `model.image_max_pixels` 与 `model.native_deepstack_enabled`；
+- `scheduler.total_steps`、`training.maximum_optimizer_steps` 和 `training.checkpoint_steps`；
+- `sampling.trajectories_per_prompt`、response length、采样参数和 rollout seed；
+- global/micro batch、world size、FSDP/vLLM capacity；
+- method、tool profile、matched observation、action boundary 和 `maximum_tool_calls`；
+- answer/repeated-call/protocol reward 系数，以及 utility/visual-quality 开关；
+- Adapter update mode、weight-sync mode、输出与恢复位置。
 
-## 已完成并进入当前分支的核心修复
+未来新增分辨率、步数或 ablation 时，应新增或派生一整组配置并运行矩阵 validator，不应在 launcher/runtime 中增加实验值分支。新增参数只有完成“解析、typed config、plan、compose/runtime、非默认值测试”后才算真正暴露。
 
-### 1. 已完成实验配置可以再次审计
+## 已闭环的关键语义
 
-`validate-representation-config` 是只读命令。它现在允许目标内部评测报告已经存在，因此 RP71–RP74 等已完成实验的配置可以重新验证。
+### 1. T-free reward 是真实的无 utility/visual 链路
 
-训练和 worker 入口仍保留“不得静默覆盖已有报告”的检查。
+五臂 canonical reward 均关闭 tool-utility sidecar、visual judge、focus 和 grounding reward，也不读取 utility label，不做 answer gate。其有效总分为：
 
-验证：四份 RP71–RP74 treatment 配置均已通过真实外部文件校验。
+`R = answer_reward_scale * I(answer_correct) - repeated_call_penalty * max(tool_call_count - 1, 0) - protocol_error_penalty * I(any_protocol_error)`
 
-### 2. Representation 中断恢复接入 metrics WAL 回滚
+当前 canonical 系数为 `2.0 / 0.05 / 2.0`，但它们是有限、非负的配置值，不是 kernel 常量。结果仍保留 answer/tool/focus/grounding/protocol 五组件 schema，T-free 下 focus/grounding 为 0，utility 与 judge audit 字段为 `None`，从而兼容现有 metrics 而不偷偷调用外部监督。历史 Stage3 utility-enabled 配置的语义未被改写。
 
-仓库原先已经有 `recover_representation_metrics_history_prefix()`，但 runner 没有调用。现在 resume 时：
+### 2. matched observation 与 action boundary 统一
 
-1. rank 0 先读取并验证 checkpoint metadata、run identity 和 global step；
-2. 使用 checkpoint 绑定的 metrics identity 验证已提交前缀；
-3. 将 checkpoint 之后未提交的 metrics suffix 完整归档；
-4. active metrics JSONL 原子恢复到 checkpoint 前缀；
-5. 将同一 identity broadcast 给所有 rank，再执行分布式 checkpoint restore。
+Crop、两个 TGVF 和 Atomic 分别绑定自己的 matched success-observation identity；所有方法绑定同一个 strict single-terminal action boundary v2。工具方法必须采样出完整 `</tool_call>`，下列输出在 parser/tool runtime 前即判为无效并保持零执行：
 
-合法中断可以恢复；已提交历史的字节漂移仍然硬拒绝。
-
-验证：全部 representation training CPU 测试 `460 passed`。
-
-### 3. Policy 评测不再错误地强制四张 GPU
-
-评测结果 identity 本来就记录 world size，任务也按 world size 确定性分片。代码现在接受至少一张、互不重复且非负的 GPU ID。
-
-论文 golden 配置仍可以固定四张 GPU；单卡开发评测不再被错误当成协议不合法。像素、subset、checkpoint、prompt、工具协议和评分身份没有因此放宽。
-
-### 4. TGVF Target-guide-only prompt 已移植
-
-当前实现明确区分：
-
-- Short：原 matched TGVF prompt；
-- Target-guide-only：只增加 Target 的视觉化定义与 teacher 风格示例。
-
-Target-guide-only 不修改 `<think>`、final-only、observation 文本、工具调用次数或 action boundary。新增示例采用：
-
-- `small circular gauge, its needle position, and surrounding scale markings`
-- `printed text below the red warning symbol`
-- `wide shared view containing the bicycle, the parked car, and the space between them`
-
-测试证明移除 Target guide 后可逐字节恢复 Short system prompt，user message 和 tool parser identity 保持一致。
-
-### 5. action boundary 已变成运行时硬边界
-
-AgentLoop 会在 parser 和工具 runtime 之前调用统一 action-boundary classifier。以下输出均为零执行：
-
-- `</tool_call>` 后存在非空 suffix；
-- 一轮出现多个完整 tool blocks；
+- close tag 后有非空 suffix；
+- 同一轮出现多个完整 tool block；
 - tag 畸形或不闭合；
-- NoTool trajectory 尝试调用工具。
+- NoTool trajectory 尝试调用任何工具。
 
-其中 NoTool 尝试仍保留为 `is_tool_call=true` 的无执行事件，便于统计协议伤害，而不是被伪装成普通文本。
+NoTool 没有 `</tool_call>` stop string。为避免 sampler 把协议伤害提前抹掉，它会保留模型实际采样出的 trailing/multiple tool output；随后由 direct-only action boundary 标记 `INVALID_FORMAT`，记录 `is_tool_call=true`，但不执行工具。这让“模型是否试图调用工具”和“工具是否执行”都可审计。该宽容只用于保留 NoTool 的无效样本，工具臂仍执行严格 close-tag 合约。
 
-### 6. Crop/TGVF full-model exact replay 已恢复
+### 3. full-Qwen behavior identity 不再借用 LoRA pointer
 
-- Crop current policy 从 rollout 记录的精确 Qwen 预处理 pixels 重跑当前 vision tower；
-- TGVF current policy 从同一 pixels 重跑 vision，并从 rollout 记录的 Hq 重跑当前 RP67 Adapter；
-- Atomic 对 source 与 crop 分别记录精确预处理 pixels，current replay 选择对应图像重算；
-- reference policy 仍消费 rollout 记录的冻结 features，不借用 current 参数；
-- RP74 merger 后注入与单向交互实现被保留，没有被旧 donor Adapter 覆盖。
+NoTool/Crop 在上游完整 Qwen `update_weights` 成功返回后发布 typed behavior receipt；TGVF/Atomic 发布完整 Qwen receipt 加 RP67/RP66 Adapter state、storage 和 fan-out ACK 的组合身份。这样，rollout、metrics 和 checkpoint 引用的是本方法真实服务的行为，而不是不存在的 decoder-LoRA latest pointer。
 
-### 7. TGVF checkpoint 与 rollout 权重发布已闭环
+这里必须保留一个边界：`accepted_full_qwen_sync_receipt_v1` 证明的是“某 run/step/request 的上游同步调用已经成功返回”，**不是 Qwen tensor content hash**。它足以闭合当前 transport acceptance 与行为版本，但不能被论文表述为逐 tensor 内容证明。
 
-每个 optimizer step 先由上游 veRL 同步完整 Qwen，再加载同一步的 Adapter-owned snapshot，并向所有 rollout servers 发布。只有当每个 server 返回匹配 optimizer step、state SHA256 和 tensor count 的 ACK 后，publication 才完成。重复同一步相同 state 幂等；旧 step 或同 step 不同 state 拒绝。
+### 4. checkpoint sleep 后执行同 step resync
 
-### 8. Teacher25 和 Atomic live runtime 已接入统一路径
+veRL level-2 rollout sleep 会丢弃已同步的完整模型权重。checkpoint wrapper 现在在保存成功后，对声明需要恢复权重的 manager 直接执行同一 optimizer step 的 `update_weights`，而不是只做 bare wake；同 step resync 保持稳定 PolicyVersion，同时记录新的 request/ACK。checkpoint 保存失败时会先唤醒 replicas 再重新抛出异常，避免留下睡眠 worker。
 
-Teacher25 quarter mix 的实际工件已核验：20,480 rows，构成为 VStar 7,200、Teacher 5,120、ArxivQA 4,640、ThinkLite 3,520；每个 BS16 为 12 个视觉样本加 4 个 ThinkLite direct-only 样本。所有方法仍使用统一 `tgvf_native_policy` AgentLoop。
+这修复了一个会让“checkpoint 后继续 rollout”使用无权重 replica 的 P0 问题。CPU 测试已覆盖同 step resync、禁止 bare wake 和失败恢复；真实 GPU sleep/wake 仍需 canary。
 
-Atomic 不再被 live builder 显式拒绝。sticky vLLM worker 在单次 RPC 内完成 crop vision、target Hq 和 Adapter，逐层校验 source、bbox、target、preprocessed tensor/grid 和 policy step，再写入 schema-v3 exact record。
+### 5. legacy metrics resume 不再猜测新字段
 
-相关提交：
+旧 checkpoint 没有 `maximum_tool_calls` 和 `trajectories_per_prompt`。恢复代码不再猜成历史默认 `4/8`，而是用 `None` 表示“旧文件未绑定”，序列化时继续省略这两个字段，从而保持旧 nested payload 及 project digest 原样。下一条经过当前配置验证的 observation 才把它们收敛为本次运行的真实 cap/n。
 
-- `0ca7688`：action boundary；
-- `c41f049`：低摩擦开发入口；
-- `8d415c9`：TGVF exact replay；
-- `3591a08`：Crop exact replay；
-- `152e25b`：TGVF checkpoint/rollout publication；
-- `0d77882`：Teacher25 与 Atomic live runtime。
+因此 cap=1 的 NoTool/Stage3 可以从旧 checkpoint 继续，而不会因为错误默认值被拒绝；新 checkpoint 仍严格绑定并验证真实 cap 和 group size。
 
-## 恢复与可复现边界审计
+### 6. native DeepStack 与 RP72 表征 ablation 独立
 
-当前代码把三类不同概念混成一个 fail-closed identity：
+`model.native_deepstack_enabled` 从 TOML 同时进入 actor/reference HF override、vLLM HF override 和运行记录。关闭时，HF exact replay 不注入 native DeepStack；vLLM 仍保留主特征加三路 DeepStack 的既有 transport 形状，但在进入 language layer 前将 native injection 置零。
 
-- checkpoint 物理兼容性；
-- 实验语义身份；
-- 本次调用的运行环境与输出路径。
+该开关控制的是 Qwen 原生 DeepStack，不等于 RP72 的 Adapter 表征设计（如 `main_d_only`）。两者可以独立组合，不能再用一个名称或布尔值替代另一个 ablation。
 
-应继续硬拒绝的项目包括：损坏 checkpoint、模型/Adapter 结构不兼容、tensor shape 或 optimizer 拓扑不兼容、无法加载的 FSDP/world-size 拓扑、数据 cursor 不可应用、checkpoint pair 不完整。
+### 7. 当前 weight-sync interval 的诚实限制
 
-不应阻止普通恢复的项目包括：物理 GPU ID、输出/日志路径、W&B project、checkpoint cadence、validation cadence、未超过 scheduler horizon 的目标 step、timeout/capacity、TOML 注释和空白。
+`distributed.weight_sync_interval_optimizer_steps` 已是显式配置并进入 metadata，但 pinned synchronous veRL 当前没有 interval scheduler，因此只接受 `1`。其他正整数会被明确拒绝，而不是被静默忽略。若未来要稀疏同步，必须先实现并验证 engine scheduler，再放宽 schema；仅删除校验会制造假接口。
 
-会改变实验语义但物理上可加载的变化，例如 prompt、tool schema、reward、数据、采样和 optimizer 超参数，应作为显式 fork 记录 provenance，而不是伪装成相同实验。
+### 8. 旧公共兼容校验器不再制造 NoTool 假拒绝
 
-计划采用两种边界：
+旧校验器曾无条件要求 `limit_images >= 3`，把 NoTool 的“source image + 一次不可执行工具尝试”容量 `2` 错误拒绝。现在无 method binding 时只校验至少容纳 source image；传入 typed policy binding 时，再由 `1 + maximum_tool_calls` 做精确相等校验。这样既不放松已配置实验的容量检查，也不再把旧 Crop/TGVF 假设施加给 NoTool 或未来方法。
 
-- `dev`：可运行、可中断恢复；只对真正不兼容的 checkpoint 硬拒绝，并记录所有差异；
-- `repro`：用于论文 golden 结果资格审计，严格绑定模型、数据、prompt、像素、工具协议、reward、seed、subset、scorer 和 checkpoint。
+## 配置可变性证据
 
-严格复现是结果资格检查，不再等同于“是否允许启动 Python”。
+测试没有只用 @512/S32 默认值：
 
-## 待整合的历史核心切片
+- loader/typed-config 使用 `image_max_pixels=345,678`、`n=3`、response 1,234、cap=5、seed=77、S2；
+- 完整 `loader -> reward -> plan -> Hydra compose` 使用 pixels 456,789、`n=3`、cap=5、seed=91、S3，并验证 compose 后仍为这些值；
+- 单一配置面传播测试使用 pixels 777,777、`n=5`、response 2,345、cap=7、seed=99、S7；
+- 矩阵 validator 接受五臂统一从 262,144 改为 589,824，并生成不同共享指纹；只把 Atomic 改成 589,824 会准确报告 `model.image_max_pixels` 和 `policy.image_max_pixels` 漂移；
+- validator 也会拒绝单臂 n、batch、S80、seed43、reward、dataset、agent-loop、capacity、precision 或 optimizer 漂移；
+- native DeepStack 的 true/false 都覆盖了 actor 与 rollout 传播。
 
-以下 commit 是 donor 来源。已完成的能力按当前模块边界重写；仍未完成的部分也不整块合并旧 launcher/supervisor：
+这组证据说明 @512/S32 是当前 canonical matrix 的 config selection，不是运行代码的隐藏锁。
 
-| 目的 | donor commit |
-|---|---|
-| Teacher25 quarter-mix（已整合） | `37b99e2` |
-| NoTool direct-only substrate（已整合） | `f9dff1f` |
-| Crop full-model replay/engine（已整合） | `762e43f` |
-| TGVF replay/engine/checkpoint/weight-sync（已整合） | `8a2a50d` |
-| Atomic RPC/runtime（已整合） | `eadae55` |
-| T-free reward optional wiring | `2c1039e` |
-| @512 method schemas | `e756546` |
-| Target-guide-only prompt | `396a258`（已整合） |
-| Crop live/replay byte parity | `c448e583`（record/replay 已整合） |
-| Atomic @512 schema/runtime binding | `8e6b3d6`（runtime 已整合，schema 待定稿） |
+## 测试快照
 
-## 下一阶段验收顺序
+以下数字来自整合期间的 CPU/无 GPU 验证，套件有重叠，不能相加为“总测试数”：
 
-### P0：CPU 可组合
+| 范围 | 结果 |
+|---|---:|
+| config/reward/plan/compose/behavior focused core | 108 passed |
+| 最终关键闭环（含 canonical 五臂组合） | 161 passed |
+| checkpoint 与 behavior publication | 45 passed |
+| sampler 与 action-boundary | 84 passed |
+| veRL bridge/兼容校验器 | 30 passed, 2 skipped |
+| rewards/protocol/environment/objectives/policy/rollout broad suite | 676 passed |
+| framework/qwen CPU suite | 458 passed, 4 skipped |
+| 其余目录与 top-level suite | 1880 passed, 1 skipped, 3 个已知且明确排除的 failures |
 
-- NoTool/Crop/TGVF/Atomic 四份配置由同一 loader 解析；
-- 统一绑定 `262,144 = 512^2` pixels、S32、seed 42 和 Teacher25；
-- 四方法都明确记录 prompt、action boundary、observation 和 tool schema identity；
-- Original/NoTool 保持零工具调用；
-- 不依赖 OpenRouter 或外部 judge 才能完成配置和 runtime composition 测试。
+framework/qwen 的 GPU-only flex-attention、受污染的外部 veRL integration candidate 和缺失可选 `transfer_queue` 被跳过；这些不构成 GPU canary。
 
-### P1：工具与 replay 一致
+最后 3 个 failure 全部属于已暂停的 launch-security/control-plane manifest 系统：
 
-- Crop/TGVF/Atomic 至少各有一次成功调用的 CPU 合约或最小 GPU canary；
-- `</tool_call>` 后缀、多调用、畸形输出必须零执行、零工具奖励；
-- Crop live 与 replay 使用相同图像字节和 token；
-- TGVF/Atomic 保持 RP67 Adapter hash 不变，只更新并同步 Qwen 参数。
+- `test_control_plane_audit_passes_and_reports_legacy_inventory`；
+- `test_named_experiment_controllers_are_not_canonical`；
+- `test_execution_surface_manifest_is_exact_and_content_bound`。
 
-### P2：恢复与评测闭环
+它们因当前入口代码 hash 和旧 execution-surface inventory 变化而失败。该系统正是此前导致中断恢复或轻微配置变化被过度拒绝的启动安全层，本轮明确不更新 manifest、不恢复 ZIP/trampoline/token/liveness 门禁，也不把这 3 项纳入科研主链完成条件。暂停实现仍可从 `stash@{0}: paused-runtime-zip-trampoline-overdesign-20260831` 恢复，但除非另开安全治理任务，否则不应混回实验入口。
 
-- step 1 checkpoint 可 teardown/resume；
-- 只改变输出路径、日志、GPU placement 或 checkpoint cadence 不阻止兼容恢复；
-- 模型、Adapter、tensor topology 或 checkpoint 损坏仍然拒绝；
-- 同一 evaluator 支持 Original/NoTool、Crop、TGVF、Atomic，且记录完整 subset、pixel、prompt、工具调用次数/频率和 checkpoint provenance。
+## 尚未完成与下一步
 
-GPU 训练和正式 benchmark 只在 CPU 合约闭环后启动。
+CPU 闭环不等于训练已可直接宣称 golden。剩余工作按优先级为：
+
+1. **GPU/Ray step-0 canary**：验证真实初始化顺序确实为 `init_workers -> initial update_weights -> AgentLoop factory`，确保第一个 rollout 前 behavior pointer 已存在；同时验证 FSDP、vLLM、native DeepStack 开关和 matched runtime 的真实组合。
+2. **step-1 checkpoint/resume canary**：在 GPU 上覆盖 rollout、level-2 sleep、checkpoint、同 step resync、teardown/resume 和下一步 rollout，确认 CPU mock 所证明的生命周期与 pinned veRL 一致。
+3. **完整 Qwen content proof（如论文需要）**：若要声称 tensor-level exact identity，需要在上游 transport 增加可验证的 tensor digest/manifest；当前 receipt 只能声称 accepted sync，不应过度解释。
+4. **Original matched eval**：为未 RL 的 Original Qwen 建立独立 eval provenance，在相同 resolution、七个 subset、scorer、prompt edition 和统计代码下与五臂比较；它仍不进入训练矩阵。
+只有前两项 canary 通过后，才启动新的 @512 S32 训练矩阵。以后切换 1M、S16/S80、不同 n、reward 或 DeepStack/Adapter ablation 时，复用同一个 schema/launcher/runtime，通过 config 和矩阵指纹建立新实验，不再复制 PR 项目或新增专用分支入口。
