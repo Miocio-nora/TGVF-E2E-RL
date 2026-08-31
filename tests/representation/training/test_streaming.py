@@ -11,6 +11,9 @@ from torch.nn import functional as F
 import tgvf_rl.representation.training.streaming as streaming_module
 from tgvf_rl.conditioning.base import TargetConditioningProviderKind
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
+from tgvf_rl.representation.training.internal_evaluation import (
+    _score_readout_control,
+)
 from tgvf_rl.representation.training.losses import (
     EVIDENCE_IGNORE_INDEX,
     EvidenceReadabilityLossTerms,
@@ -29,6 +32,7 @@ from tgvf_rl.representation.training.objective import (
 )
 from tgvf_rl.representation.training.readout import (
     RepresentationCandidateObservation,
+    RepresentationReadoutLossSupervision,
     RepresentationReadoutRow,
     RepresentationVisualTensorBundle,
     SameImageReadoutGroup,
@@ -206,6 +210,48 @@ def _group(
     )
 
 
+def _group_with_loss_override() -> SameImageReadoutGroup:
+    base = _group()
+    rows = []
+    for index, row in enumerate(base.rows):
+        token_ids = (
+            *row.supervision.model_token_ids,
+            4,
+            12 + index * 2,
+            13 + index * 2,
+        )
+        value_positions = (6 + index,)
+        answer_positions = (9, 10)
+        supervised_positions = tuple(sorted((*value_positions, *answer_positions)))
+        labels = tuple(
+            token_id if position in supervised_positions else EVIDENCE_IGNORE_INDEX
+            for position, token_id in enumerate(token_ids)
+        )
+        rows.append(
+            RepresentationReadoutRow(
+                sample_id=row.sample_id,
+                image_group_key=row.image_group_key,
+                source_visual_identity=row.source_visual_identity,
+                supervision=_supervision(token_ids),
+                input_ids=torch.tensor((token_ids,), dtype=torch.long),
+                attention_mask=torch.ones(1, len(token_ids), dtype=torch.bool),
+                position_ids=torch.arange(len(token_ids)).view(1, -1),
+                source_positions=row.source_positions,
+                d_positions=row.d_positions,
+                loss_supervision=RepresentationReadoutLossSupervision(
+                    identity="answer-bearing-span-test-v1",
+                    labels=labels,
+                    supervised_token_positions=supervised_positions,
+                    evidence_value_token_positions=value_positions,
+                    answer_token_positions=answer_positions,
+                    source_image_block_query_start=5,
+                    source_image_block_query_end=10,
+                ),
+            )
+        )
+    return replace(base, rows=tuple(rows))
+
+
 def _candidate_tensors(group: SameImageReadoutGroup) -> tuple[torch.Tensor, ...]:
     return tuple(
         tensor
@@ -225,6 +271,63 @@ def _main_d_only_group(*, group_id: str) -> SameImageReadoutGroup:
         for index, candidate in enumerate(group.candidates)
     )
     return replace(group, candidates=candidates)
+
+
+def test_readout_loss_supervision_is_typed_and_default_path_is_historical() -> None:
+    historical = _group().rows[0]
+    assert historical.loss_supervision is None
+    assert historical.loss_labels is historical.supervision.labels
+    assert (
+        historical.loss_supervised_token_positions
+        == historical.supervision.evidence_token_positions
+    )
+    assert historical.source_image_block_query_start == 5
+    assert historical.source_image_block_query_end == 7
+
+    overridden = _group_with_loss_override().rows[0]
+    assert overridden.loss_supervision is not None
+    assert overridden.loss_labels == overridden.loss_supervision.labels
+    assert overridden.loss_supervised_token_positions == (6, 9, 10)
+    assert overridden.source_image_block_query_start == 5
+    assert overridden.source_image_block_query_end == 10
+
+
+def test_readout_loss_supervision_fails_closed_on_component_or_row_drift() -> None:
+    row = _group_with_loss_override().rows[0]
+    override = row.loss_supervision
+    assert override is not None
+
+    with pytest.raises(ValueError, match="component union"):
+        replace(override, supervised_token_positions=(6, 9))
+    with pytest.raises(ValueError, match="answer token positions must be non-empty"):
+        replace(
+            override,
+            supervised_token_positions=override.evidence_value_token_positions,
+            answer_token_positions=(),
+        )
+    with pytest.raises(ValueError, match="must be contiguous"):
+        replace(
+            override,
+            labels=tuple(
+                token_id if position in (6, 9, 11) else EVIDENCE_IGNORE_INDEX
+                for position, token_id in enumerate((*override.labels, 2))
+            ),
+            supervised_token_positions=(6, 9, 11),
+            answer_token_positions=(9, 11),
+            source_image_block_query_end=11,
+        )
+    with pytest.raises(ValueError, match="complete evidence prediction boundary"):
+        replace(
+            row,
+            loss_supervision=replace(
+                override,
+                source_image_block_query_start=4,
+            ),
+        )
+    with pytest.raises(ValueError, match="readout token IDs"):
+        changed = list(override.labels)
+        changed[override.answer_token_positions[-1]] = 0
+        replace(row, loss_supervision=replace(override, labels=tuple(changed)))
 
 
 def _mixed_length_group(*, group_id: str) -> SameImageReadoutGroup:
@@ -1121,6 +1224,52 @@ def test_streaming_readout_blocks_source_keys_for_causal_evidence_queries() -> N
     assert mask[0, 0, 5, 1].item() == minimum
     assert mask[0, 0, 6, 2].item() == minimum
     assert mask[0, 0, 4, 1].item() == 0.0
+
+
+def test_sparse_loss_override_controls_all_readout_labels_and_block_range() -> None:
+    torch.manual_seed(5)
+    group = _group_with_loss_override()
+    model = _frozen_model()
+
+    scores = score_streaming_same_image_group(Qwen3VLAdapter(), model, group)
+    assert torch.equal(scores.evidence_token_counts, torch.tensor([3, 3]))
+    mask = model.model.language_model.attention_masks[0]
+    assert mask.shape == (4, 1, 11, 11)
+    minimum = torch.finfo(mask.dtype).min
+    assert mask[0, 0, 5, 1].item() == minimum
+    assert mask[0, 0, 9, 2].item() == minimum
+    assert mask[0, 0, 4, 1].item() == 0.0
+    assert mask[0, 0, 10, 1].item() == 0.0
+
+    reference = synthetic_same_image_layout_readout_terms(
+        Qwen3VLAdapter(),
+        _frozen_model(),
+        group,
+        matrix_ce_mode=MatrixCEScoreMode.BALANCED,
+    )
+    assert torch.equal(reference.evidence_token_counts, torch.tensor([3, 3]))
+
+
+def test_internal_readout_control_uses_sparse_labels_and_answer_block_end() -> None:
+    torch.manual_seed(5)
+    group = _group_with_loss_override()
+    model = _frozen_model()
+
+    _score, token_count = _score_readout_control(
+        Qwen3VLAdapter(),
+        model,
+        source=group.source_visual,
+        row=group.rows[0],
+        candidate=group.candidates[0].visual,
+    )
+    assert token_count == 3
+    mask = model.model.language_model.attention_masks[0]
+    minimum = torch.finfo(mask.dtype).min
+    assert mask.shape == (1, 1, 11, 11)
+    assert mask[0, 0, 5, 1].item() == minimum
+    assert mask[0, 0, 9, 2].item() == minimum
+    assert mask[0, 0, 4, 1].item() == 0.0
+    assert mask[0, 0, 10, 1].item() == 0.0
 
 
 def test_streaming_normalization_fails_closed() -> None:
