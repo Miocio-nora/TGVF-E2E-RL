@@ -565,9 +565,7 @@ class PolicyVisualToolExperimentConfig(PolicyPilotV1Config):
         if self.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
             raise ValueError("TGVF-only runs must use PolicyPilotV1Config")
         if self.tool_profile is NativeToolCapabilityProfile.NO_TOOL:
-            raise ValueError(
-                "NoTool runs must use PolicyNoToolMatchedExperimentConfig"
-            )
+            raise ValueError("NoTool runs must use PolicyNoToolMatchedExperimentConfig")
         expected_image_max_pixels = (
             1_003_520 if self.sampling.trajectories_per_prompt == 16 else 512 * 512
         )
@@ -655,10 +653,13 @@ class PolicyNoToolMatchedExperimentConfig(PolicyPilotV1Config):
     enabled_tool_names: tuple[str, ...] = ()
     # Shared transports require a positive cap; direct-only makes it unreachable.
     max_tgvf_call_attempts: int = 1
-    image_max_pixels: int = 1_003_520
+    image_max_pixels: int = 512 * 512
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "enabled_tool_names", tuple(self.enabled_tool_names))
+        expected_image_max_pixels = (
+            1_003_520 if self.sampling.trajectories_per_prompt == 16 else 512 * 512
+        )
         expected = {
             "schema_version": (
                 self.schema_version,
@@ -672,7 +673,7 @@ class PolicyNoToolMatchedExperimentConfig(PolicyPilotV1Config):
             ),
             "enabled_tool_names": (self.enabled_tool_names, ()),
             "max_tgvf_call_attempts": (self.max_tgvf_call_attempts, 1),
-            "image_max_pixels": (self.image_max_pixels, 1_003_520),
+            "image_max_pixels": (self.image_max_pixels, expected_image_max_pixels),
         }
         for name, (actual, required) in expected.items():
             if actual != required:

@@ -29,13 +29,19 @@ from tgvf_rl.data import (
     DeepEyes47KRuntimeBinding,
     POLICY_T1_ARXIVQA_DATASET_KIND,
     POLICY_T1_MIXED_DATASET_KIND,
+    POLICY_TEACHER_QUARTER_MIX_DATASET_KIND,
+    POLICY_TEACHER_QUARTER_MIX_SAMPLE_COUNT,
+    POLICY_TEACHER_QUARTER_MIX_SEED,
     PolicyT1DecisionStage,
     PolicyT1MixedRuntimeBinding,
     PolicyT1RLRuntimeBinding,
+    PolicyTeacherQuarterMixRuntimeBinding,
     policy_t1_mixed_iteration_identity_sha256,
     policy_t1_rl_iteration_identity_sha256,
+    policy_teacher_quarter_mix_iteration_identity_sha256,
     verify_policy_t1_mixed_artifact_binding,
     verify_policy_t1_rl_artifact_binding,
+    verify_policy_teacher_quarter_mix_artifact_binding,
 )
 from tgvf_rl.data.tgvf_tool_utility import (
     TGVFToolUtilityRuntimeBinding as TGVFToolUtilityRuntimeBinding,
@@ -370,9 +376,19 @@ def load_policy_e2e_smoke_run_config(
         isinstance(raw_dataset, Mapping)
         and raw_dataset.get("kind") == POLICY_T1_MIXED_DATASET_KIND
     )
-    if policy_t1_arxivqa_dataset or policy_t1_mixed_dataset:
+    policy_teacher_quarter_dataset = (
+        isinstance(raw_dataset, Mapping)
+        and raw_dataset.get("kind") == POLICY_TEACHER_QUARTER_MIX_DATASET_KIND
+    )
+    if (
+        policy_t1_arxivqa_dataset
+        or policy_t1_mixed_dataset
+        or policy_teacher_quarter_dataset
+    ):
         if not mixed_run:
-            raise ValueError("Policy T1 retained data requires a mixed/formal run")
+            raise ValueError(
+                "Policy retained training data requires a mixed/formal run"
+            )
         dataset_table = _table(
             payload,
             "dataset",
@@ -410,7 +426,40 @@ def load_policy_e2e_smoke_run_config(
             dataset_table["iteration_identity_sha256"],
             name="dataset.iteration_identity_sha256",
         )
-        if policy_t1_mixed_dataset:
+        if policy_teacher_quarter_dataset:
+            _require_exact(
+                dataset_table["decision_stage"],
+                "final",
+                "dataset.decision_stage",
+            )
+            _require_exact(
+                expected_sample_count,
+                POLICY_TEACHER_QUARTER_MIX_SAMPLE_COUNT,
+                "dataset.sample_count",
+            )
+            _require_exact(
+                shuffle_seed,
+                POLICY_TEACHER_QUARTER_MIX_SEED,
+                "dataset.shuffle_seed",
+            )
+            runtime_binding = PolicyTeacherQuarterMixRuntimeBinding(
+                manifest_file_sha256=manifest_file_sha256,
+                content_sha256=content_sha256,
+                schedule_seed=shuffle_seed,
+                expected_sample_count=expected_sample_count,
+            )
+            if iteration_sha256 != policy_teacher_quarter_mix_iteration_identity_sha256(
+                runtime_binding, samples_sha256=samples_sha256
+            ):
+                raise ValueError(
+                    "dataset iteration identity differs from its Teacher25 binding"
+                )
+            verify_policy_teacher_quarter_mix_artifact_binding(
+                dataset_root,
+                binding=runtime_binding,
+                samples_sha256=samples_sha256,
+            )
+        elif policy_t1_mixed_dataset:
             _require_exact(
                 dataset_table["decision_stage"],
                 "final",
@@ -633,9 +682,7 @@ def load_policy_e2e_smoke_run_config(
         visual_always_judge=visual_always_judge,
         pilot_reward_weight_profile_name=pilot_reward_weight_profile_name,
         load_openai_compatible_judge=load_openai_compatible_judge,
-        load_tgvf_tool_utility_runtime_binding=(
-            load_tgvf_tool_utility_runtime_binding
-        ),
+        load_tgvf_tool_utility_runtime_binding=(load_tgvf_tool_utility_runtime_binding),
         load_tgvf_visual_quality_judge=load_tgvf_visual_quality_judge,
     )
     protocol = canonical_launch.protocol

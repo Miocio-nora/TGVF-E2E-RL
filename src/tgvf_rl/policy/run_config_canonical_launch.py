@@ -17,6 +17,7 @@ from tgvf_rl.data import (
     DeepEyes47KRuntimeBinding,
     PolicyT1MixedRuntimeBinding,
     PolicyT1RLRuntimeBinding,
+    PolicyTeacherQuarterMixRuntimeBinding,
 )
 from tgvf_rl.protocol import (
     NativeActionBoundaryProtocolId,
@@ -34,10 +35,18 @@ from .config import (
     DecoderLoRAConfig,
     PilotGRPOConfig,
     PilotSamplingConfig,
+    PolicyNoToolMatchedExperimentConfig,
     PolicyPilotV1Config,
     PolicyTGVFStage3ExperimentConfig,
     PolicyVisualToolExperimentConfig,
 )
+from .crop_tgvf_deepeyes_matched_protocol import (
+    CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
+)
+from .deepeyes_official_protocol import VISUAL_PROMPT_IDENTITY
+from .no_tool_rl_protocol import NO_TOOL_RL_PROMPT_IDENTITY
+from .tgvf_deepeyes_matched_protocol import TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY
+from .tgvf_target_guide_v2_protocol import TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY
 from .run_config_reward import bind_policy_reward
 from .run_config_schema import (
     POLICY_E2E_AGENT_LOOP_CONFIG_PATH,
@@ -108,6 +117,25 @@ _HISTORICAL_THINKING_PROMPT_BUNDLES = {
 }
 
 
+_TEACHER_QUARTER_PROMPT_BUNDLES = {
+    NativeToolCapabilityProfile.NO_TOOL: frozenset(
+        {NO_TOOL_RL_PROMPT_IDENTITY.bundle_sha256}
+    ),
+    NativeToolCapabilityProfile.CROP_ONLY: frozenset(
+        {VISUAL_PROMPT_IDENTITY.bundle_sha256}
+    ),
+    NativeToolCapabilityProfile.TGVF_ONLY: frozenset(
+        {
+            TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256,
+            TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256,
+        }
+    ),
+    NativeToolCapabilityProfile.CROP_TGVF: frozenset(
+        {CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256}
+    ),
+}
+
+
 @dataclass(frozen=True, slots=True)
 class _CanonicalLaunchBindings:
     protocol: SmokeProtocolBinding
@@ -125,6 +153,7 @@ class _CanonicalLaunchBindings:
     output: SmokeOutputBinding
     policy: (
         PolicyPilotV1Config
+        | PolicyNoToolMatchedExperimentConfig
         | PolicyTGVFStage3ExperimentConfig
         | PolicyVisualToolExperimentConfig
     )
@@ -148,6 +177,7 @@ def bind_canonical_policy_launch(
         DeepEyes47KRuntimeBinding
         | PolicyT1RLRuntimeBinding
         | PolicyT1MixedRuntimeBinding
+        | PolicyTeacherQuarterMixRuntimeBinding
     ),
     stage3_shaped_reward_version: str,
     stage3_shaped_run: bool,
@@ -192,7 +222,10 @@ def bind_canonical_policy_launch(
         tool_profile.tool_set_sha256,
         "protocol.tool_schema_sha256",
     )
-    expected_maximum_tool_calls = 1 if stage3_shaped_run else 4
+    one_call_protocol = (
+        stage3_shaped_run or tool_profile is NativeToolCapabilityProfile.NO_TOOL
+    )
+    expected_maximum_tool_calls = 1 if one_call_protocol else 4
     _require_exact(
         protocol_table["maximum_tool_calls"],
         expected_maximum_tool_calls,
@@ -205,7 +238,7 @@ def bind_canonical_policy_launch(
         cap_error_sha256,
         (
             POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256
-            if stage3_shaped_run
+            if one_call_protocol
             else POLICY_E2E_SMOKE_CAP_ERROR_SHA256
         ),
         "protocol.cap_error_sha256",
@@ -245,16 +278,21 @@ def bind_canonical_policy_launch(
             "protocol.prompt_sha256",
         )
     elif mixed_run:
-        accepted_prompt_hashes = {
-            visual_tool_prompt_identity(
-                tool_profile,
-                assistant_dialect=assistant_dialect,
-            ).bundle_sha256
-        }
-        if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
-            accepted_prompt_hashes.add(
-                _HISTORICAL_THINKING_PROMPT_BUNDLES[tool_profile]
-            )
+        if isinstance(runtime_binding, PolicyTeacherQuarterMixRuntimeBinding):
+            if assistant_dialect is not NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+                raise ValueError("Teacher25 requires Qwen3-VL Instruct")
+            accepted_prompt_hashes = set(_TEACHER_QUARTER_PROMPT_BUNDLES[tool_profile])
+        else:
+            accepted_prompt_hashes = {
+                visual_tool_prompt_identity(
+                    tool_profile,
+                    assistant_dialect=assistant_dialect,
+                ).bundle_sha256
+            }
+            if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
+                accepted_prompt_hashes.add(
+                    _HISTORICAL_THINKING_PROMPT_BUNDLES[tool_profile]
+                )
         if protocol.prompt_sha256 not in accepted_prompt_hashes:
             raise ValueError("protocol.prompt_sha256 differs from model dialect")
 
@@ -386,9 +424,7 @@ def bind_canonical_policy_launch(
         visual_always_judge=visual_always_judge,
         pilot_reward_weight_profile_name=pilot_reward_weight_profile_name,
         load_openai_compatible_judge=load_openai_compatible_judge,
-        load_tgvf_tool_utility_runtime_binding=(
-            load_tgvf_tool_utility_runtime_binding
-        ),
+        load_tgvf_tool_utility_runtime_binding=(load_tgvf_tool_utility_runtime_binding),
         load_tgvf_visual_quality_judge=load_tgvf_visual_quality_judge,
     )
 
@@ -799,6 +835,8 @@ def bind_canonical_policy_launch(
 
     if stage3_shaped_run:
         policy_type = PolicyTGVFStage3ExperimentConfig
+    elif protocol.tool_profile is NativeToolCapabilityProfile.NO_TOOL:
+        policy_type = PolicyNoToolMatchedExperimentConfig
     elif protocol.tool_profile is POLICY_PILOT_V1_TOOL_PROFILE:
         policy_type = PolicyPilotV1Config
     else:

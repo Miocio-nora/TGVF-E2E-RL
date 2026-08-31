@@ -58,14 +58,11 @@ class Merger(nn.Module):
 def _parsed_call(bbox: str = "[-1,1,4,8]"):
     text = (
         '<tool_call>{"name":"tgvf_crop_tool","arguments":'
-        '{"bbox_2d":'
-        + bbox
-        + ',"target":"red label"}}</tool_call>'
+        '{"bbox_2d":' + bbox + ',"target":"red label"}}</tool_call>'
     )
     ids = tuple(ord(char) for char in text)
     spans = tuple(
-        TokenByteSpan(index, token, index, index + 1)
-        for index, token in enumerate(ids)
+        TokenByteSpan(index, token, index, index + 1) for index, token in enumerate(ids)
     )
     return StrictToolCallParser().parse(SampledAssistantTurn(text, ids, spans))
 
@@ -74,16 +71,12 @@ class Materializer:
     def __init__(self) -> None:
         self.received: list[torch.Tensor] = []
 
-    def materialize_crop_tgvf_visual(
-        self, crop_rgb, *, parsed_call, call_index
-    ):
+    def materialize_crop_tgvf_visual(self, crop_rgb, *, parsed_call, call_index):
         assert parsed_call.name == "tgvf_crop_tool"
         assert call_index == 0
         self.received.append(crop_rgb.clone())
         return CropTGVFVisualMaterialization(
-            preprocessed_pixel_values=torch.arange(
-                12, dtype=torch.float32
-            ).view(4, 3),
+            preprocessed_pixel_values=torch.arange(12, dtype=torch.float32).view(4, 3),
             source_visual=SourceVisualTensorBundle(
                 image_sha256=tensor_checksum(crop_rgb),
                 premerge_main=torch.arange(16, dtype=torch.float32).view(4, 4),
@@ -223,11 +216,17 @@ def _fixture(*, record_pixels: bool = True, bbox: str = "[-1,1,4,8]"):
         crop_processor_identity=ArtifactIdentity(
             "qwen", "crop-processor", "fixture", SHA1
         ),
-        crop_layout_identity=ArtifactIdentity(
-            "qwen", "crop-layout", "fixture", SHA2
-        ),
+        crop_layout_identity=ArtifactIdentity("qwen", "crop-layout", "fixture", SHA2),
     )
-    return store, pixels, trajectory_source, materializer, layout_builder, adapter, request
+    return (
+        store,
+        pixels,
+        trajectory_source,
+        materializer,
+        layout_builder,
+        adapter,
+        request,
+    )
 
 
 def test_atomic_crop_tgvf_materializes_one_complete_exact_record() -> None:
@@ -305,7 +304,9 @@ def test_atomic_crop_tgvf_materializes_one_complete_exact_record() -> None:
     )
 
     with pytest.raises(ReplayMismatchError, match="exact immutable source pixels"):
-        store.put_replay(replace(replay, source_visual=replace(source, source_pixels=None)))
+        store.put_replay(
+            replace(replay, source_visual=replace(source, source_pixels=None))
+        )
 
 
 def test_atomic_qwen3_crop_converts_before_tgvf_materialization() -> None:
@@ -335,3 +336,32 @@ def test_atomic_crop_tgvf_refuses_external_source_pixel_reconstruction() -> None
             coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
         ).execute(request)
     assert materializer.received == []
+
+
+def test_precomputed_atomic_record_rejects_crop_not_derived_from_source() -> None:
+    store, _, _, materializer, _, adapter, request = _fixture()
+    tool = AtomicCropTGVFTool(
+        materializer=materializer,
+        adapter=adapter,
+        store=store,
+        coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
+    )
+    result = tool.execute(request)
+    changed_crop = result.crop_rgb.clone()
+    changed_crop[0, 0, 0] += 1
+
+    with pytest.raises(
+        ReplayMismatchError,
+        match="differs from immutable source/bbox",
+    ):
+        AtomicCropTGVFTool.record_precomputed(
+            request,
+            crop_rgb=changed_crop,
+            crop_preprocessed_pixel_values=store.resolve_verified(
+                result.record.crop_visual.preprocessed_pixel_values
+            ),
+            crop_visual=result.crop_visual,
+            adapter_output=result.adapter_output,
+            store=store,
+            coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
+        )

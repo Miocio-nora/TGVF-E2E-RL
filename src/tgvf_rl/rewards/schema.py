@@ -34,7 +34,9 @@ PILOT_REWARD_WEIGHTS_BY_EQUATION = MappingProxyType(
     }
 )
 
-_DEEPEYES_VISUAL_DATA_SOURCES = frozenset({"vstar", "vl_agent", "chart", "arxivqa"})
+_DEEPEYES_VISUAL_DATA_SOURCES = frozenset(
+    {"vstar", "vl_agent", "chart", "arxivqa", "teacher"}
+)
 _DEEPEYES_MATH_DATA_SOURCES = frozenset({"thinklite", "thinklite_eureka", "xince"})
 
 

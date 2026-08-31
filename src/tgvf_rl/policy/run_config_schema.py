@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from tgvf_rl.contracts.identity import ArtifactIdentity, CodeIdentity, ModelIdentity
     from tgvf_rl.data import (
         DeepEyes47KRuntimeBinding,
+        PolicyTeacherQuarterMixRuntimeBinding,
         PolicyT1MixedRuntimeBinding,
         PolicyT1RLRuntimeBinding,
     )
@@ -215,6 +216,7 @@ class SmokeDatasetSelection:
         DeepEyes47KRuntimeBinding
         | PolicyT1RLRuntimeBinding
         | PolicyT1MixedRuntimeBinding
+        | PolicyTeacherQuarterMixRuntimeBinding
     )
     samples_sha256: str
     iteration_identity_sha256: str

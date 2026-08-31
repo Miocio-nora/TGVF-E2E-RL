@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 from pathlib import Path
@@ -9,10 +10,15 @@ from dataclasses import replace
 import torch
 import pytest
 
+from tgvf_rl.contracts.errors import IdentityMismatchError
+from tgvf_rl.data import PolicyTeacherQuarterMixRuntimeBinding
 from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity, PolicyVersion
 from tgvf_rl.contracts.tokens import LogProbMeasurement, SamplingIdentity, TokenSpan
 from tgvf_rl.environment.agent_loop import SampledPolicyTurn
-from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
+from tgvf_rl.environment.focus_tool import (
+    PrecomputedTGVFObservationPayload,
+    SourceVisualTensorBundle,
+)
 from tgvf_rl.environment.native_appender import (
     NativeSuccessObservationContract,
     QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX,
@@ -28,6 +34,7 @@ from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.framework.verl.policy_live_runtime import (
     Qwen3PolicyE2ELiveRuntimeBuilder,
     _DisabledNoToolRuntime,
+    _RemoteAtomicCropTGVFToolRuntime,
     _RemoteTGVFFocusToolRuntime,
     _BoundTGVFVisualQualityRuntimeJudge,
     _build_reward_pipeline,
@@ -35,7 +42,13 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _required_success_observation_protocol_id,
     _required_action_boundary_protocol_id,
     _required_server_methods_for_profile,
+    _sample_uses_no_tool_runtime,
     _success_observation_contract,
+    _validate_sample_fields,
+)
+from tgvf_rl.framework.verl.vllm_tool_runtime import (
+    TGVFCropMaterializationResult,
+    preprocessed_visual_identity_sha256,
 )
 from tgvf_rl.judges import (
     TGVFVisualQualityJudgeConfig,
@@ -45,9 +58,12 @@ from tgvf_rl.judges import (
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
 )
+from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.rewards.context import reward_context_from_trajectory
 from tgvf_rl.rewards.schema import AnswerTaskKind
 from tgvf_rl.rewards.stage3_shaped import QualityJudgeScore
+from tgvf_rl.representation.adapter import TGVFAdapterMetadata
+from tgvf_rl.representation.deepstack import DDeepStackPayload
 from tgvf_rl.trajectories.schema import TrajectoryStop
 from tests.framework.test_verl_bridges import _record
 from tgvf_rl.observations.store import ObservationHandle, ObservationStore
@@ -91,9 +107,240 @@ def test_no_tool_live_profile_requires_no_tool_rpc_and_runtime_fails_closed() ->
     assert _required_server_methods_for_profile(
         NativeToolCapabilityProfile.TGVF_ONLY
     ) == ("materialize_source", "generate", "materialize_focus")
+    assert _required_server_methods_for_profile(
+        NativeToolCapabilityProfile.CROP_TGVF
+    ) == ("materialize_source", "generate", "materialize_crop_tgvf")
 
     with pytest.raises(RuntimeError, match="cannot execute"):
         _DisabledNoToolRuntime().execute(object(), object())
+
+
+def _teacher25_runtime_binding() -> PolicyTeacherQuarterMixRuntimeBinding:
+    return PolicyTeacherQuarterMixRuntimeBinding(
+        manifest_file_sha256="1" * 64,
+        content_sha256="2" * 64,
+        schedule_seed=42,
+        expected_sample_count=20_480,
+    )
+
+
+def test_teacher25_thinklite_alone_uses_explicit_no_tool_runtime() -> None:
+    binding = _teacher25_runtime_binding()
+
+    assert _sample_uses_no_tool_runtime(
+        NativeToolCapabilityProfile.TGVF_ONLY,
+        "thinklite",
+        runtime_binding=binding,
+    )
+    assert not _sample_uses_no_tool_runtime(
+        NativeToolCapabilityProfile.TGVF_ONLY,
+        "teacher",
+        runtime_binding=binding,
+    )
+    assert not _sample_uses_no_tool_runtime(
+        NativeToolCapabilityProfile.TGVF_ONLY,
+        "thinklite",
+        runtime_binding=object(),
+    )
+    assert _sample_uses_no_tool_runtime(
+        NativeToolCapabilityProfile.NO_TOOL,
+        "teacher",
+        runtime_binding=object(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("data_source", "task_kind", "prompt_sha256"),
+    (
+        ("teacher", "open", SHA),
+        ("thinklite", "math", THINKLITE_PROMPT_IDENTITY.bundle_sha256),
+    ),
+)
+def test_teacher25_normalized_row_matches_bound_runtime_identity(
+    tmp_path: Path,
+    data_source: str,
+    task_kind: str,
+    prompt_sha256: str,
+) -> None:
+    image_path = (tmp_path / f"{data_source}.png").resolve()
+    iteration_sha256 = "3" * 64
+    sample_id = f"teacher25:{data_source}"
+    record = {
+        "sample_id": sample_id,
+        "question": "What is shown?",
+        "ground_truth": "answer",
+        "data_source": data_source,
+        "task_kind": task_kind,
+        "image": {"path": str(image_path), "sha256": "4" * 64},
+    }
+    config = SimpleNamespace(
+        dataset=SimpleNamespace(
+            selected_sample=None,
+            runtime_binding=_teacher25_runtime_binding(),
+            iteration_identity_sha256=iteration_sha256,
+        ),
+        protocol=SimpleNamespace(prompt_sha256=SHA),
+    )
+    fields = {
+        "sample_id": sample_id,
+        "dataset_iteration_identity_sha256": iteration_sha256,
+        "prompt_bundle_sha256": prompt_sha256,
+        "source_image_path": str(image_path),
+        "source_image_sha256": "4" * 64,
+        "question": "What is shown?",
+        "data_source": data_source,
+        "task_kind": task_kind,
+        "reward_model": {"ground_truth": "answer"},
+    }
+
+    _validate_sample_fields(
+        config,
+        sample_id,
+        fields,
+        sample_index={sample_id: record},
+    )
+
+    fields["dataset_iteration_identity_sha256"] = "5" * 64
+    with pytest.raises(
+        IdentityMismatchError,
+        match="dataset_iteration_identity_sha256",
+    ):
+        _validate_sample_fields(
+            config,
+            sample_id,
+            fields,
+            sample_index={sample_id: record},
+        )
+
+
+def test_remote_atomic_runtime_records_bound_crop_conditioned_d(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.environment.test_crop_tgvf_runtime import _fixture
+
+    local, materializer, store, pixels, _embedding, context, parsed = _fixture(
+        tmp_path,
+        bbox=(0, 250, 800, 1000),
+    )
+    source_ref = context.trajectory_source_visual.source_pixels
+    assert source_ref is not None
+    source_state = context.trajectory_source_visual.state
+    source_visual = SourceVisualTensorBundle(
+        image_sha256=source_ref.address.digest,
+        premerge_main=store.resolve_verified(source_state.premerge_main),
+        premerge_deepstack=tuple(
+            store.resolve_verified(ref) for ref in source_state.premerge_deepstack
+        ),
+        merged_main=store.resolve_verified(source_state.merged_main),
+        merged_deepstack=tuple(
+            store.resolve_verified(ref) for ref in source_state.merged_deepstack
+        ),
+        image_grid_thw=source_state.image_grid_thw,
+        spatial_merge_size=source_state.spatial_merge_size,
+        decoded_rgb_sha256=source_ref.address.digest,
+    )
+    crop = pixels[1:4, 0:4, :].contiguous()
+    crop_visual = materializer.materialize_crop_tgvf_visual(
+        crop,
+        parsed_call=parsed,
+        call_index=0,
+    ).source_visual
+    target_count = len(parsed.target_span.token_ids)
+    contract = local.loaded_adapter.binding.adapter_contract
+    d = torch.full((1, 8), 9.0)
+    observation = PrecomputedTGVFObservationPayload(
+        main_d=d,
+        d_deepstack=DDeepStackPayload(
+            branch_layers=contract.deepstack_branch_layers,
+            branches=tuple(d.add(index + 1) for index in range(3)),
+            projection_identities=contract.deepstack_projection_identities,
+        ),
+        metadata=TGVFAdapterMetadata(
+            branch_layers=contract.deepstack_branch_layers,
+            main_projection_identity=contract.main_projection_identity,
+            deepstack_projection_identities=(contract.deepstack_projection_identities),
+            batched=False,
+            batch_size=1,
+            target_token_count=target_count,
+            pre_merge_visual_token_count=4,
+            d_token_count=1,
+            condition_provenance=None,
+        ),
+    )
+    hq = torch.arange(target_count * 8, dtype=torch.float32).reshape(target_count, 8)
+    calls: list[dict[str, object]] = []
+
+    class Server:
+        async def materialize_crop_tgvf(self, **kwargs: object):
+            calls.append(dict(kwargs))
+            return TGVFCropMaterializationResult(
+                source_image_sha256=str(kwargs["source_image_sha256"]),
+                crop_sha256=str(kwargs["crop_sha256"]),
+                preprocessed_visual_sha256=str(kwargs["preprocessed_visual_sha256"]),
+                image_grid_thw=tuple(
+                    int(value) for value in kwargs["image_grid_thw"][0].tolist()
+                ),
+                call_index=int(kwargs["call_index"]),
+                model_bbox_2d=tuple(kwargs["model_bbox_2d"]),
+                target_start=int(kwargs["target_start"]),
+                target_end=int(kwargs["target_end"]),
+                target_token_ids=tuple(kwargs["expected_target_token_ids"]),
+                provider=str(kwargs["provider"]),
+                hq=hq,
+                crop_visual=crop_visual,
+                observation=observation,
+            )
+
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.policy_live_runtime.preprocess_qwen3_rgb",
+        lambda **kwargs: (torch.ones((4, 6)), torch.tensor([[1, 2, 2]])),
+    )
+    config = SimpleNamespace(
+        model=context.model,
+        representation=SimpleNamespace(
+            conditioning=local.loaded_adapter.binding.conditioning,
+            artifact=local.loaded_adapter.binding.artifact,
+        ),
+    )
+
+    async def exercise():
+        remote = _RemoteAtomicCropTGVFToolRuntime(
+            event_loop=asyncio.get_running_loop(),
+            server_client=Server(),
+            config=config,
+            source_visual=source_visual,
+            layout_builder=local.layout_builder,
+            observation_store=store,
+            execution_ledger=local.execution_ledger,
+            contextual_forward_identity=None,
+            branch_merger_identities=local.branch_merger_identities,
+            crop_processor_identity=local.crop_processor_identity,
+            crop_layout_identity=local.crop_layout_identity,
+            processor=object(),
+            image_max_pixels=1_003_520,
+            observation_contract=local.observation_contract,
+        )
+        first = await asyncio.to_thread(remote.execute, parsed, context)
+        second = await asyncio.to_thread(remote.execute, parsed, context)
+        return first, second
+
+    first, second = asyncio.run(exercise())
+
+    assert first == second
+    assert len(calls) == 1
+    assert calls[0]["preprocessed_visual_sha256"] == (
+        preprocessed_visual_identity_sha256(
+            calls[0]["pixel_values"],
+            calls[0]["image_grid_thw"],
+        )
+    )
+    record = store.resolve_record(first)
+    torch.testing.assert_close(store.resolve_verified(record.payload.main_d), d)
+    assert not torch.equal(
+        store.resolve_verified(record.payload.main_d),
+        store.resolve_verified(record.crop_visual.source.merged_main),
+    )
 
 
 def test_live_observation_contract_never_infers_crop_renderer() -> None:

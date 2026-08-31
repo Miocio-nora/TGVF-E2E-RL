@@ -17,8 +17,12 @@ from tgvf_rl.policy.deepeyes_official_protocol import (
     build_visual_messages,
     build_visual_tool_response_message,
     direct_answer_after_last_tool_call,
+    normalize_gt_regions_for_source,
     parse_hermes_crop_call,
+    tools_kwargs_for_source,
     tools_kwargs_for_visual_row,
+    validate_source_task_kind,
+    validate_tools_kwargs_for_source,
 )
 
 
@@ -82,6 +86,7 @@ def test_thinklite_is_image_bearing_single_turn_task_routed_and_has_no_tool() ->
     assert agent_name_for_source("thinklite") == DEEPEYES_THINKLITE_AGENT_NAME
     assert agent_name_for_source("vstar") == DEEPEYES_VISUAL_AGENT_NAME
     assert agent_name_for_source("arxivqa") == DEEPEYES_VISUAL_AGENT_NAME
+    assert agent_name_for_source("teacher") == DEEPEYES_VISUAL_AGENT_NAME
 
 
 def test_hermes_json_contract_accepts_bbox_2d_and_rejects_qwen3_coder_shape() -> None:
@@ -122,3 +127,22 @@ def test_per_row_tools_kwargs_shape_is_exact() -> None:
     }
     with pytest.raises(ValueError, match="four integers"):
         tools_kwargs_for_visual_row([[1, 2, 3]])
+
+
+def test_teacher_source_is_visual_but_cannot_claim_grounding_regions() -> None:
+    assert validate_source_task_kind("teacher", "mcq") == "visual"
+    assert validate_source_task_kind("teacher", "open") == "visual"
+    with pytest.raises(ValueError, match="teacher DeepEyes rows require"):
+        validate_source_task_kind("teacher", "math")
+
+    teacher_kwargs = tools_kwargs_for_source("teacher")
+    assert teacher_kwargs == {
+        "image_zoom_in_tool": {"create_kwargs": {"gt_regions": ()}}
+    }
+    validate_tools_kwargs_for_source("teacher", teacher_kwargs)
+    assert tools_kwargs_for_source("thinklite") == {}
+    validate_tools_kwargs_for_source("thinklite", {})
+    with pytest.raises(ValueError, match="teacher rows cannot carry gt_regions"):
+        normalize_gt_regions_for_source("teacher", ((1, 2, 10, 20),))
+    with pytest.raises(ValueError, match="VStar rows require"):
+        tools_kwargs_for_source("vstar")

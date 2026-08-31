@@ -16,8 +16,13 @@ from pathlib import Path
 from types import MappingProxyType
 
 from tgvf_rl.policy.horizon_extension import PolicyHorizonExtension
+from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
-from tgvf_rl.data import PolicyT1MixedRuntimeBinding, PolicyT1RLRuntimeBinding
+from tgvf_rl.data import (
+    PolicyT1MixedRuntimeBinding,
+    PolicyT1RLRuntimeBinding,
+    PolicyTeacherQuarterMixRuntimeBinding,
+)
 from tgvf_rl.framework.vllm.registration import VLLM_012_LORA_PDL_MODE
 from tgvf_rl.ops.policy_compile_prerequisites import (
     POLICY_COMPILE_PREREQUISITE_BINDING_SCHEMA,
@@ -40,6 +45,11 @@ from .smoke_dataset import VerlSelectedSampleDatasetBinding
 from .deepeyes_dataset import VerlDeepEyes47KDatasetBinding
 from .policy_t1_dataset import VerlPolicyT1DatasetBinding
 from .policy_t1_mixed_dataset import VerlPolicyT1MixedDatasetBinding
+from .policy_teacher_quarter_mix_dataset import (
+    POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME,
+    POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH,
+    PolicyTeacherQuarterMixDatasetBinding,
+)
 
 
 # Pinned e003's upstream main hard-codes its own TaskRunner.  The repo-owned
@@ -59,6 +69,7 @@ POLICY_T1_MIXED_DATASET_CLASS_NAME = "TGVFPolicyT1MixedDataset"
 POLICY_T1_MIXED_DATASET_MODULE_PATH = (
     "pkg://tgvf_rl.framework.verl.policy_t1_mixed_dataset"
 )
+POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS_NAME = "PolicyTeacherQuarterMixDataset"
 NATIVE_AGENT_LOOP_NAME = "tgvf_native_policy"
 NATIVE_AGENT_LOOP_FQN = (
     "tgvf_rl.framework.verl.native_agent_loop.VerlFrameworkNeutralAgentLoop"
@@ -254,7 +265,9 @@ class UpstreamVerlLaunchPlan:
             if any(name in self.environment for name in compile_environment_names):
                 raise ValueError("blocked Policy plan leaked compile environment")
             if POLICY_COMPILE_PREREQUISITE_MISSING_BLOCKER not in self.launch_blockers:
-                raise ValueError("blocked Policy plan lost its missing-manifest blocker")
+                raise ValueError(
+                    "blocked Policy plan lost its missing-manifest blocker"
+                )
         else:
             binding = self.compile_prerequisites
             expected_compile_environment = {
@@ -452,8 +465,30 @@ def build_policy_e2e_smoke_verl_plan(
     full_binding = None
     t1_binding = None
     t1_mixed_binding = None
+    teacher_quarter_binding = None
     if config.dataset.selected_sample is None:
-        if isinstance(config.dataset.runtime_binding, PolicyT1MixedRuntimeBinding):
+        if isinstance(
+            config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
+        ):
+            teacher_typed_binding = config.dataset.runtime_binding
+            teacher_quarter_binding = PolicyTeacherQuarterMixDatasetBinding(
+                root=config.dataset.root,
+                manifest_file_sha256=teacher_typed_binding.manifest_file_sha256,
+                content_sha256=teacher_typed_binding.content_sha256,
+                samples_sha256=config.dataset.samples_sha256,
+                iteration_identity_sha256=config.dataset.iteration_identity_sha256,
+                schedule_seed=teacher_typed_binding.schedule_seed,
+                expected_sample_count=teacher_typed_binding.expected_sample_count,
+                tool_profile=config.protocol.tool_profile,
+                visual_prompt_bundle_sha256=config.protocol.prompt_sha256,
+                thinklite_prompt_bundle_sha256=(
+                    THINKLITE_PROMPT_IDENTITY.bundle_sha256
+                ),
+                tokenizer_length=config.model.tokenizer_length,
+                model_name=config.model.model_name,
+                chat_template_sha256=config.model.chat_template_sha256,
+            )
+        elif isinstance(config.dataset.runtime_binding, PolicyT1MixedRuntimeBinding):
             mixed_typed_binding = config.dataset.runtime_binding
             t1_mixed_binding = VerlPolicyT1MixedDatasetBinding(
                 root=config.dataset.root,
@@ -505,7 +540,13 @@ def build_policy_e2e_smoke_verl_plan(
             )
     else:
         selected_binding = VerlSelectedSampleDatasetBinding.from_run_config(config)
-    dataset_binding = selected_binding or t1_mixed_binding or t1_binding or full_binding
+    dataset_binding = (
+        selected_binding
+        or teacher_quarter_binding
+        or t1_mixed_binding
+        or t1_binding
+        or full_binding
+    )
     if dataset_binding is None:  # pragma: no cover - binding construction invariant
         raise RuntimeError("Policy dataset binding was not constructed")
     if selected_binding is not None:
@@ -513,6 +554,15 @@ def build_policy_e2e_smoke_verl_plan(
         dataset_class_name = SELECTED_SAMPLE_DATASET_CLASS_NAME
         dataset_config = {"data.tgvf_selected_sample": selected_binding.as_config()}
         dataset_samples_path = selected_binding.samples_path
+    elif teacher_quarter_binding is not None:
+        dataset_module_path = POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH
+        dataset_class_name = POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS_NAME
+        dataset_config = {
+            f"data.{POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME}": (
+                teacher_quarter_binding.as_config()
+            )
+        }
+        dataset_samples_path = teacher_quarter_binding.samples_path
     elif t1_mixed_binding is not None:
         dataset_module_path = POLICY_T1_MIXED_DATASET_MODULE_PATH
         dataset_class_name = POLICY_T1_MIXED_DATASET_CLASS_NAME
@@ -578,7 +628,14 @@ def build_policy_e2e_smoke_verl_plan(
             "data.train_batch_size": accumulation.global_prompt_batch_size,
             "data.gen_batch_size": accumulation.global_prompt_batch_size,
             "data.shuffle": False,
-            "data.seed": config.dataset.runtime_binding.shuffle_seed,
+            "data.seed": (
+                config.dataset.runtime_binding.schedule_seed
+                if isinstance(
+                    config.dataset.runtime_binding,
+                    PolicyTeacherQuarterMixRuntimeBinding,
+                )
+                else config.dataset.runtime_binding.shuffle_seed
+            ),
             "data.validation_shuffle": False,
             "data.return_raw_chat": True,
             "data.return_multi_modal_inputs": True,

@@ -20,13 +20,23 @@ from tgvf_rl.data import (
     DeepEyes47KRuntimeBinding,
     POLICY_T1_ARXIVQA_DATASET_KIND,
     POLICY_T1_MIXED_DATASET_KIND,
+    POLICY_TEACHER_QUARTER_MIX_DATASET_KIND,
+    POLICY_TEACHER_QUARTER_MIX_SAMPLE_COUNT,
+    POLICY_TEACHER_QUARTER_MIX_SEED,
     PolicyT1DecisionStage,
     PolicyT1MixedRuntimeBinding,
     PolicyT1RLRuntimeBinding,
+    PolicyTeacherQuarterMixRuntimeBinding,
     SelectionCandidate,
     canonical_json_line,
     materialize_policy_t1_arxivqa_rl_dataset,
     policy_t1_mixed_iteration_identity_sha256,
+    policy_teacher_quarter_mix_iteration_identity_sha256,
+)
+from tgvf_rl.data.policy_teacher_quarter_mix import (
+    POLICY_TEACHER_QUARTER_MIX_MACRO_COUNTS,
+    POLICY_TEACHER_QUARTER_MIX_MANIFEST_SCHEMA,
+    POLICY_TEACHER_QUARTER_MIX_SAMPLES_FILE,
 )
 from tgvf_rl.data.tgvf_tool_utility import (
     TGVFToolUtilityLabelBinding,
@@ -78,6 +88,9 @@ from tgvf_rl.framework.verl.launcher import (
     POLICY_T1_ARXIVQA_DATASET_MODULE_PATH,
     POLICY_T1_MIXED_DATASET_CLASS_NAME,
     POLICY_T1_MIXED_DATASET_MODULE_PATH,
+    POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS_NAME,
+    POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH,
+    NATIVE_AGENT_LOOP_NAME,
     NATIVE_INVOCATION_FACTORY_FQN,
     POLICY_CHECKPOINT_ENGINE_MANAGER_FQN,
     PolicyCompilePrerequisiteBinding,
@@ -85,6 +98,9 @@ from tgvf_rl.framework.verl.launcher import (
     UPSTREAM_VERL_V0_RUNNER_FQN,
     build_policy_e2e_smoke_verl_plan,
     compose_upstream_verl_config,
+)
+from tgvf_rl.framework.verl.policy_teacher_quarter_mix_dataset import (
+    POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME,
 )
 from tgvf_rl.framework.verl.smoke_dataset import (
     TGVFSelectedSampleDataset,
@@ -103,6 +119,9 @@ from tgvf_rl.protocol import (
     NativeToolCapabilityProfile,
     native_assistant_dialect_for_model,
     visual_tool_prompt_identity,
+)
+from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
+    TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
 )
 
 
@@ -492,6 +511,136 @@ def _write_config(tmp_path: Path) -> tuple[Path, str, dict[str, object]]:
     return path, text, external
 
 
+def _write_teacher_quarter_artifact(root: Path) -> dict[str, object]:
+    artifact_root = (root / "teacher-quarter-artifact").resolve()
+    artifact_root.mkdir()
+    image_path = (artifact_root / "source.png").resolve()
+    image_path.write_bytes(b"teacher-quarter-source-image")
+    image_sha256 = hashlib.sha256(image_path.read_bytes()).hexdigest()
+    sample = {
+        "schema_version": "tgvf.policy-teacher-quarter-mix.sample.v1",
+        "schedule_index": 0,
+        "sample_id": "teacher-quarter:fixture",
+        "candidate_sha256": "1" * 64,
+        "data_source": "teacher",
+        "source_dataset": "chartqa",
+        "task_kind": "mcq",
+        "question": "Which option is correct?",
+        "ground_truth": "A",
+        "image": {
+            "path": str(image_path),
+            "sha256": image_sha256,
+            "width": 8,
+            "height": 8,
+        },
+        "gt_regions": None,
+        "mixture_role": "teacher",
+        "parent": {
+            "dataset_kind": "fixture",
+            "row_index": 0,
+            "row_sha256": "2" * 64,
+        },
+    }
+    samples_bytes = _canonical(sample) + b"\n"
+    samples_path = artifact_root / POLICY_TEACHER_QUARTER_MIX_SAMPLES_FILE
+    samples_path.write_bytes(samples_bytes)
+    samples_sha256 = hashlib.sha256(samples_bytes).hexdigest()
+    manifest = {
+        "schema_version": POLICY_TEACHER_QUARTER_MIX_MANIFEST_SCHEMA,
+        "dataset_kind": POLICY_TEACHER_QUARTER_MIX_DATASET_KIND,
+        "decision_stage": "final",
+        "sample_count": POLICY_TEACHER_QUARTER_MIX_SAMPLE_COUNT,
+        "schedule": {
+            "seed": POLICY_TEACHER_QUARTER_MIX_SEED,
+            "macro_source_counts": dict(POLICY_TEACHER_QUARTER_MIX_MACRO_COUNTS),
+            "teacher_per_micro": 4,
+        },
+        "samples": {
+            "path": POLICY_TEACHER_QUARTER_MIX_SAMPLES_FILE,
+            "rows": POLICY_TEACHER_QUARTER_MIX_SAMPLE_COUNT,
+            "sha256": samples_sha256,
+        },
+    }
+    content_sha256 = hashlib.sha256(_canonical(manifest)).hexdigest()
+    manifest["content_sha256"] = content_sha256
+    manifest_bytes = _canonical(manifest) + b"\n"
+    (artifact_root / "manifest.json").write_bytes(manifest_bytes)
+    binding = PolicyTeacherQuarterMixRuntimeBinding(
+        manifest_file_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        content_sha256=content_sha256,
+        schedule_seed=POLICY_TEACHER_QUARTER_MIX_SEED,
+        expected_sample_count=POLICY_TEACHER_QUARTER_MIX_SAMPLE_COUNT,
+    )
+    return {
+        "root": artifact_root,
+        "binding": binding,
+        "samples_path": samples_path,
+        "samples_sha256": samples_sha256,
+        "iteration_identity_sha256": (
+            policy_teacher_quarter_mix_iteration_identity_sha256(
+                binding, samples_sha256=samples_sha256
+            )
+        ),
+    }
+
+
+def _teacher_quarter_config_text(
+    root: Path,
+    external: dict[str, object],
+    artifact: dict[str, object],
+) -> str:
+    binding = artifact["binding"]
+    assert isinstance(binding, PolicyTeacherQuarterMixRuntimeBinding)
+    text = _config_text(root, external).replace(
+        POLICY_E2E_SMOKE_CONFIG_SCHEMA,
+        POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA,
+    )
+    dataset_start = text.index("[dataset]")
+    representation_start = text.index("[representation]")
+    dataset_text = f'''[dataset]
+kind = "{POLICY_TEACHER_QUARTER_MIX_DATASET_KIND}"
+root = {_q(artifact["root"])}
+decision_stage = "final"
+sample_count = {POLICY_TEACHER_QUARTER_MIX_SAMPLE_COUNT}
+manifest_file_sha256 = "{binding.manifest_file_sha256}"
+content_sha256 = "{binding.content_sha256}"
+samples_sha256 = "{artifact["samples_sha256"]}"
+iteration_identity_sha256 = "{artifact["iteration_identity_sha256"]}"
+shuffle_seed = {POLICY_TEACHER_QUARTER_MIX_SEED}
+
+'''
+    text = text[:dataset_start] + dataset_text + text[representation_start:]
+    text = text.replace(
+        f'prompt_sha256 = "{SHA_A}"',
+        f'prompt_sha256 = "{TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256}"',
+    )
+    text = text.replace(
+        "maximum_tool_calls = 4",
+        "maximum_tool_calls = 4\n"
+        f'success_observation_protocol_id = "{NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1.value}"\n'
+        f'action_boundary_protocol_id = "{NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2.value}"',
+    )
+    judge_path = (
+        Path(__file__).parents[2]
+        / "configs/policy/judges/qwen25_72b_rl_answer_judge_v1.json"
+    ).resolve()
+    judge_sha = hashlib.sha256(judge_path.read_bytes()).hexdigest()
+    return text.replace(
+        'task_kind = "multiple_choice"\n'
+        'answer_verifier = "exact_match"\n'
+        f'answer_verifier_sha256 = "{POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256}"\n'
+        'judge_mode = "not_applicable"\n'
+        'judge_reason = "bounded non-formal MCQ smoke"',
+        'task_kind = "mixed"\n'
+        'answer_verifier = "rule_first_qwen25_72b"\n'
+        f'answer_verifier_sha256 = "{POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256}"\n'
+        'judge_mode = "qwen25_72b_semantic_fallback"\n'
+        'judge_reason = "Teacher25 unified integration"\n'
+        f"judge_config_path = {_q(judge_path)}\n"
+        f'judge_config_sha256 = "{judge_sha}"',
+    )
+
+
 def _with_generic_gpu_topology(
     text: str,
     *,
@@ -781,9 +930,7 @@ def test_launch_plan_rejects_duplicate_devices_and_worker_count_drift(
             replace(plan, overrides=mismatched_overrides)
 
     mismatched_overrides = dict(plan.overrides)
-    mismatched_overrides[
-        "actor_rollout_ref.rollout.tensor_model_parallel_size"
-    ] = 3
+    mismatched_overrides["actor_rollout_ref.rollout.tensor_model_parallel_size"] = 3
     with pytest.raises(ValueError, match="divide visible GPUs"):
         replace(plan, overrides=mismatched_overrides)
 
@@ -1181,6 +1328,77 @@ shuffle_seed = 42
     assert plan.overrides["data.custom_cls.path"] == POLICY_T1_MIXED_DATASET_MODULE_PATH
     assert plan.overrides["data.custom_cls.name"] == POLICY_T1_MIXED_DATASET_CLASS_NAME
     assert plan.overrides["data.tgvf_policy_t1_mixed"]["decision_stage"] == "final"
+
+
+def test_teacher25_config_routes_verified_schedule_to_generic_verl_dataset(
+    tmp_path: Path,
+) -> None:
+    external = _prepare_external_inputs(tmp_path)
+    artifact = _write_teacher_quarter_artifact(tmp_path)
+    config_path = tmp_path / "teacher25-policy.toml"
+    config_path.write_text(
+        _teacher_quarter_config_text(tmp_path, external, artifact),
+        encoding="utf-8",
+    )
+
+    config = load_policy_e2e_smoke_run_config(config_path)
+    plan = build_policy_e2e_smoke_verl_plan(config)
+
+    assert isinstance(
+        config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
+    )
+    assert config.dataset.kind == POLICY_TEACHER_QUARTER_MIX_DATASET_KIND
+    assert plan.overrides["data.custom_cls.path"] == (
+        POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH
+    )
+    assert plan.overrides["data.custom_cls.name"] == (
+        POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS_NAME
+    )
+    assert plan.overrides["data.train_files"] == [str(artifact["samples_path"])]
+    assert plan.overrides["data.val_files"] == [str(artifact["samples_path"])]
+    assert plan.overrides["data.seed"] == POLICY_TEACHER_QUARTER_MIX_SEED
+    assert (
+        plan.overrides["actor_rollout_ref.rollout.agent.default_agent_loop"]
+        == NATIVE_AGENT_LOOP_NAME
+    )
+    dataset_config = plan.overrides[f"data.{POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME}"]
+    assert dataset_config["expected_sample_count"] == (
+        POLICY_TEACHER_QUARTER_MIX_SAMPLE_COUNT
+    )
+    assert dataset_config["visual_prompt_bundle_sha256"] == (
+        TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+    )
+    assert dataset_config["tool_profile"] == NativeToolCapabilityProfile.TGVF_ONLY.value
+
+
+def test_teacher25_config_rejects_iteration_identity_drift(tmp_path: Path) -> None:
+    external = _prepare_external_inputs(tmp_path)
+    artifact = _write_teacher_quarter_artifact(tmp_path)
+    text = _teacher_quarter_config_text(tmp_path, external, artifact)
+    config_path = tmp_path / "teacher25-drift.toml"
+    config_path.write_text(
+        text.replace(str(artifact["iteration_identity_sha256"]), "0" * 64, 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Teacher25 binding"):
+        load_policy_e2e_smoke_run_config(config_path)
+
+
+def test_teacher25_config_rejects_bound_samples_file_drift(tmp_path: Path) -> None:
+    external = _prepare_external_inputs(tmp_path)
+    artifact = _write_teacher_quarter_artifact(tmp_path)
+    config_path = tmp_path / "teacher25-artifact-drift.toml"
+    config_path.write_text(
+        _teacher_quarter_config_text(tmp_path, external, artifact),
+        encoding="utf-8",
+    )
+    samples_path = artifact["samples_path"]
+    assert isinstance(samples_path, Path)
+    samples_path.write_bytes(samples_path.read_bytes() + b"{}\n")
+
+    with pytest.raises(ValueError, match="samples file binding differs"):
+        load_policy_e2e_smoke_run_config(config_path)
 
 
 def test_deepeyes_scaled_crop_schema_binds_the_exact_four_gpu_phase_one_contract(
