@@ -12,6 +12,9 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import gc
+import hashlib
+import hmac
+import json
 import os
 from types import MethodType
 from typing import Any
@@ -53,8 +56,10 @@ TGVF_VLLM_WORKER_EXTENSION_FQN = (
     "tgvf_rl.framework.verl.vllm_tool_runtime.TGVFVLLMWorkerExtension"
 )
 TGVF_TWO_MODEL_RUNTIME_SCHEMA = "tgvf-vllm-two-model-runtime-v1"
+TGVF_ADAPTER_UPDATE_ACK_SCHEMA = "tgvf-vllm-adapter-owned-state-ack-v1"
 _SOURCE_WIRE_SCHEMA = "tgvf-source-visual-utility-wire-v1"
 _FOCUS_WIRE_SCHEMA = "tgvf-focus-utility-wire-v1"
+_ADAPTER_OWNED_STATE_WIRE_SCHEMA = "tgvf-adapter-owned-state-utility-wire-v1"
 
 
 def _tensor_to_utility_wire(value: torch.Tensor) -> dict[str, object]:
@@ -93,6 +98,89 @@ def _tensor_from_utility_wire(value: Mapping[str, object]) -> torch.Tensor:
     if tensor.numel() != expected:
         raise ValueError("TGVF utility tensor byte length differs from shape")
     return tensor.reshape(normalized_shape)
+
+
+def _normalized_adapter_owned_state(
+    value: Mapping[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """Return an exact, portable Adapter-owned tensor mapping."""
+
+    if not isinstance(value, Mapping):
+        raise TypeError("TGVF Adapter-owned state must be a mapping")
+    if not value:
+        raise ValueError("TGVF Adapter-owned state must not be empty")
+    normalized: dict[str, torch.Tensor] = {}
+    for name, tensor in value.items():
+        if not isinstance(name, str) or not name:
+            raise TypeError("TGVF Adapter-owned tensor names must be non-empty strings")
+        if name in normalized:
+            raise ValueError(f"duplicate TGVF Adapter-owned tensor name {name!r}")
+        if not isinstance(tensor, torch.Tensor):
+            raise TypeError(f"TGVF Adapter-owned value {name!r} is not a tensor")
+        if tensor.layout is not torch.strided:
+            raise TypeError(
+                f"TGVF Adapter-owned tensor {name!r} must use strided layout"
+            )
+        normalized[name] = tensor.detach().cpu().contiguous()
+    return normalized
+
+
+def adapter_owned_state_sha256(value: Mapping[str, torch.Tensor]) -> str:
+    """Hash sorted names, dtype, shape, and exact Adapter-owned tensor bytes."""
+
+    state = _normalized_adapter_owned_state(value)
+    digest = hashlib.sha256()
+    digest.update(b"tgvf-adapter-owned-state-v1\0")
+    for name in sorted(state):
+        tensor = state[name]
+        raw = tensor.view(torch.uint8).numpy().tobytes()
+        metadata = {
+            "name": name,
+            "dtype": str(tensor.dtype).removeprefix("torch."),
+            "shape": list(tensor.shape),
+            "byte_length": len(raw),
+        }
+        encoded = json.dumps(
+            metadata,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+        digest.update(raw)
+    return digest.hexdigest()
+
+
+def _adapter_owned_state_to_utility_wire(
+    value: Mapping[str, torch.Tensor],
+) -> dict[str, object]:
+    state = _normalized_adapter_owned_state(value)
+    return {
+        "schema": _ADAPTER_OWNED_STATE_WIRE_SCHEMA,
+        "tensors": {
+            name: _tensor_to_utility_wire(tensor) for name, tensor in state.items()
+        },
+    }
+
+
+def _adapter_owned_state_from_utility_wire(
+    value: Mapping[str, object],
+) -> dict[str, torch.Tensor]:
+    if set(value) != {"schema", "tensors"}:
+        raise ValueError("vLLM Adapter-owned state utility wire keys differ")
+    if value.get("schema") != _ADAPTER_OWNED_STATE_WIRE_SCHEMA:
+        raise ValueError("vLLM Adapter-owned state utility wire schema differs")
+    tensors = _wire_mapping(value.get("tensors"), owner="Adapter-owned tensors")
+    if not tensors:
+        raise ValueError("vLLM Adapter-owned state utility wire is empty")
+    restored: dict[str, torch.Tensor] = {}
+    for name, tensor_wire in tensors.items():
+        if not isinstance(name, str) or not name:
+            raise TypeError("Adapter-owned tensor names must be non-empty strings")
+        restored[name] = _tensor_from_utility_wire(
+            _wire_mapping(tensor_wire, owner=f"Adapter-owned tensor {name!r}")
+        )
+    return restored
 
 
 def _source_to_utility_wire(value: SourceVisualTensorBundle) -> dict[str, object]:
@@ -297,6 +385,74 @@ def _wire_boolean(value: object, *, owner: str) -> bool:
     return value
 
 
+def _require_sha256(value: object, *, owner: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{owner} must be a lowercase SHA256 hex digest")
+    return value
+
+
+def _validate_adapter_update_ack(
+    value: object,
+    *,
+    expected_optimizer_step: int,
+    expected_state_sha256: str,
+    expected_tensor_count: int,
+) -> dict[str, object]:
+    """Validate one worker ACK before publication is treated as complete."""
+
+    ack = _wire_mapping(value, owner="Adapter-owned state update ACK")
+    expected_keys = {
+        "schema_version",
+        "optimizer_step",
+        "state_sha256",
+        "tensor_count",
+        "applied",
+        "cleared_source_count",
+        "cleared_trace_count",
+    }
+    if set(ack) != expected_keys:
+        raise ValueError("Adapter-owned state update ACK keys differ")
+    if ack.get("schema_version") != TGVF_ADAPTER_UPDATE_ACK_SCHEMA:
+        raise ValueError("Adapter-owned state update ACK schema differs")
+    optimizer_step = _wire_integer(
+        ack.get("optimizer_step"), owner="Adapter update optimizer step"
+    )
+    if optimizer_step < 0 or optimizer_step != expected_optimizer_step:
+        raise RuntimeError("Adapter update ACK optimizer step differs")
+    state_sha256 = _require_sha256(
+        ack.get("state_sha256"), owner="Adapter update ACK state digest"
+    )
+    if not hmac.compare_digest(state_sha256, expected_state_sha256):
+        raise RuntimeError("Adapter update ACK state digest differs")
+    tensor_count = _wire_integer(
+        ack.get("tensor_count"), owner="Adapter update tensor count"
+    )
+    if tensor_count <= 0 or tensor_count != expected_tensor_count:
+        raise RuntimeError("Adapter update ACK tensor count differs")
+    applied = _wire_boolean(ack.get("applied"), owner="Adapter update applied")
+    cleared_source_count = _wire_integer(
+        ack.get("cleared_source_count"), owner="cleared source count"
+    )
+    cleared_trace_count = _wire_integer(
+        ack.get("cleared_trace_count"), owner="cleared trace count"
+    )
+    if cleared_source_count < 0 or cleared_trace_count < 0:
+        raise ValueError("Adapter update ACK cache counts must be non-negative")
+    return {
+        "schema_version": TGVF_ADAPTER_UPDATE_ACK_SCHEMA,
+        "optimizer_step": optimizer_step,
+        "state_sha256": state_sha256,
+        "tensor_count": tensor_count,
+        "applied": applied,
+        "cleared_source_count": cleared_source_count,
+        "cleared_trace_count": cleared_trace_count,
+    }
+
+
 @dataclass(slots=True)
 class _BehaviorTraceBuffer:
     prompt_length: int
@@ -443,9 +599,7 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
         if visual is None:
             raise RuntimeError("vLLM Qwen3 worker has no visual tower")
         mergers = (visual.merger, *tuple(visual.deepstack_merger_list))
-        captures: list[list[tuple[torch.Tensor, torch.Tensor]]] = [
-            [] for _ in mergers
-        ]
+        captures: list[list[tuple[torch.Tensor, torch.Tensor]]] = [[] for _ in mergers]
         handles = tuple(
             merger.register_forward_hook(
                 _capture_vllm_merger(captures[index]), with_kwargs=True
@@ -460,9 +614,7 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
                         device=owner.device,
                         dtype=owner.dtype,
                     ),
-                    grid_thw=image_grid_thw.detach().to(
-                        device="cpu", dtype=torch.long
-                    ),
+                    grid_thw=image_grid_thw.detach().to(device="cpu", dtype=torch.long),
                 )
         finally:
             for handle in handles:
@@ -555,6 +707,90 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
             traces.pop(request_id, None)
         return source is not None
 
+    def tgvf_update_adapter_owned_state(
+        self,
+        optimizer_step: int,
+        state_sha256: str,
+        state_wire: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Install one exact Adapter state and invalidate old-policy caches."""
+
+        if type(optimizer_step) is not int or optimizer_step < 0:
+            raise ValueError("Adapter update optimizer step must be non-negative")
+        expected_sha256 = _require_sha256(
+            state_sha256, owner="Adapter update state digest"
+        )
+        state = _adapter_owned_state_from_utility_wire(
+            _wire_mapping(state_wire, owner="Adapter-owned state update")
+        )
+        actual_sha256 = adapter_owned_state_sha256(state)
+        if not hmac.compare_digest(actual_sha256, expected_sha256):
+            raise IdentityMismatchError("Adapter-owned state update digest differs")
+
+        adapter = self._tgvf_adapter()
+        expected_state = adapter.artifact_state_dict(keep_vars=True)
+        if set(state) != set(expected_state):
+            missing = sorted(set(expected_state) - set(state))
+            unexpected = sorted(set(state) - set(expected_state))
+            raise ValueError(
+                "TGVF Adapter-owned update keys mismatch: "
+                f"missing={missing} unexpected={unexpected}"
+            )
+        for name, expected_tensor in expected_state.items():
+            tensor = state[name]
+            if (
+                tensor.shape != expected_tensor.shape
+                or tensor.dtype != expected_tensor.dtype
+            ):
+                raise ValueError(
+                    f"TGVF Adapter-owned update tensor {name!r} has shape/dtype "
+                    f"{tuple(tensor.shape)}/{tensor.dtype}, expected "
+                    f"{tuple(expected_tensor.shape)}/{expected_tensor.dtype}"
+                )
+
+        current_step = getattr(self, "_tgvf_adapter_optimizer_step", None)
+        current_sha256 = getattr(self, "_tgvf_adapter_state_sha256", None)
+        if (current_step is None) != (current_sha256 is None):
+            raise RuntimeError("vLLM Adapter update identity is incomplete")
+        applied = True
+        if current_step is not None:
+            if type(current_step) is not int or current_step < 0:
+                raise RuntimeError("vLLM Adapter update optimizer step is malformed")
+            current_sha256 = _require_sha256(
+                current_sha256, owner="current Adapter state digest"
+            )
+            if optimizer_step < current_step:
+                raise RuntimeError("stale Adapter-owned state update was rejected")
+            if optimizer_step == current_step:
+                if not hmac.compare_digest(expected_sha256, current_sha256):
+                    raise IdentityMismatchError(
+                        "same Adapter optimizer step carried different state"
+                    )
+                applied = False
+
+        if applied:
+            adapter.load_artifact_state_dict(state)
+            adapter.requires_grad_(False)
+            adapter.eval()
+            self._tgvf_adapter_optimizer_step = optimizer_step
+            self._tgvf_adapter_state_sha256 = expected_sha256
+
+        sources = self._tgvf_sources()
+        traces = self._tgvf_traces()
+        cleared_source_count = len(sources)
+        cleared_trace_count = len(traces)
+        sources.clear()
+        traces.clear()
+        return {
+            "schema_version": TGVF_ADAPTER_UPDATE_ACK_SCHEMA,
+            "optimizer_step": optimizer_step,
+            "state_sha256": expected_sha256,
+            "tensor_count": len(state),
+            "applied": applied,
+            "cleared_source_count": cleared_source_count,
+            "cleared_trace_count": cleared_trace_count,
+        }
+
     def _tgvf_model(self) -> Any:
         model = getattr(getattr(self, "model_runner", None), "model", None)
         if model is None or not hasattr(model, "language_model"):
@@ -588,9 +824,7 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
         )
         run_identity = export.manifest.run_identity
         if state_digest(export.manifest) != config.representation.artifact.sha256:
-            raise IdentityMismatchError(
-                "vLLM Adapter export manifest identity differs"
-            )
+            raise IdentityMismatchError("vLLM Adapter export manifest identity differs")
         if (
             run_identity.run_id != config.representation.expected_run_id
             or export.manifest.run_identity_sha256
@@ -687,14 +921,10 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
             count = int(scheduler_output.num_scheduled_tokens[request_id])
             trace = traces.get(request_id)
             if trace is not None and count > 0:
-                sequence_start = int(
-                    runner.input_batch.num_computed_tokens_cpu[index]
-                )
+                sequence_start = int(runner.input_batch.num_computed_tokens_cpu[index])
                 sequence_end = sequence_start + count
                 copy_start = max(sequence_start, trace.prompt_length)
-                copy_end = min(
-                    sequence_end, trace.prompt_length + trace.capacity
-                )
+                copy_end = min(sequence_end, trace.prompt_length + trace.capacity)
                 if copy_start < copy_end:
                     source_start = offset + copy_start - sequence_start
                     source_end = source_start + copy_end - copy_start
@@ -802,6 +1032,41 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
         def _require_step(self, expected_step: int) -> None:
             if type(expected_step) is not int or self.global_steps != expected_step:
                 raise RuntimeError("TGVF RPC behavior policy step differs from vLLM")
+
+        async def tgvf_update_adapter_owned_state(
+            self,
+            *,
+            optimizer_step: int,
+            state_sha256: str,
+            state: Mapping[str, torch.Tensor],
+        ) -> dict[str, object]:
+            """Publish Adapter-owned weights through vLLM's worker utility RPC."""
+
+            self._require_step(optimizer_step)
+            expected_sha256 = _require_sha256(
+                state_sha256, owner="Adapter update state digest"
+            )
+            state_wire = _adapter_owned_state_to_utility_wire(state)
+            tensors_wire = _wire_mapping(
+                state_wire["tensors"], owner="Adapter-owned tensors"
+            )
+            result = await self.engine.collective_rpc(
+                method="tgvf_update_adapter_owned_state",
+                kwargs={
+                    "optimizer_step": optimizer_step,
+                    "state_sha256": expected_sha256,
+                    "state_wire": state_wire,
+                },
+            )
+            ack = _single_collective_result(
+                result, operation="Adapter-owned state update"
+            )
+            return _validate_adapter_update_ack(
+                ack,
+                expected_optimizer_step=optimizer_step,
+                expected_state_sha256=expected_sha256,
+                expected_tensor_count=len(tensors_wire),
+            )
 
         async def tgvf_shutdown(self) -> None:
             """Stop HTTP and EngineCore before Ray tears down the server actor."""
@@ -1110,9 +1375,7 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
         async def release_trajectory(self, request_id: str) -> None:
             route = self._tgvf_routes.pop(request_id, None)
             self._tgvf_turns.pop(request_id, None)
-            backend_request_ids = tuple(
-                self._tgvf_backend_ids.pop(request_id, ())
-            )
+            backend_request_ids = tuple(self._tgvf_backend_ids.pop(request_id, ()))
             if route is None:
                 return
             server_id, server = route
@@ -1129,8 +1392,68 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
             self.rollout_replica_class = TGVFVLLMReplica
             super().__init__(*args, **kwargs)
 
-        def get_client(self, client_cls: type[Any] = TGVFLLMServerClient, **kwargs: Any):
+        @classmethod
+        def bind_adapter_state_updates(cls, replicas: Sequence[object]) -> Any:
+            """Bind publication to already-created rollout replicas."""
+
+            if not isinstance(replicas, Sequence) or isinstance(replicas, (str, bytes)):
+                raise TypeError("rollout replicas must be a sequence")
+            if not replicas:
+                raise ValueError("Adapter update requires rollout replicas")
+            manager = object.__new__(cls)
+            manager.rollout_replicas = list(replicas)
+            return manager
+
+        def get_client(
+            self, client_cls: type[Any] = TGVFLLMServerClient, **kwargs: Any
+        ):
             return super().get_client(client_cls=client_cls, **kwargs)
+
+        @auto_await
+        async def update_adapter_owned_state(
+            self,
+            *,
+            optimizer_step: int,
+            state_sha256: str,
+            state: Mapping[str, torch.Tensor],
+        ) -> tuple[dict[str, object], ...]:
+            """Update every rollout server and require one exact ACK from each."""
+
+            if type(optimizer_step) is not int or optimizer_step < 0:
+                raise ValueError("Adapter update optimizer step must be non-negative")
+            expected_sha256 = _require_sha256(
+                state_sha256, owner="Adapter update state digest"
+            )
+            if not isinstance(state, Mapping) or not state:
+                raise ValueError("Adapter-owned state must be a non-empty mapping")
+            servers = [
+                server
+                for replica in getattr(self, "rollout_replicas", ())
+                for server in getattr(replica, "servers", ())
+            ]
+            if not servers:
+                raise RuntimeError(
+                    "Adapter update requires at least one rollout server"
+                )
+            results = await asyncio.gather(
+                *(
+                    server.tgvf_update_adapter_owned_state.remote(
+                        optimizer_step=optimizer_step,
+                        state_sha256=expected_sha256,
+                        state=state,
+                    )
+                    for server in servers
+                )
+            )
+            return tuple(
+                _validate_adapter_update_ack(
+                    result,
+                    expected_optimizer_step=optimizer_step,
+                    expected_state_sha256=expected_sha256,
+                    expected_tensor_count=len(state),
+                )
+                for result in results
+            )
 
         @auto_await
         async def shutdown(self) -> None:
@@ -1166,10 +1489,22 @@ def tgvf_llm_server_manager_class() -> type[Any]:
     return _runtime_classes()[0]
 
 
+def bind_tgvf_adapter_state_update_manager(
+    replicas: Sequence[object],
+) -> object:
+    """Expose Adapter update fan-out without relaunching rollout replicas."""
+
+    manager_cls = tgvf_llm_server_manager_class()
+    return manager_cls.bind_adapter_state_updates(replicas)
+
+
 __all__ = [
+    "TGVF_ADAPTER_UPDATE_ACK_SCHEMA",
     "TGVF_TWO_MODEL_RUNTIME_SCHEMA",
     "TGVFFocusMaterializationResult",
     "TGVF_VLLM_WORKER_EXTENSION_FQN",
     "TGVFVLLMWorkerExtension",
+    "adapter_owned_state_sha256",
+    "bind_tgvf_adapter_state_update_manager",
     "tgvf_llm_server_manager_class",
 ]
