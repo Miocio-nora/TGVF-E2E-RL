@@ -901,6 +901,7 @@ class _RemoteCropVisualMaterializer:
             image_grid_thw=source.image_grid_thw,
             spatial_merge_size=source.spatial_merge_size,
             deepstack_branch_layers=_BRANCH_LAYERS,
+            preprocessed_pixel_values=pixel_values.detach(),
         )
 
 

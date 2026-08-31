@@ -66,6 +66,7 @@ class _Materializer:
             image_grid_thw=(1, 2, 2),
             spatial_merge_size=2,
             deepstack_branch_layers=BRANCH_LAYERS,
+            preprocessed_pixel_values=torch.full((4, 3), 2.0),
         )
 
 

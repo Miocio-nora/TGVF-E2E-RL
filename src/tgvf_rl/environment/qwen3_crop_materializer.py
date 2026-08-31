@@ -158,17 +158,19 @@ class Qwen3CropVisualMaterializer:
     ) -> CropVisualTensorBundle:
         """Implement the plain crop tool's concrete visual-materializer port."""
 
-        source = self.materialize_source_visual(
+        materialized = self.materialize_crop_tgvf_visual(
             crop_rgb,
             parsed_call=parsed_call,
             call_index=call_index,
         )
+        source = materialized.source_visual
         return CropVisualTensorBundle(
             merged_main=source.merged_main,
             merged_deepstack=source.merged_deepstack,
             image_grid_thw=source.image_grid_thw,
             spatial_merge_size=source.spatial_merge_size,
             deepstack_branch_layers=self.branch_layers,
+            preprocessed_pixel_values=materialized.preprocessed_pixel_values,
         )
 
     def materialize_source_visual(

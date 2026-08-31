@@ -35,6 +35,7 @@ class CropVisualTensorBundle:
     image_grid_thw: tuple[int, int, int]
     spatial_merge_size: int
     deepstack_branch_layers: tuple[int, ...]
+    preprocessed_pixel_values: torch.Tensor | None = None
 
 
 class CropVisualMaterializer(Protocol):
@@ -184,6 +185,15 @@ class ImageZoomInTool:
                 strict=True,
             )
         )
+        preprocessed_pixel_values = (
+            None
+            if visual.preprocessed_pixel_values is None
+            else self.store.put_tensor(
+                f"call.{request.call_index}.crop.preprocessed_pixel_values",
+                visual.preprocessed_pixel_values,
+                trajectory_id=request.trajectory_id,
+            )
+        )
         record = CropObservationRecord(
             schema_version="crop-observation-v2",
             observation_id=_observation_id(
@@ -220,6 +230,7 @@ class ImageZoomInTool:
                 positions=layout.crop_positions,
                 deepstack_branch_layers=visual.deepstack_branch_layers,
                 deepstack_injection_positions=layout.deepstack_injection_positions,
+                preprocessed_pixel_values=preprocessed_pixel_values,
             ),
         )
         return CropToolExecutionResult(
@@ -312,6 +323,27 @@ def _validate_materialized_visual(
         for tensor in tensors
     ):
         raise ValueError("crop visual features must be detached floating tensors")
+    pixels = visual.preprocessed_pixel_values
+    if pixels is not None:
+        if (
+            not isinstance(pixels, torch.Tensor)
+            or not pixels.is_floating_point()
+            or pixels.ndim != 2
+            or pixels.requires_grad
+            or pixels.grad_fn is not None
+        ):
+            raise ValueError(
+                "crop preprocessed pixel_values must be detached floating [N,D]"
+            )
+        expected_rows = (
+            visual.image_grid_thw[0]
+            * visual.image_grid_thw[1]
+            * visual.image_grid_thw[2]
+        )
+        if pixels.shape[0] != expected_rows:
+            raise ValueError(
+                "crop preprocessed pixel_values rows differ from image grid"
+            )
 
 
 def _validate_layout(
