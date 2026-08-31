@@ -22,7 +22,7 @@ from tests.policy.test_run_config import (
 
 
 _STRICT_POLICY_ARGUMENTS = [
-    "run-policy",
+    "strict-run-policy",
     "/canonical/policy.toml",
     "--compile-prerequisite-manifest",
     "/compile.json",
@@ -52,21 +52,26 @@ def _write_two_gpu_policy_config(tmp_path: Path) -> Path:
     return path
 
 
-def test_dev_parser_is_minimal_and_strict_parser_contract_is_unchanged() -> None:
+def test_normal_parser_is_minimal_and_strict_parser_is_explicit_opt_in() -> None:
     parser = cli._parser()  # noqa: SLF001
+    normal = parser.parse_args(["run-policy", "/work/policy.toml"])
     dev = parser.parse_args(["dev-run-policy", "/work/policy.toml"])
     strict = parser.parse_args(_STRICT_POLICY_ARGUMENTS)
 
-    assert set(vars(dev)) == {"command", "path", "python"}
+    assert set(vars(normal)) == {"command", "path", "python"}
+    assert normal.command == "run-policy"
+    assert normal.path == Path("/work/policy.toml")
+    assert not hasattr(normal, "gate_directory")
+    assert not hasattr(normal, "authorization_token")
+    assert not hasattr(normal, "freeze_override")
+    assert not hasattr(normal, "compile_prerequisite_manifest")
+    assert not hasattr(normal, "runtime_locator_manifest")
+
+    assert set(vars(dev)) == set(vars(normal))
     assert dev.command == "dev-run-policy"
     assert dev.path == Path("/work/policy.toml")
-    assert not hasattr(dev, "gate_directory")
-    assert not hasattr(dev, "authorization_token")
-    assert not hasattr(dev, "freeze_override")
-    assert not hasattr(dev, "compile_prerequisite_manifest")
-    assert not hasattr(dev, "runtime_locator_manifest")
 
-    assert strict.command == "run-policy"
+    assert strict.command == "strict-run-policy"
     assert strict.path == Path("/canonical/policy.toml")
     assert strict.compile_prerequisite_manifest == Path("/compile.json")
     assert strict.runtime_locator_manifest == Path("/runtime.json")
@@ -75,7 +80,7 @@ def test_dev_parser_is_minimal_and_strict_parser_contract_is_unchanged() -> None
     assert strict.freeze_override is None
 
 
-def test_dev_cli_exec_uses_same_plan_and_sanitized_topology_environment(
+def test_run_policy_exec_uses_same_plan_and_sanitized_topology_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -100,7 +105,7 @@ def test_dev_cli_exec_uses_same_plan_and_sanitized_topology_environment(
     assert (
         cli.main(
             [
-                "dev-run-policy",
+                "run-policy",
                 str(path),
                 "--python",
                 str(Path(sys.executable).absolute()),
@@ -231,7 +236,7 @@ def test_dev_launcher_rejects_any_blocker_beyond_missing_compile_manifest(
         )
 
 
-def test_dev_cli_rejects_invalid_config_before_exec(
+def test_run_policy_rejects_invalid_config_before_exec(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -247,7 +252,7 @@ def test_dev_cli_rejects_invalid_config_before_exec(
         lambda *_args: pytest.fail("invalid config reached exec"),
     )
 
-    assert cli.main(["dev-run-policy", str(path)]) == 2
+    assert cli.main(["run-policy", str(path)]) == 2
     assert "physical_gpu_ids must be non-empty and unique" in capsys.readouterr().err
 
 

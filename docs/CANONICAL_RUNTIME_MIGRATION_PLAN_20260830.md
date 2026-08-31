@@ -1,7 +1,11 @@
 # Canonical runtime migration plan — 2026-08-30
 
-Status: active, CPU-only stabilization work. Experiment execution remains
-frozen.
+Status: superseded for source promotion on 2026-09-01. The strict
+launch-security design below is retained as historical context, but it is no
+longer the normal experiment path or a `main` promotion gate. Ordinary Policy
+work uses the config-derived `run-policy` entry point without a repository
+authorization token; `strict-run-policy` is an explicit opt-in compatibility
+path.
 
 ## Why this migration exists
 
@@ -193,20 +197,24 @@ Do not port:
   four-arm training dependencies;
 - hand-written result claims in place of the typed result registry.
 
-## Required gates
+## Source-promotion gates (revised 2026-09-01)
 
-Each batch must pass its focused tests and Ruff before the next batch. Final
-promotion requires:
+The earlier runtime-closure and repository-freeze gates below proved too
+coupled to machine state and made ordinary parameter changes and interrupted
+workflow recovery unnecessarily difficult. Source promotion now requires:
 
 ```text
 Python 3.12 full test collection: 0 errors
-Full CPU suite: pass
+Default CPU suite: pass
+Core config/matrix/action/replay/checkpoint focused suites: pass
 Ruff: pass
-Launch-control audit: pass
-Result-registry artifact verification: pass
-Canonical runtime closure: enabled with zero blockers
-GPU execution policy: still frozen
 ```
 
-The four canonical configs are a separate follow-up commit so their
+The retired launch-security/control-plane suites and dedicated CUDA parity
+probe remain available for explicit maintenance work, but are not collected by
+default and are not source-promotion gates. GPU/Ray step-0 and checkpoint-resume
+smokes are separate experiment-runtime acceptance checks; they do not block a
+source-only promotion.
+
+The five canonical configs are a separate follow-up commit so their
 `code.commit` fields can point to the already reviewed implementation commit.

@@ -18,13 +18,15 @@ added in a subdirectory only when that subsystem needs a stricter contract.
 
 ## Experiment launch boundary
 
-1. Training and evaluation are mutating operations. They require an explicit,
-   run-identity-bound authorization token in addition to a complete ledger/run
-   configuration.
-2. Supervisors may validate prerequisites and emit a readiness receipt. They
-   must not auto-launch a later stage without consuming that authorization.
-3. Waiters require a bounded timeout and liveness checks. Failure, timeout, and
-   cancellation must be distinct terminal states.
+1. Ordinary Policy development requires an explicit user request and a complete
+   run configuration. The normal path does not require a separate
+   repository-issued token.
+2. `run-policy` is the normal config-derived experiment entry point.
+   `strict-run-policy` preserves the historical authorization launcher only as
+   an explicit opt-in compatibility path; do not route ordinary work through it.
+3. A supervisor may continue the configured stages of a workflow that the user
+   already authorized. Waiters still need bounded timeouts and must distinguish
+   failure, timeout, and cancellation.
 4. Pass credentials only to the target process/session. Do not place secrets in
    tmux's global environment, source-controlled files, logs, receipts, or
    artifact identities.
@@ -68,8 +70,11 @@ added in a subdirectory only when that subsystem needs a stricter contract.
 
 1. Add or update tests for every changed contract. Tests must be hermetic and
    must not depend on private historical artifact directories.
-2. Run the narrow affected tests first, then the repository CPU suite and Ruff
-   before integration.
+2. Run the narrow affected tests first, then the default repository CPU suite
+   and Ruff before integration. Retired launch-security tests and dedicated GPU
+   parity probes are opt-in suites, not default promotion gates.
 3. Do not claim a run, comparison, or cleanup is complete from absence of an
    obvious error. Verify the required artifacts, counts, hashes, and terminal
    receipts explicitly.
+4. GPU/Ray smoke and checkpoint-resume canaries validate an experiment runtime;
+   they are recorded separately and do not block source-only promotion to main.

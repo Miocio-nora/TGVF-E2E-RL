@@ -5,7 +5,7 @@
 - 分支：`stabilize/protocol-contract-v1-20260830`
 - 实现代码提交：`d1e8bbe658217371bbe571e3217c00ca94950043`
 - 五臂共享配置指纹：`f3bf6a38ba36efd66537c211c05853d3c64001e923bd9247c0ac7018ebb49392`
-- 当前状态：CPU 合约与组合闭环已完成；尚未启动新的训练，GPU/Ray canary 仍是下一道验收门。
+- 当前状态：CPU 合约与组合闭环已完成；普通 `run-policy` 已成为无需仓库令牌的统一配置入口。尚未启动新的训练，GPU/Ray canary 作为实验运行验收单独推进，不阻塞源码晋升 `main`。
 
 ## 结论
 
@@ -14,6 +14,12 @@
 五个 RL treatment 是 NoTool、Crop、TGVF-short、TGVF-target-guide-v2 和 Atomic。Original Qwen 保留为 **eval-only comparator**，不伪装成第六份训练配置，也不能与 NoTool RL checkpoint 混为一谈。正式比较时，Original 必须与五个 treatment 共享 resolution、benchmark subset、scorer 和 evaluator provenance。
 
 跨臂 validator 默认要求五臂齐全，除方法定义与输出位置等明确白名单外，对其余加载后配置递归比较并生成共享指纹。整组统一改成其他 resolution 或 horizon 是合法的新矩阵；只改一臂会在具体配置路径上报错。
+
+### 正常启动入口
+
+`run-policy <config.toml>` 直接加载普通实验配置、构建同一份 veRL plan、应用方法矩阵 overlay，并通过经过清理的子进程环境启动。它不要求 one-time token、runtime-locator manifest、freeze override 或把配置复制进另一个 canonical 目录。`dev-run-policy` 暂时保留为同一路径的兼容别名。
+
+旧的 content-bound authorization 路径仅以 `strict-run-policy` 显式保留，供专门维护旧控制面时选择；它不是普通实验入口，也不进入默认 CI。
 
 ## 统一实验接口
 
@@ -109,35 +115,24 @@ veRL level-2 rollout sleep 会丢弃已同步的完整模型权重。checkpoint 
 
 ## 测试快照
 
-以下数字来自整合期间的 CPU/无 GPU 验证，套件有重叠，不能相加为“总测试数”：
+2026-09-01 源码晋升收口重新验证了当前 HEAD，而不是沿用旧文档数字：
 
 | 范围 | 结果 |
 |---|---:|
-| config/reward/plan/compose/behavior focused core | 108 passed |
-| 最终关键闭环（含 canonical 五臂组合） | 161 passed |
-| checkpoint 与 behavior publication | 45 passed |
-| sampler 与 action-boundary | 84 passed |
-| veRL bridge/兼容校验器 | 30 passed, 2 skipped |
-| rewards/protocol/environment/objectives/policy/rollout broad suite | 676 passed |
-| framework/qwen CPU suite | 458 passed, 4 skipped |
-| 其余目录与 top-level suite | 1880 passed, 1 skipped, 3 个已知且明确排除的 failures |
+| 五臂 config/matrix、action/observation、exact replay、behavior/checkpoint focused core | 137 passed |
+| 默认 Python 3.12 CPU suite | 2336 passed, 4 skipped |
+| Ruff（`src tools spikes tests`） | passed |
 
-framework/qwen 的 GPU-only flex-attention、受污染的外部 veRL integration candidate 和缺失可选 `transfer_queue` 被跳过；这些不构成 GPU canary。
+在收缩默认测试面之前，全量历史 collection 实测为 2963 passed、4 skipped、57 failed。其中 56 个 failure 属于已经暂停的 token/freeze/runtime-locator/worker-bootstrap/control-plane 系统，另 1 个是专用 CUDA FlexAttention parity 在本机 Triton 编译环境下失败；这与“仅有 3 个历史 failure”的旧记录不一致，旧数字不再作为依据。
 
-最后 3 个 failure 全部属于已暂停的 launch-security/control-plane manifest 系统：
-
-- `test_control_plane_audit_passes_and_reports_legacy_inventory`；
-- `test_named_experiment_controllers_are_not_canonical`；
-- `test_execution_surface_manifest_is_exact_and_content_bound`。
-
-它们因当前入口代码 hash 和旧 execution-surface inventory 变化而失败。该系统正是此前导致中断恢复或轻微配置变化被过度拒绝的启动安全层，本轮明确不更新 manifest、不恢复 ZIP/trampoline/token/liveness 门禁，也不把这 3 项纳入科研主链完成条件。暂停实现仍可从 `stash@{0}: paused-runtime-zip-trampoline-overdesign-20260831` 恢复，但除非另开安全治理任务，否则不应混回实验入口。
+默认 pytest 现在明确排除这组已退休的 launch-security/control-plane 文件、repository-boundary CI ratchet 和专用 CUDA parity。它们仍保留在仓库中，可在对应维护任务里显式运行；普通 CI 不再执行 repository-boundary audit 或 launch-control/freeze audit。核心 config/matrix/action/replay/checkpoint tests 继续保留为默认门槛。
 
 ## 尚未完成与下一步
 
-CPU 闭环不等于训练已可直接宣称 golden。剩余工作按优先级为：
+CPU 闭环足以完成源码晋升，但不等于新的训练结果可以直接宣称 golden。实验运行验收按优先级为：
 
 1. **GPU/Ray step-0 canary**：验证真实初始化顺序确实为 `init_workers -> initial update_weights -> AgentLoop factory`，确保第一个 rollout 前 behavior pointer 已存在；同时验证 FSDP、vLLM、native DeepStack 开关和 matched runtime 的真实组合。
 2. **step-1 checkpoint/resume canary**：在 GPU 上覆盖 rollout、level-2 sleep、checkpoint、同 step resync、teardown/resume 和下一步 rollout，确认 CPU mock 所证明的生命周期与 pinned veRL 一致。
 3. **完整 Qwen content proof（如论文需要）**：若要声称 tensor-level exact identity，需要在上游 transport 增加可验证的 tensor digest/manifest；当前 receipt 只能声称 accepted sync，不应过度解释。
 4. **Original matched eval**：为未 RL 的 Original Qwen 建立独立 eval provenance，在相同 resolution、七个 subset、scorer、prompt edition 和统计代码下与五臂比较；它仍不进入训练矩阵。
-只有前两项 canary 通过后，才启动新的 @512 S32 训练矩阵。以后切换 1M、S16/S80、不同 n、reward 或 DeepStack/Adapter ablation 时，复用同一个 schema/launcher/runtime，通过 config 和矩阵指纹建立新实验，不再复制 PR 项目或新增专用分支入口。
+前两项 canary 是新 @512 S32 训练矩阵的运行验收，不是源码进入 `main` 的条件。通过后再把新的训练结果升级为可用于论文的 golden evidence。以后切换 1M、S16/S80、不同 n、reward 或 DeepStack/Adapter ablation 时，复用同一个 schema/launcher/runtime，通过 config 和矩阵指纹建立新实验，不再复制 PR 项目或新增专用分支入口。

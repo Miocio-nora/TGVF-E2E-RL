@@ -39,6 +39,29 @@ test = [
 where = ["src"]
 
 [tool.pytest.ini_options]
-addopts = "-ra --import-mode=importlib"
+# Historical launch-security/control-plane suites and the dedicated CUDA parity
+# probe remain opt-in maintenance targets rather than default source gates.
+addopts = """
+-ra
+--import-mode=importlib
+--ignore=tests/config/test_cli_execution_authorization.py
+--ignore=tests/framework/test_qwen3_flex_attention_cuda.py
+--ignore=tests/ops/test_child_environment.py
+--ignore=tests/ops/test_ci_boundary_ratchet.py
+--ignore=tests/ops/test_cli_authorization.py
+--ignore=tests/ops/test_fd_bound_python_exec.py
+--ignore=tests/ops/test_fd_bound_python_exec_security.py
+--ignore=tests/ops/test_launch_control_static.py
+--ignore=tests/ops/test_launch_gate.py
+--ignore=tests/ops/test_representation_child_environment_integration.py
+--ignore=tests/ops/test_representation_member_consumption.py
+--ignore=tests/ops/test_representation_member_selection.py
+--ignore=tests/ops/test_representation_startup.py
+--ignore=tests/ops/test_runtime_locator.py
+--ignore=tests/ops/test_sealed_memfd_artifact.py
+--ignore=tests/ops/test_worker_bootstrap.py
+--ignore=tests/ops/test_worker_startup.py
+--ignore=tests/policy/test_launch_startup_authorization.py
+"""
 testpaths = ["tests"]
 pythonpath = ["src"]

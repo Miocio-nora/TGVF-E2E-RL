@@ -688,62 +688,76 @@ def _parser() -> argparse.ArgumentParser:
             "omission is represented as an explicit launch blocker"
         ),
     )
-    dev_run_policy = subparsers.add_parser(
-        "dev-run-policy",
-        help=(
-            "run one ordinary Policy config through the sanitized development "
-            "launcher without strict launch authorization"
-        ),
-    )
-    dev_run_policy.add_argument("path", type=Path)
-    dev_run_policy.add_argument(
-        "--python",
-        type=Path,
-        default=Path(sys.executable).absolute(),
-        help="absolute Python executable for the development veRL driver",
-    )
     run_policy = subparsers.add_parser(
         "run-policy",
-        help="replace this process with a launch-ready upstream veRL Policy E2E run",
+        help=(
+            "run one ordinary Policy config through the sanitized, "
+            "config-derived veRL launcher"
+        ),
     )
     run_policy.add_argument("path", type=Path)
     run_policy.add_argument(
         "--python",
         type=Path,
         default=Path(sys.executable).absolute(),
+        help="absolute Python executable for the veRL driver",
+    )
+    dev_run_policy = subparsers.add_parser(
+        "dev-run-policy",
+        help="deprecated alias for run-policy",
+    )
+    dev_run_policy.add_argument("path", type=Path)
+    dev_run_policy.add_argument(
+        "--python",
+        type=Path,
+        default=Path(sys.executable).absolute(),
+        help="absolute Python executable for the veRL driver",
+    )
+    strict_run_policy = subparsers.add_parser(
+        "strict-run-policy",
+        help=(
+            "opt in to the retired content-bound authorization launcher; "
+            "ordinary experiments should use run-policy"
+        ),
+    )
+    strict_run_policy.add_argument("path", type=Path)
+    strict_run_policy.add_argument(
+        "--python",
+        type=Path,
+        default=Path(sys.executable).absolute(),
         help="absolute audited-stack Python executable (default: current Python)",
     )
-    run_policy.add_argument(
+    strict_run_policy.add_argument(
         "--horizon-extension",
         type=Path,
         default=None,
         help="explicit audited Policy horizon-extension JSON manifest",
     )
-    run_policy.add_argument(
+    strict_run_policy.add_argument(
         "--compile-prerequisite-manifest",
         type=Path,
         required=True,
         help="strict content-bound compile-prerequisite JSON manifest",
     )
-    run_policy.add_argument(
+    strict_run_policy.add_argument(
         "--runtime-locator-manifest",
         type=runtime_locator_cli.absolute_runtime_locator_manifest_path,
         required=True,
         help="absolute strict content-bound runtime-locator JSON manifest",
     )
-    run_policy.add_argument(
+    strict_run_policy.add_argument(
         "--runtime-locator-manifest-sha256",
         type=runtime_locator_cli.lowercase_runtime_locator_manifest_sha256,
         required=True,
         help="externally authorized lowercase SHA256 of the runtime-locator manifest",
     )
-    run_policy.add_argument(
+    strict_run_policy.add_argument(
         "--runtime-locator-manifest-byte-length",
         type=runtime_locator_cli.positive_runtime_locator_manifest_byte_length,
         required=True,
         help="externally authorized positive byte length of the runtime manifest",
     )
-    _add_execution_authorization_arguments(run_policy)
+    _add_execution_authorization_arguments(strict_run_policy)
     return parser
 
 
@@ -949,7 +963,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 compile_prerequisite_manifest_path=(args.compile_prerequisite_manifest),
             )
             result["gpu_work_launched"] = False
-        elif args.command == "dev-run-policy":
+        elif args.command in {"run-policy", "dev-run-policy"}:
             from tgvf_rl.policy.dev_launch import (
                 execute_policy_dev_launch,
                 prepare_policy_dev_launch,
@@ -963,7 +977,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 host_environment=os.environ,
             )
             execute_policy_dev_launch(prepared)
-        elif args.command == "run-policy":
+        elif args.command == "strict-run-policy":
             assert_canonical_runtime_launch_enabled()
             config_binding = bind_canonical_config_path(
                 args.path,

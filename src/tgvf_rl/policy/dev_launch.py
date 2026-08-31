@@ -1,10 +1,11 @@
 """Explicit low-friction Policy development launch boundary.
 
-This path deliberately omits the canonical-config gate, one-time launch token,
-compile manifest, and runtime-locator closure used by ``run-policy``.  It still
-loads the ordinary Policy run config, builds the same veRL launch plan, permits
-only the plan's exact missing-compile-manifest blocker, and starts the child
-from the existing sanitized Policy environment profile.
+This is the normal ``run-policy`` path.  It deliberately omits the historical
+canonical-config gate, one-time launch token, compile manifest, and
+runtime-locator closure retained by ``strict-run-policy``.  It still loads the
+ordinary Policy run config, builds the same veRL launch plan, permits only the
+plan's exact missing-compile-manifest blocker, and starts the child from the
+existing sanitized Policy environment profile.
 """
 
 from __future__ import annotations
