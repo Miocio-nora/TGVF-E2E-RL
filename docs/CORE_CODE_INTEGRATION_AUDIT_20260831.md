@@ -6,13 +6,12 @@
 
 ## 当前结论
 
-仓库已经完成了一部分结构性整理，但尚未形成 NoTool、Crop、TGVF、Atomic 四方法共享的可运行 `train -> pause -> resume -> eval` 主链。当前最主要的问题不是缺少启动安全检查，而是：
+四方法的环境、live runtime 和 exact replay 核心已经整合到同一分支，但尚未形成完整的 `train -> pause -> resume -> eval` 主链。当前剩余的主矛盾已经收敛为：
 
-1. 四方法核心实现仍散落在多个历史 donor 分支；
-2. canonical policy 目录没有可运行的四方法配置；
-3. NoTool 和 Atomic 的 live runtime 路由缺失；
-4. Crop/TGVF 的 full-model replay、checkpoint 和 weight-sync 实现尚未完整移植；
-5. 恢复身份和评测拓扑混入过多运行参数，导致正常开发和中断恢复被拒绝。
+1. method-specific veRL engine/checkpoint 选择尚未从历史专用 launcher 收敛成一个精简入口；
+2. canonical policy 目录还没有新的 @512、S32、Teacher25 方法矩阵配置；
+3. CPU composition 完成后仍需 step-1 GPU canary 验证真实 FSDP/vLLM 组合；
+4. 恢复身份仍需继续拆分“物理可加载性”和“论文复现资格”。
 
 因此，现阶段主线目标是恢复科研代码的可运行性和一致性。runtime ZIP、trampoline、一次性 token、父进程 liveness 等启动封锁工作已经暂停，不再作为主线前置条件。
 
@@ -24,12 +23,14 @@
 
 | 方法 | 环境工具 | 精确 Prompt | 数据/Schema | Live runtime | 训练 replay/engine | 当前判定 |
 |---|---|---|---|---|---|---|
-| Original / NoTool | 不需要工具 | 正在整合 direct-only prompt | 缺统一 @512 schema | 正在整合 | 缺统一 full-Qwen 路径 | 未闭环 |
-| Crop | Crop 环境层基本存在 | 历史 DeepEyes prompt 存在 | 缺统一 canonical 配置 | 部分存在 | full-model Crop replay/engine 待移植 | 未闭环 |
-| TGVF | TGVF 环境层基本存在 | Short 与 Target-guide-only 已移植 | Teacher25/schema 待接入 | 部分存在 | trainable TGVF replay/engine 待移植 | 未闭环 |
-| Atomic | Atomic 环境层存在 | matched prompt/schema 待移植 | Teacher25/schema 待接入 | 当前显式拒绝 | Atomic RPC 与训练接线缺失 | 未闭环 |
+| Original / NoTool | 不需要工具 | direct-only prompt 已接入 | Teacher25 adapter 已接入，@512 schema 待定稿 | direct-only live route 已完成 | full-Qwen current replay 使用 Crop engine substrate，launcher 待选择 | 核心齐，入口未闭环 |
+| Crop | Crop 环境与精确 record 已完成 | DeepEyes matched prompt 已接入 | Teacher25 adapter 已接入，@512 schema 待定稿 | sticky vLLM crop route 已完成 | full-model Crop exact replay/engine 已完成 | 核心齐，入口未闭环 |
+| TGVF | TGVF 环境与精确 record 已完成 | Short 与 Target-guide-only 已接入 | Teacher25 adapter 已接入，@512 schema 待定稿 | source/Hq/Adapter sticky route 已完成 | trainable TGVF replay/engine/checkpoint/weight-sync 已完成 | 核心齐，入口未闭环 |
+| Atomic | Atomic schema-v3 record 已完成 | matched prompt 已接入 | Teacher25 adapter 已接入，@512 schema 待定稿 | 单 RPC crop vision+Hq+Adapter 已完成 | trainable TGVF replay 支持 Atomic crop pixels 与 D 重算 | 核心齐，入口未闭环 |
 
 “Original”在文中必须继续作为比较基线；代码层面将它作为 NoTool/direct-only 方法，而不是无身份的特殊分支。
+
+更准确地说，Original 是不经过 RL 的 evaluator baseline；NoTool 是相同工具能力面上的 RL treatment。两者必须共享像素、prompt edition、subset 和 scorer，但不能在训练配置中被写成同一个 checkpoint。
 
 ## 已完成并进入当前分支的核心修复
 
@@ -76,6 +77,44 @@ Target-guide-only 不修改 `<think>`、final-only、observation 文本、工具
 
 测试证明移除 Target guide 后可逐字节恢复 Short system prompt，user message 和 tool parser identity 保持一致。
 
+### 5. action boundary 已变成运行时硬边界
+
+AgentLoop 会在 parser 和工具 runtime 之前调用统一 action-boundary classifier。以下输出均为零执行：
+
+- `</tool_call>` 后存在非空 suffix；
+- 一轮出现多个完整 tool blocks；
+- tag 畸形或不闭合；
+- NoTool trajectory 尝试调用工具。
+
+其中 NoTool 尝试仍保留为 `is_tool_call=true` 的无执行事件，便于统计协议伤害，而不是被伪装成普通文本。
+
+### 6. Crop/TGVF full-model exact replay 已恢复
+
+- Crop current policy 从 rollout 记录的精确 Qwen 预处理 pixels 重跑当前 vision tower；
+- TGVF current policy 从同一 pixels 重跑 vision，并从 rollout 记录的 Hq 重跑当前 RP67 Adapter；
+- Atomic 对 source 与 crop 分别记录精确预处理 pixels，current replay 选择对应图像重算；
+- reference policy 仍消费 rollout 记录的冻结 features，不借用 current 参数；
+- RP74 merger 后注入与单向交互实现被保留，没有被旧 donor Adapter 覆盖。
+
+### 7. TGVF checkpoint 与 rollout 权重发布已闭环
+
+每个 optimizer step 先由上游 veRL 同步完整 Qwen，再加载同一步的 Adapter-owned snapshot，并向所有 rollout servers 发布。只有当每个 server 返回匹配 optimizer step、state SHA256 和 tensor count 的 ACK 后，publication 才完成。重复同一步相同 state 幂等；旧 step 或同 step 不同 state 拒绝。
+
+### 8. Teacher25 和 Atomic live runtime 已接入统一路径
+
+Teacher25 quarter mix 的实际工件已核验：20,480 rows，构成为 VStar 7,200、Teacher 5,120、ArxivQA 4,640、ThinkLite 3,520；每个 BS16 为 12 个视觉样本加 4 个 ThinkLite direct-only 样本。所有方法仍使用统一 `tgvf_native_policy` AgentLoop。
+
+Atomic 不再被 live builder 显式拒绝。sticky vLLM worker 在单次 RPC 内完成 crop vision、target Hq 和 Adapter，逐层校验 source、bbox、target、preprocessed tensor/grid 和 policy step，再写入 schema-v3 exact record。
+
+相关提交：
+
+- `0ca7688`：action boundary；
+- `c41f049`：低摩擦开发入口；
+- `8d415c9`：TGVF exact replay；
+- `3591a08`：Crop exact replay；
+- `152e25b`：TGVF checkpoint/rollout publication；
+- `0d77882`：Teacher25 与 Atomic live runtime。
+
 ## 恢复与可复现边界审计
 
 当前代码把三类不同概念混成一个 fail-closed identity：
@@ -99,20 +138,20 @@ Target-guide-only 不修改 `<think>`、final-only、observation 文本、工具
 
 ## 待整合的历史核心切片
 
-以下 commit 只是 donor 来源，尚未因为出现在历史分支就自动算作当前主线能力。移植时按当前模块边界重写，不整块合并旧 launcher/supervisor：
+以下 commit 是 donor 来源。已完成的能力按当前模块边界重写；仍未完成的部分也不整块合并旧 launcher/supervisor：
 
 | 目的 | donor commit |
 |---|---|
-| Teacher25 quarter-mix | `37b99e2` |
-| NoTool direct-only substrate | `f9dff1f` |
-| Crop full-model replay/engine | `762e43f` |
-| TGVF replay/engine/checkpoint/weight-sync | `8a2a50d` |
-| Atomic RPC/runtime | `eadae55` |
+| Teacher25 quarter-mix（已整合） | `37b99e2` |
+| NoTool direct-only substrate（已整合） | `f9dff1f` |
+| Crop full-model replay/engine（已整合） | `762e43f` |
+| TGVF replay/engine/checkpoint/weight-sync（已整合） | `8a2a50d` |
+| Atomic RPC/runtime（已整合） | `eadae55` |
 | T-free reward optional wiring | `2c1039e` |
 | @512 method schemas | `e756546` |
-| Target-guide-only prompt | `396a258`（核心 prompt 已移植） |
-| Crop live/replay byte parity | `c448e583` |
-| Atomic @512 schema/runtime binding | `8e6b3d6` |
+| Target-guide-only prompt | `396a258`（已整合） |
+| Crop live/replay byte parity | `c448e583`（record/replay 已整合） |
+| Atomic @512 schema/runtime binding | `8e6b3d6`（runtime 已整合，schema 待定稿） |
 
 ## 下一阶段验收顺序
 
