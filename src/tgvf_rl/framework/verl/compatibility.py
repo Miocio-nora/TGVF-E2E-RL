@@ -30,6 +30,9 @@ from tgvf_rl.qwen.deepstack_control import (
     TGVF_NATIVE_DEEPSTACK_ENABLED_CONFIG_FIELD,
 )
 from tgvf_rl.policy.config import PolicyPilotV1Config
+from tgvf_rl.policy.run_config_schema import (
+    POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA,
+)
 
 
 SPIKE_CANDIDATE_VERL_COMMIT = audited_compatibility_stack(
@@ -45,6 +48,8 @@ VERL_AGENT_LOOP_RETURN_TRANSPORT = "return_dataproto"
 VERL_AGENT_LOOP_TRANSFER_QUEUE_TRANSPORT = "transfer_queue"
 SUPPORTED_ROLLOUT_BACKEND = "vllm"
 SUPPORTED_LOGPROBS_MODE = "processed_logprobs"
+VLLM_012_PREFIX_CACHE_MM_HASH_IDENTITY = "vllm-0.12-block-hash-mm-feature-identifier"
+VERL_PREFIX_CACHE_WEIGHT_UPDATE_INVALIDATION = "verl-clear-kv-cache-after-weight-update"
 
 
 class VerlBridgeError(RuntimeError):
@@ -478,13 +483,28 @@ def validate_verl_config_mapping(
             raise VerlConfigurationError(
                 "the Torch 2.11 candidate requires naive colocated weight sync"
             )
-    if (
-        _path_value(config, "actor_rollout_ref.rollout.enable_prefix_caching")
-        is not False
-    ):
-        raise VerlConfigurationError(
-            "prefix caching must be disabled for the first exact-replay proof"
-        )
+    prefix_caching = _path_value(
+        config, "actor_rollout_ref.rollout.enable_prefix_caching"
+    )
+    if type(prefix_caching) is not bool:
+        raise VerlConfigurationError("prefix caching must be an explicit bool")
+    if prefix_caching:
+        custom = _path_value(config, "actor_rollout_ref.rollout.custom")
+        performance = custom.get("performance") if isinstance(custom, Mapping) else None
+        required_prefix_receipt = {
+            "source_schema_version": POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA,
+            "vllm_enable_prefix_caching": True,
+            "prefix_cache_identity_basis": VLLM_012_PREFIX_CACHE_MM_HASH_IDENTITY,
+            "prefix_cache_invalidation": (VERL_PREFIX_CACHE_WEIGHT_UPDATE_INVALIDATION),
+        }
+        if not isinstance(performance, Mapping) or any(
+            performance.get(name) != expected
+            for name, expected in required_prefix_receipt.items()
+        ):
+            raise VerlConfigurationError(
+                "prefix caching requires the method-matrix v2 multimodal hash "
+                "identity and weight-update invalidation receipt"
+            )
     if (
         _path_value(
             config, "actor_rollout_ref.rollout.engine_kwargs.vllm.enable_mm_embeds"

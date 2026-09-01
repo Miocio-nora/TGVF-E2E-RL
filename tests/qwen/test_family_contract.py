@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -30,6 +31,8 @@ from tgvf_rl.observations.store import (
     TrajectoryReplayTensorRefs,
 )
 from tgvf_rl.qwen.base import (
+    InjectedForwardRequest,
+    InjectedVisualBlock,
     ReplayConsumer,
     _prove_native_streaming_injected_request,
     gather_next_token_logprobs,
@@ -40,6 +43,81 @@ from tgvf_rl.qwen.base import (
 )
 from tgvf_rl.qwen.qwen25_vl import Qwen25VLAdapter
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
+
+
+def _decoder_batch_request(
+    *, sequence: int, positions: tuple[int, ...], visual: torch.Tensor
+) -> InjectedForwardRequest:
+    branches = tuple(visual.detach().clone().requires_grad_() for _ in range(3))
+    return InjectedForwardRequest(
+        input_ids=torch.arange(1, sequence + 1, dtype=torch.long).view(1, sequence),
+        attention_mask=torch.ones(1, sequence, dtype=torch.bool),
+        position_ids=torch.arange(sequence, dtype=torch.long).view(1, sequence),
+        visual_blocks=(
+            InjectedVisualBlock(
+                kind="source_image",
+                positions=positions,
+                embeddings=visual,
+                deepstack=branches,
+                deepstack_positions=(positions, positions, positions),
+            ),
+        ),
+        use_cache=False,
+    )
+
+
+def test_qwen3_decoder_batch_matches_rowwise_hidden_loss_and_gradients() -> None:
+    torch.manual_seed(19)
+    rowwise_model = TinyQwen()
+    batched_model = copy.deepcopy(rowwise_model)
+    rowwise_requests = (
+        _decoder_batch_request(
+            sequence=5,
+            positions=(1,),
+            visual=torch.randn(1, 1, 8, requires_grad=True),
+        ),
+        _decoder_batch_request(
+            sequence=7,
+            positions=(2, 3),
+            visual=torch.randn(1, 2, 8, requires_grad=True),
+        ),
+    )
+    batched_requests = tuple(
+        _decoder_batch_request(
+            sequence=request.input_ids.shape[1],
+            positions=request.visual_blocks[0].positions,
+            visual=request.visual_blocks[0]
+            .embeddings.detach()
+            .clone()
+            .requires_grad_(),
+        )
+        for request in rowwise_requests
+    )
+    adapter = Qwen3VLAdapter()
+
+    rowwise = tuple(
+        adapter.forward_injected(rowwise_model, request).hidden_states
+        for request in rowwise_requests
+    )
+    rowwise_loss = sum(value.square().sum() for value in rowwise)
+    rowwise_loss.backward()
+
+    batched = adapter.forward_injected_hidden_batch(batched_model, batched_requests)
+    batched_loss = sum(value.hidden_states.square().sum() for value in batched)
+    batched_loss.backward()
+
+    for expected, actual in zip(rowwise, batched, strict=True):
+        torch.testing.assert_close(actual.hidden_states, expected)
+    torch.testing.assert_close(batched_loss, rowwise_loss)
+    torch.testing.assert_close(
+        batched_model.model.language_model.proj.weight.grad,
+        rowwise_model.model.language_model.proj.weight.grad,
+    )
+    for expected, actual in zip(rowwise_requests, batched_requests, strict=True):
+        torch.testing.assert_close(
+            actual.visual_blocks[0].embeddings.grad,
+            expected.visual_blocks[0].embeddings.grad,
+        )
 
 
 class TinyLanguageModel(nn.Module):

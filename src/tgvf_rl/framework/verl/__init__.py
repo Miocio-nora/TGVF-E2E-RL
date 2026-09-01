@@ -69,10 +69,12 @@ from .data_bridge import (
     worker_tensordict_sidecar_scope,
 )
 from .exact_replay_engine import (
+    BatchedExactReplayResponsePort,
     TGVF_EXACT_REPLAY_MODEL_TYPE,
     ExactReplayForwardEvidence,
     ExactReplayPortFactory,
     ExactReplayResponsePort,
+    ExactReplayResponseRequest,
     ExactReplayResponseResult,
     Qwen3ConfigBoundReplayPortFactory,
     exact_replay_forward_step,
@@ -172,6 +174,7 @@ __all__ = [
     "ACTUAL_RESPONSE_LOGPROBS_FIELD",
     "BEHAVIOR_TRACE_HANDLES_FIELD",
     "BEHAVIOR_TRACE_RECORDS_FIELD",
+    "BatchedExactReplayResponsePort",
     "BRIDGE_SCHEMA_FIELD",
     "BRIDGE_SCHEMA_VERSION",
     "DATAPROTO_META_SCHEMA_FIELD",
@@ -181,6 +184,7 @@ __all__ = [
     "ExactReplayForwardEvidence",
     "ExactReplayPortFactory",
     "ExactReplayResponsePort",
+    "ExactReplayResponseRequest",
     "ExactReplayResponseResult",
     "ExactLoRASnapshotPolicyVersionPort",
     "ExactPolicyBehaviorSnapshotVersionPort",

@@ -177,6 +177,8 @@ _VERIFIER_V1_FIELDS = {
     "semantic_judge",
 }
 _VERIFIER_V2_FIELDS = _VERIFIER_V1_FIELDS | {"teacher_rule"}
+# Immutable pre-Teacher configs use this alias; never rewrite those artifacts.
+_VERIFIER_V1_SCHEMA_LEGACY = "tgvf.policy-selection.t1-source-verifier.v1"
 _SEMANTIC_JUDGE_FIELDS = {
     "provider",
     "repository",
@@ -750,8 +752,8 @@ def load_t1_run_config(
     verifier_schema = verifier.get("schema")
     if selection["kind"] != "teacher_full":
         _exact_fields(verifier, _VERIFIER_V1_FIELDS, field_name="verifier")
-        if verifier_schema != "t1-source-verifier-v1":
-            raise ValueError("verifier.schema must be 't1-source-verifier-v1'")
+        if verifier_schema not in {"t1-source-verifier-v1", _VERIFIER_V1_SCHEMA_LEGACY}:
+            raise ValueError("verifier.schema is not an accepted v1 identity")
     else:
         _exact_fields(verifier, _VERIFIER_V2_FIELDS, field_name="verifier")
         if verifier_schema != "t1-source-verifier-v2":

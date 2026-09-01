@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -214,12 +215,24 @@ def test_tfree_runtime_uses_configured_answer_protocol_repeat_only() -> None:
     assert judge.calls == 0
 
 
-def test_stage3_accepts_configured_answer_judge_fallback_identity() -> None:
+@pytest.mark.parametrize(
+    "answer_route",
+    (
+        "qwen2.5_72b_semantic_fallback",
+        (
+            "explicit_alternate_semantic_fallback:"
+            "stage3-test/answer-judge@v1:" + "8" * 64
+        ),
+    ),
+)
+def test_stage3_accepts_configured_answer_judge_fallback_identity(
+    answer_route: str,
+) -> None:
     judge_identity = _identity("answer-judge", "8")
     scorer, _ = _scorer(
         answer_result_identity=judge_identity,
         answer_judge_identity=judge_identity,
-        answer_route="qwen2.5_72b_semantic_fallback",
+        answer_route=answer_route,
     )
     trajectory = replace(
         _record(tool_call_count=1).trajectory_payload,
@@ -233,6 +246,72 @@ def test_stage3_accepts_configured_answer_judge_fallback_identity() -> None:
     )
 
     assert scored.answer_verification.verifier_identity == judge_identity
+    assert scored.answer_verification.route == answer_route
+
+
+def test_stage3_async_scorer_awaits_answer_and_visual_judge_hooks() -> None:
+    trajectory = replace(
+        _record(tool_call_count=1).trajectory_payload,
+        final_answer="fixture answer",
+        stop=TrajectoryStop.FINAL_ANSWER,
+    )
+    scorer, _ = _scorer()
+    answer_async_calls = 0
+    visual_async_calls = 0
+
+    class AsyncAnswerVerifier:
+        def verify(self, _context: object) -> AnswerVerificationResult:
+            raise AssertionError("async scorer must not call sync answer verifier")
+
+        async def verify_async(self, context: object) -> AnswerVerificationResult:
+            nonlocal answer_async_calls
+            answer_async_calls += 1
+            await asyncio.sleep(0)
+            return AnswerVerificationResult(
+                correct=True,
+                route="fixture-rule",
+                evidence="async fixture",
+                verifier_identity=scorer.spec.answer_verifier_identity,
+            )
+
+    class AsyncVisualJudge:
+        def judge(self, **_kwargs: object) -> Stage3VisualQualityJudgement:
+            raise AssertionError("async scorer must not call sync visual judge")
+
+        async def judge_async(
+            self,
+            *,
+            request: object,
+            trajectory: object,
+            context: object,
+        ) -> Stage3VisualQualityJudgement:
+            nonlocal visual_async_calls
+            del request
+            visual_async_calls += 1
+            await asyncio.sleep(0)
+            return Stage3VisualQualityJudgement(
+                trajectory_id=trajectory.identity.canonical_id,
+                sample_id=context.sample_id,
+                successful_observation_count=(
+                    context.successful_tgvf_observation_count
+                ),
+                focus_score=QualityJudgeScore.PASS,
+                grounding_score=QualityJudgeScore.PASS,
+                judge_identity=scorer.spec.visual_judge_identity,
+            )
+
+    scorer.answer_verifier = AsyncAnswerVerifier()
+    scorer.visual_quality_judge = AsyncVisualJudge()
+    scored = asyncio.run(
+        scorer.score_async(
+            request=SimpleNamespace(identity=trajectory.identity),
+            trajectory=trajectory,
+        )
+    )
+
+    assert scored.total == pytest.approx(4.5)
+    assert answer_async_calls == 1
+    assert visual_async_calls == 1
 
 
 def test_stage3_rejects_unbound_answer_verifier_identity() -> None:

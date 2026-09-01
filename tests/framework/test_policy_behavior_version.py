@@ -179,15 +179,25 @@ class _Upstream:
         return "slept"
 
 
+class _CheckpointReplica:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def sleep_for_checkpoint(self) -> str:
+        self.calls += 1
+        return "retained"
+
+
 def test_full_qwen_manager_reuses_upstream_transport_and_publishes_after_ack(
     tmp_path: Path,
 ) -> None:
     environment = _environment(tmp_path)
     upstream = _Upstream()
+    replica = _CheckpointReplica()
     manager = FullQwenBehaviorCheckpointEngineManager(
         config=object(),
         actor_wg=object(),
-        replicas=[object()],
+        replicas=[replica],
         upstream_manager_factory=lambda **_kwargs: upstream,
         environment=environment,
     )
@@ -202,4 +212,6 @@ def test_full_qwen_manager_reuses_upstream_transport_and_publishes_after_ack(
     assert load_latest_policy_behavior_snapshot(state) == (
         manager.last_behavior_snapshot
     )
-    assert manager.requires_post_checkpoint_weight_resync is True
+    assert manager.checkpoint_sleep_preserves_weights is True
+    assert manager.sleep_replicas_for_checkpoint() == ("retained",)
+    assert replica.calls == 1

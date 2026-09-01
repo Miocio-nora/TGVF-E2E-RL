@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.public_api_compat import rebind_public_class
 from tgvf_rl.protocol import (
     StandardToolError,
@@ -24,7 +25,7 @@ from .config import PolicyMethodProfile
 
 if TYPE_CHECKING:
     from tgvf_rl.conditioning import TargetConditioningConfig
-    from tgvf_rl.contracts.identity import ArtifactIdentity, CodeIdentity, ModelIdentity
+    from tgvf_rl.contracts.identity import CodeIdentity, ModelIdentity
     from tgvf_rl.data import (
         DeepEyes47KRuntimeBinding,
         PolicyTeacherQuarterMixRuntimeBinding,
@@ -56,6 +57,7 @@ POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA = (
     "policy-e2e-explicit-observation-run-config-v1"
 )
 POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA = "policy-e2e-method-matrix-run-config-v1"
+POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA = "policy-e2e-method-matrix-run-config-v2"
 POLICY_E2E_CROP_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA = (
     "policy-e2e-crop-tgvf-tfree-deepeyes-matched-pixel512-parity-run-config-v1"
 )
@@ -92,6 +94,7 @@ POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS = frozenset(
 POLICY_E2E_METHOD_RUN_CONFIG_SCHEMAS = frozenset(
     {
         POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA,
         *POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
     }
 )
@@ -106,6 +109,8 @@ POLICY_E2E_SMOKE_SEED_DERIVATION_NAME = "content-addressed-vllm-turn-rng-v1"
 POLICY_E2E_MIXED_REWARD_TASK = "mixed"
 POLICY_E2E_MIXED_ANSWER_VERIFIER = "rule_first_qwen25_72b"
 POLICY_E2E_MIXED_JUDGE_MODE = "qwen25_72b_semantic_fallback"
+POLICY_E2E_MIXED_ALTERNATE_ANSWER_VERIFIER = "rule_first_explicit_alternate"
+POLICY_E2E_MIXED_ALTERNATE_JUDGE_MODE = "explicit_alternate_semantic_fallback"
 POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER = (
     "visual_always_qwen25_72b_thinklite_rule_first"
 )
@@ -198,6 +203,42 @@ POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256 = _fixed_contract_sha256(
         "mcq_judge_calls": "forbidden",
     }
 )
+
+
+def policy_e2e_mixed_alternate_answer_verifier_sha256(
+    model_identity: ArtifactIdentity,
+) -> str:
+    """Bind the rule-first verifier contract to one exact alternate model.
+
+    The default verifier digest explicitly names Qwen2.5-72B in its semantic
+    fallback routes.  Reusing that digest for another model would make reward
+    receipts scientifically false, so every explicit alternate derives a new
+    verifier digest from the complete loaded model identity.
+    """
+
+    if not isinstance(model_identity, ArtifactIdentity):
+        raise TypeError("alternate verifier requires an ArtifactIdentity")
+    identity_payload = {
+        "namespace": model_identity.namespace,
+        "name": model_identity.name,
+        "version": model_identity.version,
+        "sha256": model_identity.sha256,
+    }
+    return _fixed_contract_sha256(
+        {
+            "schema": "policy-e2e-mixed-answer-verifier-explicit-alternate-v1",
+            "routes": {
+                "mcq": _POLICY_E2E_MCQ_CANDIDATE_CONTRACT_V2,
+                "math": "normalized_exact_then_numeric_then_explicit_alternate",
+                "open_vqa": "normalized_exact_then_explicit_alternate",
+            },
+            "semantic_fallback_model_identity": identity_payload,
+            "judge_failure": "abort_reward_batch",
+            "mcq_judge_calls": "forbidden",
+        }
+    )
+
+
 # Historical verifier identities remain readable only for immutable evaluation
 # snapshots.  They are not accepted by the default training/launch loader: the
 # implementation behind these identities was superseded, so silently treating
@@ -399,6 +440,37 @@ class SmokeRewardBinding:
     visual_quality_judge_config_sha256: str | None = None
     visual_quality_judge_identity: ArtifactIdentity | None = None
     visual_quality_judge_mode: str | None = None
+    judge_model_route: str = "qwen2.5_72b"
+    alternate_judge_model_name: str | None = None
+    alternate_judge_model_identity: ArtifactIdentity | None = None
+    alternate_semantics_acknowledged: bool = False
+
+    def __post_init__(self) -> None:
+        if self.judge_model_route not in {"qwen2.5_72b", "explicit_alternate"}:
+            raise ValueError("reward judge model route is invalid")
+        if type(self.alternate_semantics_acknowledged) is not bool:
+            raise TypeError("alternate judge semantic acknowledgement must be bool")
+        if self.judge_model_route == "qwen2.5_72b":
+            if (
+                self.alternate_judge_model_name is not None
+                or self.alternate_judge_model_identity is not None
+                or self.alternate_semantics_acknowledged
+            ):
+                raise ValueError(
+                    "default Qwen2.5-72B reward route cannot carry alternate binding"
+                )
+            return
+        if (
+            not isinstance(self.alternate_judge_model_name, str)
+            or not self.alternate_judge_model_name.strip()
+        ):
+            raise ValueError("explicit alternate judge requires its model name")
+        if not isinstance(self.alternate_judge_model_identity, ArtifactIdentity):
+            raise ValueError("explicit alternate judge requires its model identity")
+        if not self.alternate_semantics_acknowledged:
+            raise ValueError(
+                "explicit alternate judge requires semantic acknowledgement"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -475,6 +547,99 @@ class SmokeCapacityBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class SmokePerformanceBinding:
+    """Explicit execution-only performance choices for one Policy run.
+
+    The binding deliberately distinguishes the rollout-logprob *bypass* from
+    disabling behavior-logprob collection. Exact replay still records the
+    post-transform behavior probabilities; the bypass avoids recomputing the
+    old-policy logprobs after rollout. Judge concurrency is explicitly local
+    to each AgentLoop worker process, never a run-global request budget.
+    """
+
+    dynamic_token_batching: bool
+    use_remove_padding: bool
+    enable_gradient_checkpointing: bool
+    vllm_enable_prefix_caching: bool
+    vllm_enable_chunked_prefill: bool
+    vllm_enable_cuda_graph: bool
+    vllm_cuda_graph_capture_sizes: tuple[int, ...]
+    vllm_tensor_parallel_size: int
+    rollout_logprob_bypass: bool
+    reference_replay_mode: str
+    judge_dispatch_mode: str
+    judge_max_concurrency_per_worker: int
+
+    def __post_init__(self) -> None:
+        boolean_fields = (
+            "dynamic_token_batching",
+            "use_remove_padding",
+            "enable_gradient_checkpointing",
+            "vllm_enable_prefix_caching",
+            "vllm_enable_chunked_prefill",
+            "vllm_enable_cuda_graph",
+            "rollout_logprob_bypass",
+        )
+        for name in boolean_fields:
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"performance.{name} must be boolean")
+        if (
+            type(self.vllm_tensor_parallel_size) is not int
+            or self.vllm_tensor_parallel_size <= 0
+        ):
+            raise ValueError(
+                "performance.vllm_tensor_parallel_size must be a positive integer"
+            )
+        if not isinstance(self.vllm_cuda_graph_capture_sizes, tuple) or any(
+            type(value) is not int or value <= 0
+            for value in self.vllm_cuda_graph_capture_sizes
+        ):
+            raise ValueError(
+                "performance.vllm_cuda_graph_capture_sizes must contain positive integers"
+            )
+        if tuple(sorted(set(self.vllm_cuda_graph_capture_sizes))) != (
+            self.vllm_cuda_graph_capture_sizes
+        ):
+            raise ValueError(
+                "performance.vllm_cuda_graph_capture_sizes must be strictly "
+                "increasing and unique"
+            )
+        if not self.vllm_enable_cuda_graph and self.vllm_cuda_graph_capture_sizes:
+            raise ValueError("disabled CUDA graph requires empty capture sizes")
+        if self.rollout_logprob_bypass is not True:
+            raise ValueError(
+                "exact replay requires performance.rollout_logprob_bypass=true"
+            )
+        if self.reference_replay_mode not in {"off", "full_diagnostic"}:
+            raise ValueError(
+                "performance.reference_replay_mode must be off or full_diagnostic"
+            )
+        if self.judge_dispatch_mode not in {
+            "inherit",
+            "inline",
+            "dedicated_thread_pool",
+        }:
+            raise ValueError(
+                "performance.judge_dispatch_mode must be inherit, inline, or "
+                "dedicated_thread_pool"
+            )
+        if (
+            type(self.judge_max_concurrency_per_worker) is not int
+            or not 1 <= self.judge_max_concurrency_per_worker <= 256
+        ):
+            raise ValueError(
+                "performance.judge_max_concurrency_per_worker must be in [1, 256]"
+            )
+        if (
+            self.judge_dispatch_mode in {"inherit", "inline"}
+            and self.judge_max_concurrency_per_worker != 1
+        ):
+            raise ValueError(
+                "inherit/inline judge dispatch requires maximum concurrency 1"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class SmokeFrameworkBinding:
     agent_loop_config_path: Path
     agent_loop_config_sha256: str
@@ -528,6 +693,7 @@ class PolicyE2ESmokeRunConfig:
     source_path: Path
     source_sha256: str
     canonical_json: str
+    performance: SmokePerformanceBinding | None = None
     method: PolicyMethodMatrixBinding | None = None
     deepeyes_control: DeepEyesStrictControlBinding | None = None
     formal_pilot: bool = False
@@ -543,6 +709,7 @@ class PolicyE2ESmokeRunConfig:
             POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA: False,
             **{
                 schema: False
                 for schema in POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS
@@ -553,7 +720,10 @@ class PolicyE2ESmokeRunConfig:
         if self.formal_pilot is not accepted[self.schema_version]:
             raise ValueError("policy E2E run formal_pilot mode differs from schema")
         legacy_profile = pixel512_parity_method_for_schema(self.schema_version)
-        if self.schema_version == POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA:
+        if self.schema_version in {
+            POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA,
+            POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA,
+        }:
             if self.method is None or self.method.legacy_schema_alias is not None:
                 raise ValueError(
                     "method-matrix schema requires an explicit method binding"
@@ -567,6 +737,17 @@ class PolicyE2ESmokeRunConfig:
                 raise ValueError("legacy PRL26 schema method binding differs")
         elif self.method is not None:
             raise ValueError("non-method run config cannot carry a method binding")
+        if self.performance is not None and not isinstance(
+            self.performance, SmokePerformanceBinding
+        ):
+            raise TypeError("performance must be SmokePerformanceBinding or None")
+        if (
+            self.schema_version == POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA
+            and self.performance is None
+        ):
+            raise ValueError(
+                "method-matrix v2 requires an explicit performance binding"
+            )
 
     @property
     def identity_sha256(self) -> str:
@@ -594,6 +775,7 @@ _RUN_CONFIG_SCHEMA_TYPES = (
     SmokeAccumulationBinding,
     SmokeDistributedBinding,
     SmokeCapacityBinding,
+    SmokePerformanceBinding,
     SmokeFrameworkBinding,
     SmokeTrainingBinding,
     SmokeOutputBinding,
@@ -620,6 +802,8 @@ __all__ = [
     "POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA",
+    "POLICY_E2E_MIXED_ALTERNATE_ANSWER_VERIFIER",
+    "POLICY_E2E_MIXED_ALTERNATE_JUDGE_MODE",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER_V1_SHA256",
@@ -627,6 +811,7 @@ __all__ = [
     "POLICY_E2E_MIXED_REWARD_TASK",
     "POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA",
     "POLICY_E2E_METHOD_RUN_CONFIG_SCHEMAS",
     "POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS",
@@ -656,6 +841,7 @@ __all__ = [
     "SmokeFrameworkBinding",
     "SmokeOptimizerBinding",
     "SmokeOutputBinding",
+    "SmokePerformanceBinding",
     "SmokePrecisionBinding",
     "SmokeProtocolBinding",
     "SmokeRepresentationBinding",
@@ -664,5 +850,6 @@ __all__ = [
     "SmokeSchedulerBinding",
     "SmokeSelectedMCQSample",
     "SmokeTrainingBinding",
+    "policy_e2e_mixed_alternate_answer_verifier_sha256",
     "pixel512_parity_method_for_schema",
 ]

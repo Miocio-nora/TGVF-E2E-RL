@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -309,6 +310,7 @@ def test_rewarded_output_builder_sets_public_reward_score_and_exact_sidecars() -
         agent_loop_output_cls=AgentLoopOutput,
     )
     output = builder(trajectory)
+    async_output = asyncio.run(builder.build_async(trajectory))
     public = output.as_dict()
 
     assert output.reward_score == pytest.approx(0.8)
@@ -318,4 +320,6 @@ def test_rewarded_output_builder_sets_public_reward_score_and_exact_sidecars() -
     assert output.extra_fields["tgvf_reward_trajectory_id"] == (
         trajectory.identity.canonical_id
     )
+    assert async_output.reward_score == pytest.approx(output.reward_score)
+    assert async_output.extra_fields == output.extra_fields
     assert judge.calls == 0

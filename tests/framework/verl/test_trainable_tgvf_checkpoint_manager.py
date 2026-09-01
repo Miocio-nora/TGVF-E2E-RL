@@ -37,11 +37,18 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     }
 
 
+class _CheckpointReplica:
+    def __init__(self) -> None:
+        self.servers = (object(),)
+        self.checkpoint_sleep_calls = 0
+
+    async def sleep_for_checkpoint(self) -> str:
+        self.checkpoint_sleep_calls += 1
+        return "retained"
+
+
 def _replicas() -> list[object]:
-    return [
-        SimpleNamespace(servers=(object(),)),
-        SimpleNamespace(servers=(object(),)),
-    ]
+    return [_CheckpointReplica(), _CheckpointReplica()]
 
 
 def _config(*, adapter_update_mode: str) -> SimpleNamespace:
@@ -186,11 +193,21 @@ def test_manager_syncs_step_zero_qwen_then_rp66_and_waits_for_all_acks(
     )
 
 
-def test_manager_declares_post_checkpoint_full_weight_resync() -> None:
-    assert (
-        TrainableTGVFCheckpointEngineManager.requires_post_checkpoint_weight_resync
-        is True
+def test_manager_uses_retained_weight_checkpoint_sleep(tmp_path: Path) -> None:
+    environment = _environment(tmp_path)
+    replicas = _replicas()
+    manager = TrainableTGVFCheckpointEngineManager(
+        config=object(),
+        actor_wg=object(),
+        replicas=replicas,
+        upstream_manager_factory=lambda **_kwargs: _PublishingUpstream(environment, []),
+        rollout_manager_factory=lambda _replicas: _AcknowledgingRolloutManager([]),
+        environment=environment,
     )
+
+    assert manager.checkpoint_sleep_preserves_weights is True
+    assert manager.sleep_replicas_for_checkpoint() == ("retained", "retained")
+    assert [replica.checkpoint_sleep_calls for replica in replicas] == [1, 1]
 
 
 def test_manager_preserves_async_surface_for_later_optimizer_steps(

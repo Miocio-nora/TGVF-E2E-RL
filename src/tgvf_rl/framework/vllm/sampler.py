@@ -17,6 +17,7 @@ derivation remain content-identified injected run inputs.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import hashlib
 import json
@@ -35,6 +36,7 @@ from tgvf_rl.contracts.tokens import (
     SamplingIdentity,
     TokenSpan,
 )
+from tgvf_rl.framework.async_worker import run_side_effecting_in_thread
 from tgvf_rl.protocol.native import NativeAssistantDialect
 from tgvf_rl.protocol.schema import (
     SampledAssistantTurn,
@@ -539,10 +541,49 @@ class VLLMPolicySampler:
         *,
         turn_index: int,
     ) -> SampledPolicyTurn:
+        request, normalized = self._build_request(
+            prompt_token_ids,
+            sampling_parameters,
+            turn_index=turn_index,
+        )
+        response = self.client.generate(request)
+        return self._sampled_turn(request, response, normalized)
+
+    async def sample_async(
+        self,
+        prompt_token_ids: tuple[int, ...],
+        sampling_parameters: Mapping[str, object],
+        *,
+        turn_index: int,
+    ) -> SampledPolicyTurn:
+        """Await a native async client while preserving the sync envelope logic."""
+
+        generate_async = getattr(self.client, "generate_async", None)
+        if not callable(generate_async):
+            raise TypeError("async policy sampling requires client.generate_async()")
+        request, normalized = await run_side_effecting_in_thread(
+            self._build_request,
+            prompt_token_ids,
+            sampling_parameters,
+            turn_index=turn_index,
+        )
+        response = await generate_async(request)
+        return await asyncio.to_thread(
+            self._sampled_turn,
+            request,
+            response,
+            normalized,
+        )
+
+    def _build_request(
+        self,
+        prompt_token_ids: tuple[int, ...],
+        sampling_parameters: Mapping[str, object],
+        *,
+        turn_index: int,
+    ) -> tuple[VLLMPolicyTurnRequest, Mapping[str, object]]:
         # Keep the optional vLLM package importable while ``agent_loop`` itself
         # is being initialized through ``tgvf_rl.policy``.
-        from tgvf_rl.environment.agent_loop import SampledPolicyTurn
-
         prompt = tuple(prompt_token_ids)
         if not prompt or any(
             type(token_id) is not int or token_id < 0 for token_id in prompt
@@ -593,7 +634,18 @@ class VLLMPolicySampler:
             decoding=self.decoding,
             termination_contract_sha256=self.termination.sha256,
         )
-        response = self.client.generate(request)
+        return request, normalized
+
+    def _sampled_turn(
+        self,
+        request: VLLMPolicyTurnRequest,
+        response: object,
+        normalized: Mapping[str, object],
+    ) -> SampledPolicyTurn:
+        # Keep the optional vLLM package importable while ``agent_loop`` itself
+        # is being initialized through ``tgvf_rl.policy``.
+        from tgvf_rl.environment.agent_loop import SampledPolicyTurn
+
         if not isinstance(response, VLLMPolicyTurnResponse):
             raise TypeError("vLLM client must return VLLMPolicyTurnResponse")
         self._validate_response(request, response, normalized)
@@ -607,7 +659,7 @@ class VLLMPolicySampler:
         sampling = _sampling_identity(
             policy=self.behavior_policy,
             backend_version=self.client.backend_version,
-            rng=rng,
+            rng=request.rng,
             parameters=normalized,
         )
         return SampledPolicyTurn(

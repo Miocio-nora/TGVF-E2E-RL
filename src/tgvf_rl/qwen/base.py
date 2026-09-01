@@ -217,6 +217,20 @@ class RecordedReplayResult:
     visual_position_mask: torch.Tensor
 
 
+@dataclass(frozen=True, slots=True)
+class RecordedReplayHiddenResult:
+    """Decoder output before the vocabulary projection.
+
+    Exact-replay workers use this narrower result when selected-token log
+    probabilities are materialized by the veRL fused LM-head boundary.  It is
+    also the safe batching seam: visual requests may be constructed row by
+    row, while their already-injected decoder inputs are forwarded together.
+    """
+
+    hidden_states: torch.Tensor
+    visual_position_mask: torch.Tensor
+
+
 class QwenVLMFamilyAdapter(ABC):
     capabilities: FamilyCapabilities
 

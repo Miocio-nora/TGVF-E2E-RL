@@ -5,14 +5,26 @@ from dataclasses import replace
 from pathlib import Path
 import sys
 
+from omegaconf import OmegaConf
 import pytest
 
 from tgvf_rl.framework.verl.launcher import (
+    _checkpoint_frequency,
+    _vllm_rollout_replica_count,
     build_policy_e2e_smoke_verl_plan,
     compose_upstream_verl_config,
 )
+from tgvf_rl.framework.verl.compatibility import (
+    VerlConfigurationError,
+    validate_verl_config_mapping,
+)
 from tgvf_rl.framework.verl.full_qwen_checkpoint_manager import (
     FULL_QWEN_CHECKPOINT_ENGINE_MANAGER_FQN,
+)
+from tgvf_rl.framework.verl.dynamic_token_loss_contract import (
+    DYNAMIC_GLOBAL_TOKEN_POLICY_LOSS_MODE,
+    METHOD_MATRIX_BYPASS_LOSS_MODULE,
+    METHOD_MATRIX_BYPASS_LOSS_REGISTRY_NAME,
 )
 from tgvf_rl.framework.verl.method_matrix_launcher import (
     POLICY_ORIGINAL_EVAL_BASELINE,
@@ -64,6 +76,14 @@ from tests.policy.test_run_config import (
     _write_config,
     _write_minimal_upstream_config_directory,
 )
+
+
+def test_periodic_checkpoint_plan_uses_ten_step_upstream_gate() -> None:
+    assert _checkpoint_frequency((0, 10, 20, 30, 40, 50), maximum_step=50) == 10
+
+
+def test_nonuniform_checkpoint_plan_uses_exact_schedule_gcd_gate() -> None:
+    assert _checkpoint_frequency((0, 10, 20, 45, 80), maximum_step=80) == 5
 
 
 MethodConfigFactory = Callable[..., tuple[Path, str]]
@@ -286,6 +306,174 @@ def test_method_plan_binds_one_native_deepstack_control_to_actor_and_rollout(
         ]
         is native_deepstack_enabled
     )
+
+
+def test_method_v2_propagates_optimized_dynamic_surface_and_composes(
+    method_config_factory: MethodConfigFactory,
+    tmp_path: Path,
+) -> None:
+    config, _ = _load_method_config(
+        method_config_factory,
+        1,
+        performance_v2=True,
+    )
+    plan = route_policy_method_matrix_plan(
+        config,
+        build_policy_e2e_smoke_verl_plan(config),
+    )
+    values = plan.overrides
+
+    assert values["actor_rollout_ref.actor.use_dynamic_bsz"] is True
+    assert values["actor_rollout_ref.rollout.log_prob_use_dynamic_bsz"] is True
+    assert values["actor_rollout_ref.ref.log_prob_use_dynamic_bsz"] is True
+    assert values["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] is None
+    assert values["actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu"] is None
+    assert values["actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu"] is None
+    assert values["actor_rollout_ref.actor.policy_loss.loss_mode"] == (
+        DYNAMIC_GLOBAL_TOKEN_POLICY_LOSS_MODE
+    )
+    assert values["actor_rollout_ref.model.use_remove_padding"] is True
+    assert values["actor_rollout_ref.model.enable_gradient_checkpointing"] is True
+    assert values["actor_rollout_ref.rollout.enable_prefix_caching"] is True
+    assert values["actor_rollout_ref.rollout.enable_chunked_prefill"] is True
+    assert values["actor_rollout_ref.rollout.enforce_eager"] is False
+    assert values["actor_rollout_ref.rollout.cudagraph_capture_sizes"] == [1, 2, 4, 8]
+    assert values["actor_rollout_ref.rollout.tensor_model_parallel_size"] == 1
+    assert values["actor_rollout_ref.rollout.data_parallel_size"] == 1
+    assert values["actor_rollout_ref.rollout.pipeline_model_parallel_size"] == 1
+    assert values["actor_rollout_ref.rollout.disaggregation.enabled"] is False
+    assert values["actor_rollout_ref.rollout.calculate_log_probs"] is True
+    assert (
+        values["actor_rollout_ref.actor.policy_loss.rollout_correction.bypass_mode"]
+        is True
+    )
+    assert values["algorithm.rollout_correction.bypass_mode"] is True
+    assert plan.external_components["actor_loss"] == (
+        DYNAMIC_GLOBAL_TOKEN_POLICY_LOSS_MODE
+    )
+    assert plan.external_components["actor_execution_loss"] == (
+        METHOD_MATRIX_BYPASS_LOSS_REGISTRY_NAME
+    )
+    assert plan.external_components["actor_execution_loss_module"] == (
+        METHOD_MATRIX_BYPASS_LOSS_MODULE
+    )
+    performance = values["actor_rollout_ref.rollout.custom"]["performance"]
+    assert performance["source_schema_version"] == config.schema_version
+    assert performance["prefix_cache_identity_basis"] == (
+        "vllm-0.12-block-hash-mm-feature-identifier"
+    )
+    assert performance["prefix_cache_invalidation"] == (
+        "verl-clear-kv-cache-after-weight-update"
+    )
+    assert performance["judge_max_concurrency_per_worker"] == 8
+    assert performance["reference_replay_mode"] == "off"
+    assert (
+        values["actor_rollout_ref.rollout.custom"]["reference_diagnostic"]["enabled"]
+        is False
+    )
+    assert performance["judge_concurrency_scope"] == ("agent_loop_worker_process_local")
+    assert performance["vllm_data_parallel_size"] == 1
+    assert performance["vllm_pipeline_parallel_size"] == 1
+    assert performance["vllm_disaggregation_enabled"] is False
+    assert performance["derived_vllm_rollout_replicas"] == (
+        config.distributed.world_size
+        // (
+            config.performance.vllm_tensor_parallel_size
+            * performance["vllm_data_parallel_size"]
+            * performance["vllm_pipeline_parallel_size"]
+        )
+    )
+    drifted_values = dict(values)
+    drifted_custom = dict(values["actor_rollout_ref.rollout.custom"])
+    drifted_performance = dict(performance)
+    drifted_performance["derived_vllm_rollout_replicas"] += 1
+    drifted_custom["performance"] = drifted_performance
+    drifted_values["actor_rollout_ref.rollout.custom"] = drifted_custom
+    with pytest.raises(ValueError, match="rollout replica receipt differs"):
+        replace(plan, overrides=drifted_values)
+    drifted_topology = dict(values)
+    drifted_topology["actor_rollout_ref.rollout.data_parallel_size"] = 2
+    with pytest.raises(ValueError, match="performance override drift"):
+        replace(plan, overrides=drifted_topology)
+    actor_batch = values["actor_rollout_ref.rollout.custom"]["actor_batch_contract"]
+    assert actor_batch["dynamic_token_batching"] is True
+    assert actor_batch["upstream_ppo_micro_batch_size_per_gpu_trajectories"] is None
+    assert values["actor_rollout_ref.actor.ppo_max_token_len_per_gpu"] == (
+        config.capacity.actor_ppo_max_token_len_per_gpu
+    )
+    assert values["actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu"] == (
+        config.capacity.rollout_log_prob_max_token_len_per_gpu
+    )
+    assert values["actor_rollout_ref.ref.log_prob_max_token_len_per_gpu"] == (
+        config.capacity.reference_log_prob_max_token_len_per_gpu
+    )
+
+    composed = compose_upstream_verl_config(
+        plan,
+        config_directory=_write_minimal_upstream_config_directory(tmp_path),
+    )
+    assert composed.actor_rollout_ref.actor.use_dynamic_bsz is True
+    assert composed.actor_rollout_ref.rollout.log_prob_use_dynamic_bsz is True
+    assert composed.actor_rollout_ref.ref.log_prob_use_dynamic_bsz is True
+    assert composed.actor_rollout_ref.rollout.cudagraph_capture_sizes == [1, 2, 4, 8]
+    assert composed.actor_rollout_ref.rollout.data_parallel_size == 1
+    assert composed.actor_rollout_ref.rollout.pipeline_model_parallel_size == 1
+    assert composed.actor_rollout_ref.rollout.disaggregation.enabled is False
+    validate_verl_config_mapping(
+        composed,
+        expected_world_size=config.distributed.world_size,
+    )
+    missing_invalidation = OmegaConf.to_container(composed, resolve=True)
+    del missing_invalidation["actor_rollout_ref"]["rollout"]["custom"]["performance"][
+        "prefix_cache_invalidation"
+    ]
+    with pytest.raises(
+        VerlConfigurationError,
+        match="multimodal hash identity and weight-update invalidation",
+    ):
+        validate_verl_config_mapping(
+            missing_invalidation,
+            expected_world_size=config.distributed.world_size,
+        )
+
+
+def test_vllm_rollout_replica_count_derives_ws8_tp1_without_hardcoding() -> None:
+    assert (
+        _vllm_rollout_replica_count(
+            world_size=8,
+            tensor_parallel_size=1,
+            data_parallel_size=1,
+            pipeline_parallel_size=1,
+            disaggregation_enabled=False,
+        )
+        == 8
+    )
+    assert (
+        _vllm_rollout_replica_count(
+            world_size=8,
+            tensor_parallel_size=1,
+            data_parallel_size=2,
+            pipeline_parallel_size=1,
+            disaggregation_enabled=False,
+        )
+        == 4
+    )
+    with pytest.raises(ValueError, match="footprint must divide world size"):
+        _vllm_rollout_replica_count(
+            world_size=8,
+            tensor_parallel_size=3,
+            data_parallel_size=1,
+            pipeline_parallel_size=1,
+            disaggregation_enabled=False,
+        )
+    with pytest.raises(ValueError, match="explicit prefill/decode topology"):
+        _vllm_rollout_replica_count(
+            world_size=8,
+            tensor_parallel_size=1,
+            data_parallel_size=1,
+            pipeline_parallel_size=1,
+            disaggregation_enabled=True,
+        )
 
 
 def test_original_remains_an_eval_baseline_without_a_training_route(

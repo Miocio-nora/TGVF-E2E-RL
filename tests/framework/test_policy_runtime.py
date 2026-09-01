@@ -47,8 +47,14 @@ def _reset_process_runtime() -> None:
 
 
 class _TrajectoryComponents:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
     def build_trajectory_components(self, **kwargs: object) -> object:
         raise AssertionError("unit fixture does not execute a live trajectory")
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 class _SnapshotConsumer:
@@ -87,11 +93,12 @@ class _Builder:
     def __init__(self) -> None:
         self.contexts: list[object] = []
         self.consumer = _SnapshotConsumer()
+        self.components = _TrajectoryComponents()
 
     def build(self, context: object, /) -> PolicyE2ERuntimeProduct:
         self.contexts.append(context)
         return PolicyE2ERuntimeProduct(
-            _TrajectoryComponents(),
+            self.components,
             self.consumer,
             self.consumer,
         )
@@ -360,6 +367,59 @@ def test_hydra_factory_reuses_one_bound_runtime_and_n8_counter_owner(
     assert builder.consumer.applied == [initial.policy_version]
     assert first.identity.worker_placement.worker_index == 2
     assert first.identity.worker_placement.physical_gpu_id == 2
+
+
+def test_process_runtime_owns_and_closes_shared_components_exactly_once(
+    tmp_path: Path,
+) -> None:
+    path, _, _ = _write_config(tmp_path)
+    config = load_policy_e2e_smoke_run_config(path)
+    environment = _environment(
+        tmp_path,
+        run_id=config.run_id,
+        run_identity=config.identity_sha256,
+    )
+    _publish_snapshot(environment, step=0)
+    builder = _Builder()
+    dependencies = {
+        "trainer_config": _trainer_config(config.run_id, config.identity_sha256),
+        "server_manager": object(),
+        "tokenizer": object(),
+        "processor": object(),
+        "dataset_cls": object(),
+        "data_config": object(),
+    }
+
+    first = PolicyE2ERuntimeInvocationFactory(
+        run_config_path=path,
+        expected_run_identity_sha256=config.identity_sha256,
+        runtime_builder=builder,
+        environment=environment,
+        worker_index=0,
+        **dependencies,
+    )
+    second = PolicyE2ERuntimeInvocationFactory(
+        run_config_path=path,
+        expected_run_identity_sha256=config.identity_sha256,
+        runtime_builder=builder,
+        environment=environment,
+        worker_index=0,
+        trainer_config=_trainer_config(config.run_id, config.identity_sha256),
+        server_manager=dependencies["server_manager"],
+        tokenizer=dependencies["tokenizer"],
+        processor=dependencies["processor"],
+        dataset_cls=dependencies["dataset_cls"],
+        data_config=object(),
+    )
+
+    assert first.bound_factory is second.bound_factory
+    assert len(builder.contexts) == 1
+    assert builder.components.close_calls == 0
+
+    _reset_policy_e2e_runtime_singletons_for_tests()
+    _reset_policy_e2e_runtime_singletons_for_tests()
+
+    assert builder.components.close_calls == 1
 
 
 def test_hydra_factory_uses_concrete_default_builder(

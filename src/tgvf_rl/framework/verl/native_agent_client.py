@@ -1,4 +1,4 @@
-"""Exact synchronous client for veRL's async policy server manager.
+"""Exact sync/async client for veRL's async policy server manager.
 
 The accepted upstream veRL ``LLMServerClient.generate`` API returns only
 ``TokenOutput(token_ids, log_probs, stop_reason, extra_fields)``.  It does not
@@ -11,8 +11,9 @@ echo prompt IDs, tag the log-probability convention, or retain vLLM's distinct
 * restores termination only when emitted terminal tokens or the exact requested
   length make the result unambiguous, otherwise failing closed.
 
-The client runs in a worker thread and submits async server-manager calls back
-to the owning event loop with ``asyncio.run_coroutine_threadsafe``.  It has no
+The native async path awaits the server manager directly on its owning event
+loop.  The compatibility sync path can still run in a worker thread and submit
+calls back with ``asyncio.run_coroutine_threadsafe``.  The implementation has no
 dependency on the public native-agent-loop facade.
 """
 
@@ -21,15 +22,18 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping, Sequence
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from dataclasses import dataclass
 import inspect
 import math
 import threading
+from types import MappingProxyType
 
 from tgvf_rl.contracts.errors import (
     ContractUnsetError,
     IdentityMismatchError,
     ReplayMismatchError,
 )
+from tgvf_rl.framework.async_worker import run_side_effecting_in_thread
 from tgvf_rl.framework.vllm import (
     FastTokenizerTokenByteSpanDecoder,
     VLLM_PROCESSED_LOGPROBS_MODE,
@@ -53,8 +57,39 @@ from .compatibility import SUPPORTED_LOGPROBS_MODE
 _LEGACY_PUBLIC_MODULE = "tgvf_rl.framework.verl.native_agent_loop"
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedVerlGeneration:
+    """CPU-validated immutable inputs for one owner-loop server invocation."""
+
+    request_id: str
+    prompt_ids: tuple[int, ...]
+    sampling_params: Mapping[str, object]
+    image_data: tuple[object, ...]
+    mm_processor_kwargs: Mapping[str, object]
+    expected_step: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "prompt_ids", tuple(self.prompt_ids))
+        object.__setattr__(self, "image_data", tuple(self.image_data))
+        object.__setattr__(
+            self,
+            "sampling_params",
+            MappingProxyType(
+                {
+                    key: tuple(value) if isinstance(value, list) else value
+                    for key, value in self.sampling_params.items()
+                }
+            ),
+        )
+        object.__setattr__(
+            self,
+            "mm_processor_kwargs",
+            MappingProxyType(dict(self.mm_processor_kwargs)),
+        )
+
+
 class VerlAsyncServerPolicyTurnClient:
-    """Synchronous turn client backed by one upstream async server manager."""
+    """Exact turn client backed by one upstream async server manager."""
 
     def __init__(
         self,
@@ -127,6 +162,47 @@ class VerlAsyncServerPolicyTurnClient:
             raise RuntimeError(
                 "sync veRL policy client must run in the native-loop worker thread"
             )
+        prepared = self._prepare_generation(request)
+        generation = self._generate_prepared(prepared)
+        try:
+            future = asyncio.run_coroutine_threadsafe(generation, self.event_loop)
+        except BaseException:
+            generation.close()
+            raise
+        try:
+            output = future.result(timeout=self.server_timeout_seconds)
+        except FutureTimeoutError as error:
+            future.cancel()
+            raise TimeoutError("veRL server_manager generation timed out") from error
+        return self._response_from_output(request, output)
+
+    async def generate_async(
+        self,
+        request: VLLMPolicyTurnRequest,
+    ) -> VLLMPolicyTurnResponse:
+        """Await one server-manager turn on its owner loop without a parked thread."""
+
+        if asyncio.get_running_loop() is not self.event_loop:
+            raise RuntimeError(
+                "async veRL policy client must run on the server-manager owner loop"
+            )
+        prepared = await run_side_effecting_in_thread(
+            self._prepare_generation,
+            request,
+        )
+        try:
+            output = await asyncio.wait_for(
+                self._generate_prepared(prepared),
+                timeout=self.server_timeout_seconds,
+            )
+        except asyncio.TimeoutError as error:
+            raise TimeoutError("veRL server_manager generation timed out") from error
+        return await asyncio.to_thread(self._response_from_output, request, output)
+
+    def _prepare_generation(
+        self,
+        request: VLLMPolicyTurnRequest,
+    ) -> _PreparedVerlGeneration:
         if not isinstance(request, VLLMPolicyTurnRequest):
             raise TypeError("veRL policy client requires VLLMPolicyTurnRequest")
         if request.backend_version != self.backend_version:
@@ -158,25 +234,53 @@ class VerlAsyncServerPolicyTurnClient:
         sampling_params = _verl_server_sampling_parameters(
             request, max_model_len=self.max_model_len
         )
-        awaitable = self.server_manager.generate(
+        return _PreparedVerlGeneration(
             request_id=self.sticky_request_id,
-            prompt_ids=list(request.prompt_token_ids),
+            prompt_ids=request.prompt_token_ids,
             sampling_params=sampling_params,
-            image_data=image_data,
+            image_data=tuple(image_data),
+            mm_processor_kwargs=inputs.mm_processor_kwargs,
+            expected_step=request.behavior_policy.optimizer_step,
+        )
+
+    async def _generate_prepared(
+        self,
+        prepared: _PreparedVerlGeneration,
+    ) -> object:
+        """Invoke and await the server manager only on its owning event loop."""
+
+        if asyncio.get_running_loop() is not self.event_loop:
+            raise RuntimeError("veRL server generation must run on its owner loop")
+        if not isinstance(prepared, _PreparedVerlGeneration):
+            raise TypeError("veRL generation requires prepared request inputs")
+        sampling_params = dict(prepared.sampling_params)
+        for field_name in (
+            "stop",
+            "stop_token_ids",
+            "bad_words",
+            "allowed_token_ids",
+        ):
+            if isinstance(sampling_params.get(field_name), tuple):
+                sampling_params[field_name] = list(sampling_params[field_name])
+        awaitable = self.server_manager.generate(
+            request_id=prepared.request_id,
+            prompt_ids=list(prepared.prompt_ids),
+            sampling_params=sampling_params,
+            image_data=list(prepared.image_data),
             video_data=None,
             audio_data=None,
-            mm_processor_kwargs=inputs.mm_processor_kwargs,
-            tgvf_expected_step=request.behavior_policy.optimizer_step,
+            mm_processor_kwargs=dict(prepared.mm_processor_kwargs),
+            tgvf_expected_step=prepared.expected_step,
         )
         if not inspect.isawaitable(awaitable):
             raise TypeError("veRL server_manager.generate() must return an awaitable")
-        future = asyncio.run_coroutine_threadsafe(awaitable, self.event_loop)
-        try:
-            output = future.result(timeout=self.server_timeout_seconds)
-        except FutureTimeoutError as error:
-            future.cancel()
-            raise TimeoutError("veRL server_manager generation timed out") from error
+        return await awaitable
 
+    def _response_from_output(
+        self,
+        request: VLLMPolicyTurnRequest,
+        output: object,
+    ) -> VLLMPolicyTurnResponse:
         token_ids = _token_ids(getattr(output, "token_ids", None))
         logprobs = _selected_processed_logprobs(
             getattr(output, "log_probs", None), token_ids=token_ids

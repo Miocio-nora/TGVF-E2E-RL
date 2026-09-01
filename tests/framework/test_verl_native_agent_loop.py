@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from functools import partial
 from hashlib import sha256
 import pickle
+import threading
 from types import SimpleNamespace
 from typing import get_type_hints
 
@@ -31,6 +34,7 @@ from tgvf_rl.framework.vllm import (
     LiveVLLMTurnContextRegistry,
     VLLMLivePromptInputs,
     VLLMOutputDecodingContract,
+    VLLMPolicySampler,
     VLLMPolicyTurnRequest,
     VLLMPolicyTurnResponse,
     VLLMResolvedObservationPayload,
@@ -86,11 +90,16 @@ def test_async_server_client_leaf_preserves_exact_facade_identity() -> None:
     assert public_client.__qualname__ == "VerlAsyncServerPolicyTurnClient"
     assert public_client.__init__.__module__ == native_agent_loop_facade.__name__
     assert public_client.generate.__module__ == native_agent_loop_facade.__name__
+    assert public_client.generate_async.__module__ == native_agent_loop_facade.__name__
     assert pickle.loads(pickle.dumps(public_client)) is public_client
     assert get_type_hints(public_client.__init__)["prompt_inputs"] is (
         VLLMLivePromptInputsPort
     )
     assert get_type_hints(public_client.generate) == {
+        "request": VLLMPolicyTurnRequest,
+        "return": VLLMPolicyTurnResponse,
+    }
+    assert get_type_hints(public_client.generate_async) == {
         "request": VLLMPolicyTurnRequest,
         "return": VLLMPolicyTurnResponse,
     }
@@ -240,6 +249,33 @@ class _FakeServerManager:
         return SimpleNamespace(
             token_ids=token_ids,
             log_probs=tuple(logprob for _ in token_ids),
+            stop_reason="completed",
+            num_preempted=0,
+            extra_fields={
+                "min_global_steps": POLICY.optimizer_step,
+                "max_global_steps": POLICY.optimizer_step,
+                "logprobs_mode": "processed_logprobs",
+            },
+        )
+
+
+class _ConcurrentFinalServerManager:
+    """Require two native policy awaits to overlap on the owner event loop."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.both_started = asyncio.Event()
+
+    async def generate(self, **kwargs):
+        self.calls.append(kwargs)
+        if len(self.calls) == 2:
+            self.both_started.set()
+        await self.both_started.wait()
+        text = "answer reasoning</think>blue!"
+        token_ids = tuple(ord(character) for character in text)
+        return SimpleNamespace(
+            token_ids=token_ids,
+            log_probs=tuple(-0.25 for _ in token_ids),
             stop_reason="completed",
             num_preempted=0,
             extra_fields={
@@ -555,6 +591,402 @@ def test_upstream_agent_loop_bridge_preserves_multiturn_inputs_and_logprobs() ->
     )
 
 
+def test_async_bridge_never_invokes_whole_sync_trajectory_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokenizer = _CharacterTokenizer()
+    factory = _InvocationFactory(tokenizer)
+
+    def reject_sync_run(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise AssertionError("async bridge must not invoke the whole sync trajectory")
+
+    monkeypatch.setattr(FrameworkNeutralAgentLoop, "run", reject_sync_run)
+    bridge = VerlFrameworkNeutralAgentLoop(
+        trainer_config=object(),
+        server_manager=_FakeServerManager(),
+        tokenizer=tokenizer,
+        processor=None,
+        dataset_cls=object,
+        data_config=object(),
+        invocation_factory=factory,
+        logprobs_mode="processed_logprobs",
+        server_timeout_seconds=5.0,
+    )
+
+    output = asyncio.run(bridge.run({}, data_source="fixture"))
+
+    assert factory.trajectory is not None
+    assert factory.trajectory.stop is TrajectoryStop.FINAL_ANSWER
+    assert output.num_turns == 2
+
+
+@pytest.mark.parametrize(
+    ("target", "method_name"),
+    (
+        (
+            native_agent_loop_facade.VerlAsyncServerPolicyTurnClient,
+            "_response_from_output",
+        ),
+        (
+            native_agent_loop_facade.VerlAsyncServerPolicyTurnClient,
+            "_prepare_generation",
+        ),
+        (VLLMPolicySampler, "_build_request"),
+        (VLLMPolicySampler, "_sampled_turn"),
+    ),
+)
+def test_async_long_response_cpu_stages_do_not_block_owner_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    target: type[object],
+    method_name: str,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    worker_thread_ids: list[int] = []
+    original = getattr(target, method_name)
+
+    def blocking_first_call(*args: object, **kwargs: object) -> object:
+        if not worker_thread_ids:
+            worker_thread_ids.append(threading.get_ident())
+            entered.set()
+            if not release.wait(timeout=1.0):
+                raise AssertionError(
+                    f"{method_name} blocked the server-manager owner event loop"
+                )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(target, method_name, blocking_first_call)
+    tokenizer = _CharacterTokenizer()
+    factory = _InvocationFactory(tokenizer)
+    bridge = VerlFrameworkNeutralAgentLoop(
+        trainer_config=object(),
+        server_manager=_FakeServerManager(),
+        tokenizer=tokenizer,
+        processor=None,
+        dataset_cls=object,
+        data_config=object(),
+        invocation_factory=factory,
+        logprobs_mode="processed_logprobs",
+        server_timeout_seconds=5.0,
+    )
+
+    async def exercise() -> object:
+        owner_thread_id = threading.get_ident()
+        task = asyncio.create_task(bridge.run({}, data_source="fixture"))
+        deadline = asyncio.get_running_loop().time() + 1.0
+        while not entered.is_set():
+            if task.done():
+                return await task
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError(f"{method_name} did not begin")
+            await asyncio.sleep(0)
+        assert threading.get_ident() == owner_thread_id
+        release.set()
+        output = await asyncio.wait_for(task, timeout=2.0)
+        assert len(worker_thread_ids) == 1
+        assert worker_thread_ids[0] != owner_thread_id
+        return output
+
+    output = asyncio.run(exercise())
+
+    assert output.num_turns == 2
+
+
+def test_async_server_manager_generate_stays_on_owner_loop() -> None:
+    class LoopAffinityServerManager(_FakeServerManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.thread_ids: list[int] = []
+            self.event_loops: list[asyncio.AbstractEventLoop] = []
+
+        async def generate(self, **kwargs):
+            self.thread_ids.append(threading.get_ident())
+            self.event_loops.append(asyncio.get_running_loop())
+            return await super().generate(**kwargs)
+
+    async def exercise() -> tuple[int, asyncio.AbstractEventLoop, object]:
+        tokenizer = _CharacterTokenizer()
+        server_manager = LoopAffinityServerManager()
+        bridge = VerlFrameworkNeutralAgentLoop(
+            trainer_config=object(),
+            server_manager=server_manager,
+            tokenizer=tokenizer,
+            processor=None,
+            dataset_cls=object,
+            data_config=object(),
+            invocation_factory=_InvocationFactory(tokenizer),
+            logprobs_mode="processed_logprobs",
+            server_timeout_seconds=5.0,
+        )
+        owner_loop = asyncio.get_running_loop()
+        owner_thread_id = threading.get_ident()
+        await bridge.run({}, data_source="fixture")
+        return owner_thread_id, owner_loop, server_manager
+
+    owner_thread_id, owner_loop, server_manager = asyncio.run(exercise())
+
+    assert server_manager.thread_ids == [owner_thread_id, owner_thread_id]
+    assert server_manager.event_loops == [owner_loop, owner_loop]
+
+
+def test_async_bridge_offloads_sync_invocation_factory_fallback() -> None:
+    tokenizer = _CharacterTokenizer()
+    factory = _InvocationFactory(tokenizer)
+    original_build = factory.build
+    entered = threading.Event()
+    release = threading.Event()
+    worker_thread_ids: list[int] = []
+
+    def blocking_build(**kwargs):
+        worker_thread_ids.append(threading.get_ident())
+        entered.set()
+        if not release.wait(timeout=1.0):
+            raise AssertionError("sync invocation factory blocked the owner loop")
+        return original_build(**kwargs)
+
+    factory.build = blocking_build
+    bridge = VerlFrameworkNeutralAgentLoop(
+        trainer_config=object(),
+        server_manager=_FakeServerManager(),
+        tokenizer=tokenizer,
+        processor=None,
+        dataset_cls=object,
+        data_config=object(),
+        invocation_factory=factory,
+        logprobs_mode="processed_logprobs",
+        server_timeout_seconds=5.0,
+    )
+
+    async def exercise() -> object:
+        owner_thread_id = threading.get_ident()
+        task = asyncio.create_task(bridge.run({}, data_source="fixture"))
+        deadline = asyncio.get_running_loop().time() + 1.0
+        while not entered.is_set():
+            if task.done():
+                return await task
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError("sync invocation factory did not begin")
+            await asyncio.sleep(0)
+        assert threading.get_ident() == owner_thread_id
+        release.set()
+        output = await asyncio.wait_for(task, timeout=2.0)
+        assert len(worker_thread_ids) == 1
+        assert worker_thread_ids[0] != owner_thread_id
+        return output
+
+    output = asyncio.run(exercise())
+
+    assert output.num_turns == 2
+
+
+def test_async_policy_turns_overlap_with_one_sync_worker() -> None:
+    async def exercise() -> tuple[object, object]:
+        tokenizer = _CharacterTokenizer()
+        server_manager = _ConcurrentFinalServerManager()
+        factories = (_InvocationFactory(tokenizer), _InvocationFactory(tokenizer))
+        bridges = tuple(
+            VerlFrameworkNeutralAgentLoop(
+                trainer_config=object(),
+                server_manager=server_manager,
+                tokenizer=tokenizer,
+                processor=None,
+                dataset_cls=object,
+                data_config=object(),
+                invocation_factory=factory,
+                logprobs_mode="processed_logprobs",
+                server_timeout_seconds=5.0,
+            )
+            for factory in factories
+        )
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        outputs = await asyncio.wait_for(
+            asyncio.gather(
+                *(bridge.run({}, data_source="fixture") for bridge in bridges)
+            ),
+            timeout=2.0,
+        )
+        assert len(server_manager.calls) == 2
+        assert all(factory.trajectory is not None for factory in factories)
+        return outputs
+
+    first, second = asyncio.run(exercise())
+
+    assert first.num_turns == second.num_turns == 1
+
+
+def test_async_cancellation_drains_tool_segment_before_sticky_release() -> None:
+    class BlockingFailingToolRuntime:
+        def __init__(self) -> None:
+            self.entered = threading.Event()
+            self.unblock = threading.Event()
+            self.finished = threading.Event()
+
+        def execute(self, parsed_call, context):
+            del parsed_call, context
+            self.entered.set()
+            try:
+                if not self.unblock.wait(timeout=2.0):
+                    raise TimeoutError("test tool worker was not unblocked")
+                raise RuntimeError("worker fault after caller cancellation")
+            finally:
+                self.finished.set()
+
+    class ReleaseTrackingServerManager(_FakeServerManager):
+        def __init__(self, runtime: BlockingFailingToolRuntime) -> None:
+            super().__init__()
+            self.runtime = runtime
+            self.release_seen = asyncio.Event()
+            self.released_before_tool_finished: bool | None = None
+
+        async def release_trajectory(self, request_id: str) -> None:
+            assert request_id == "sticky-sample-0"
+            self.released_before_tool_finished = not self.runtime.finished.is_set()
+            self.release_seen.set()
+
+    async def exercise() -> tuple[bool, bool | None]:
+        tokenizer = _CharacterTokenizer()
+        factory = _InvocationFactory(tokenizer)
+        runtime = BlockingFailingToolRuntime()
+        factory.runtime = runtime
+        server_manager = ReleaseTrackingServerManager(runtime)
+        bridge = VerlFrameworkNeutralAgentLoop(
+            trainer_config=object(),
+            server_manager=server_manager,
+            tokenizer=tokenizer,
+            processor=None,
+            dataset_cls=object,
+            data_config=object(),
+            invocation_factory=factory,
+            logprobs_mode="processed_logprobs",
+            server_timeout_seconds=5.0,
+        )
+        task = asyncio.create_task(bridge.run({}, data_source="fixture"))
+        deadline = asyncio.get_running_loop().time() + 1.0
+        while not runtime.entered.is_set():
+            if task.done():
+                await task
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError("tool worker did not begin")
+            await asyncio.sleep(0)
+
+        task.cancel()
+        await asyncio.sleep(0)
+        released_while_blocked = server_manager.release_seen.is_set()
+        runtime.unblock.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert runtime.finished.is_set()
+        assert server_manager.release_seen.is_set()
+        return released_while_blocked, server_manager.released_before_tool_finished
+
+    released_while_blocked, released_before_tool_finished = asyncio.run(exercise())
+
+    assert released_while_blocked is False
+    assert released_before_tool_finished is False
+
+
+def test_async_cancellation_remains_prompt_during_server_sampling() -> None:
+    class CancellableServerManager:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.generation_cancelled = asyncio.Event()
+            self.release_seen = asyncio.Event()
+
+        async def generate(self, **kwargs):
+            del kwargs
+            self.started.set()
+            try:
+                await asyncio.Future()
+            finally:
+                self.generation_cancelled.set()
+
+        async def release_trajectory(self, request_id: str) -> None:
+            assert request_id == "sticky-sample-0"
+            self.release_seen.set()
+
+    async def exercise() -> tuple[bool, bool]:
+        tokenizer = _CharacterTokenizer()
+        server_manager = CancellableServerManager()
+        bridge = VerlFrameworkNeutralAgentLoop(
+            trainer_config=object(),
+            server_manager=server_manager,
+            tokenizer=tokenizer,
+            processor=None,
+            dataset_cls=object,
+            data_config=object(),
+            invocation_factory=_InvocationFactory(tokenizer),
+            logprobs_mode="processed_logprobs",
+            server_timeout_seconds=5.0,
+        )
+        task = asyncio.create_task(bridge.run({}, data_source="fixture"))
+        await asyncio.wait_for(server_manager.started.wait(), timeout=1.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=0.5)
+        return (
+            server_manager.generation_cancelled.is_set(),
+            server_manager.release_seen.is_set(),
+        )
+
+    generation_cancelled, release_seen = asyncio.run(exercise())
+
+    assert generation_cancelled is True
+    assert release_seen is True
+
+
+def test_async_bridge_prefers_async_output_builder() -> None:
+    class AsyncOutputBuilder:
+        def __init__(self, delegate) -> None:
+            self.delegate = delegate
+            self.called = False
+
+        def __call__(self, trajectory):
+            del trajectory
+            raise AssertionError("sync output builder must not be selected")
+
+        async def build_async(self, trajectory):
+            await asyncio.sleep(0)
+            self.called = True
+            return self.delegate(trajectory)
+
+    class AsyncOutputInvocationFactory(_InvocationFactory):
+        def __init__(self, tokenizer: _CharacterTokenizer) -> None:
+            super().__init__(tokenizer)
+            self.async_builder = None
+
+        def build(self, *, sampling_params, sample_fields):
+            invocation = super().build(
+                sampling_params=sampling_params,
+                sample_fields=sample_fields,
+            )
+            self.async_builder = AsyncOutputBuilder(invocation.output_builder)
+            return replace(invocation, output_builder=self.async_builder)
+
+    tokenizer = _CharacterTokenizer()
+    factory = AsyncOutputInvocationFactory(tokenizer)
+    server_manager = _ConcurrentFinalServerManager()
+    server_manager.both_started.set()
+    bridge = VerlFrameworkNeutralAgentLoop(
+        trainer_config=object(),
+        server_manager=server_manager,
+        tokenizer=tokenizer,
+        processor=None,
+        dataset_cls=object,
+        data_config=object(),
+        invocation_factory=factory,
+        logprobs_mode="processed_logprobs",
+        server_timeout_seconds=5.0,
+    )
+
+    output = asyncio.run(bridge.run({}, data_source="fixture"))
+
+    assert factory.async_builder is not None
+    assert factory.async_builder.called is True
+    assert output.num_turns == 1
+
+
 def test_agent_loop_keeps_public_client_facade_hook_late_bound(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -853,6 +1285,79 @@ def test_bound_invocation_factory_accepts_async_only_trajectory_builder() -> Non
     assert invocation.request.behavior_policy == POLICY
     assert invocation.request.identity.rollout_index == 0
     assert len(components.calls) == 1
+
+
+def test_bound_invocation_factory_offloads_sync_components_fallback() -> None:
+    class BlockingTrajectoryComponents(_TrajectoryComponents):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = threading.Event()
+            self.release = threading.Event()
+            self.worker_thread_ids: list[int] = []
+
+        def build_trajectory_components(self, **kwargs):
+            self.worker_thread_ids.append(threading.get_ident())
+            self.entered.set()
+            if not self.release.wait(timeout=1.0):
+                raise AssertionError("sync components builder blocked the owner loop")
+            return super().build_trajectory_components(**kwargs)
+
+    sampling = PilotSamplingConfig().bind_run_inputs(
+        min_p=0.0,
+        stop_token_ids=(ord("!"),),
+        stop_strings=("</tool_call>",),
+        include_stop_str_in_output=True,
+        ignore_eos=False,
+    )
+    components = BlockingTrajectoryComponents()
+    factory = BoundVerlNativeAgentLoopInvocationFactory(
+        run_id=POLICY.run_id,
+        model=ModelIdentity("qwen3_vl", "fixture", "/fixture", 151_669, SHA0),
+        sampling_contract=sampling,
+        policy_version=_CurrentPolicy(),
+        trajectory_components=components,
+        decoding=DECODING,
+        termination=TERMINATION,
+        rollout_master_seed=42,
+        max_model_len=16_384,
+    )
+
+    async def exercise() -> object:
+        owner_thread_id = threading.get_ident()
+        task = asyncio.create_task(
+            factory.build_async(
+                sampling_params={
+                    "temperature": 1.0,
+                    "top_p": 1.0,
+                    "top_k": -1,
+                    "repetition_penalty": 1.0,
+                    "logprobs": True,
+                },
+                sample_fields={
+                    "sample_id": "sample-sync-fallback",
+                    "uid": "upstream-group-sync-fallback",
+                    "index": 0,
+                    "initial_prompt_token_ids": (10, 20, 30),
+                },
+            )
+        )
+        deadline = asyncio.get_running_loop().time() + 1.0
+        while not components.entered.is_set():
+            if task.done():
+                return await task
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError("sync components builder did not begin")
+            await asyncio.sleep(0)
+        assert threading.get_ident() == owner_thread_id
+        components.release.set()
+        invocation = await asyncio.wait_for(task, timeout=2.0)
+        assert len(components.worker_thread_ids) == 1
+        assert components.worker_thread_ids[0] != owner_thread_id
+        return invocation
+
+    invocation = asyncio.run(exercise())
+
+    assert invocation.request.identity.rollout_index == 0
 
 
 def test_bound_invocation_factory_assigns_exactly_eight_group_indices() -> None:

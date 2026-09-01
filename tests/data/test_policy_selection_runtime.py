@@ -231,6 +231,17 @@ def _load_run(tmp_path: Path, record: dict[str, object] | None = None):
     return load_t1_run_config(path, verify_data_files=True)
 
 
+def test_loader_preserves_namespaced_historical_v1_verifier_schema(
+    tmp_path: Path,
+) -> None:
+    record = _run_record(tmp_path)
+    record["verifier"]["schema"] = "tgvf.policy-selection.t1-source-verifier.v1"
+
+    run = _load_run(tmp_path, record)
+
+    assert run.verifier["schema"] == ("tgvf.policy-selection.t1-source-verifier.v1")
+
+
 def _candidate_for_rank(rank: int) -> str:
     value = rank
     candidate = f"{value:064x}"
@@ -326,17 +337,13 @@ def test_run_config_accepts_exact_qwen3_vl_instruct_repository_path_pair(
 ) -> None:
     record = _run_record(tmp_path)
     record["model"]["repository"] = "Qwen/Qwen3-VL-8B-Instruct"
-    record["model"]["path"] = (
-        "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
-    )
+    record["model"]["path"] = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
     record["verifier"]["answer_parser"] = "direct-completion-v1"
 
     run = _load_run(tmp_path, record)
 
     assert run.model["repository"] == "Qwen/Qwen3-VL-8B-Instruct"
-    assert run.model["path"] == (
-        "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
-    )
+    assert run.model["path"] == ("/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct")
 
 
 @pytest.mark.parametrize(

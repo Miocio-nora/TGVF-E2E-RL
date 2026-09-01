@@ -1321,6 +1321,24 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
         def _get_worker_extension_cls(self) -> str:
             return TGVF_VLLM_WORKER_EXTENSION_FQN
 
+        async def tgvf_sleep_for_checkpoint(self) -> None:
+            """Free rollout GPU memory while retaining the published weights.
+
+            vLLM level-1 sleep offloads weights to CPU and discards the KV
+            cache.  Unlike the normal full-model level-2 training sleep, a
+            subsequent ``wake_up`` therefore restores the exact same behavior
+            weights without another actor-to-rollout publication.
+            """
+
+            if self.node_rank != 0:
+                return
+            if not self.config.free_cache_engine:
+                raise RuntimeError(
+                    "checkpoint retained-weight sleep requires free_cache_engine"
+                )
+            await self.wait_for_requests_to_drain()
+            await self.engine.sleep(level=1)
+
         def _require_step(self, expected_step: int) -> None:
             if type(expected_step) is not int or self.global_steps != expected_step:
                 raise RuntimeError("TGVF RPC behavior policy step differs from vLLM")
@@ -1543,6 +1561,13 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
         def __init__(self, *args: object, **kwargs: object) -> None:
             super().__init__(*args, **kwargs)
             self.server_class = ray.remote(TGVFVLLMHttpServer)
+
+        async def sleep_for_checkpoint(self) -> None:
+            """Put every server in retained-weight checkpoint sleep."""
+
+            await asyncio.gather(
+                *(server.tgvf_sleep_for_checkpoint.remote() for server in self.servers)
+            )
 
     class TGVFLLMServerClient(LLMServerClient):
         def __init__(self, *args: object, **kwargs: object) -> None:

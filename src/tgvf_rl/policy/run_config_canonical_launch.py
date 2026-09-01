@@ -55,6 +55,7 @@ from .tgvf_target_guide_v2_protocol import TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY
 from .run_config_reward import bind_policy_reward
 from .run_config_schema import (
     POLICY_E2E_AGENT_LOOP_CONFIG_PATH,
+    POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA,
     POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN,
     POLICY_E2E_SMOKE_CAP_ERROR_SHA256,
     POLICY_E2E_SMOKE_SEED_DERIVATION_NAME,
@@ -67,6 +68,7 @@ from .run_config_schema import (
     SmokeFrameworkBinding,
     SmokeOptimizerBinding,
     SmokeOutputBinding,
+    SmokePerformanceBinding,
     SmokePrecisionBinding,
     SmokeProtocolBinding,
     SmokeRewardBinding,
@@ -208,6 +210,7 @@ class _CanonicalLaunchBindings:
     accumulation: SmokeAccumulationBinding
     distributed: SmokeDistributedBinding
     capacity: SmokeCapacityBinding
+    performance: SmokePerformanceBinding
     framework: SmokeFrameworkBinding
     training: SmokeTrainingBinding
     output: SmokeOutputBinding
@@ -253,6 +256,29 @@ def bind_canonical_policy_launch(
 
     method_profile = None if method_binding is None else method_binding.profile
     method_run = method_profile is not None
+    performance_v2 = (
+        payload.get("schema_version") == POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA
+    )
+    performance_table: Mapping[str, object] | None = None
+    if performance_v2:
+        performance_table = _table(
+            payload,
+            "performance",
+            {
+                "dynamic_token_batching",
+                "use_remove_padding",
+                "enable_gradient_checkpointing",
+                "vllm_enable_prefix_caching",
+                "vllm_enable_chunked_prefill",
+                "vllm_enable_cuda_graph",
+                "vllm_cuda_graph_capture_sizes",
+                "vllm_tensor_parallel_size",
+                "rollout_logprob_bypass",
+                "reference_replay_mode",
+                "judge_dispatch_mode",
+                "judge_max_concurrency_per_worker",
+            },
+        )
 
     protocol_fields = {
         "prompt_sha256",
@@ -667,25 +693,33 @@ def bind_canonical_policy_launch(
         ),
     )
 
+    distributed_fields = {
+        "physical_gpu_ids",
+        "logical_gpu_ids",
+        "world_size",
+        "actor_logical_gpu_ids",
+        "rollout_logical_gpu_ids",
+        "fsdp_strategy",
+        "fsdp_reshard_after_forward",
+        "rollout_backend",
+        "placement",
+        "weight_sync_mode",
+        "weight_sync_interval_optimizer_steps",
+    }
+    if not performance_v2:
+        distributed_fields.add("vllm_tensor_parallel_size")
     distributed_table = _table(
         payload,
         "distributed",
-        {
-            "physical_gpu_ids",
-            "logical_gpu_ids",
-            "world_size",
-            "actor_logical_gpu_ids",
-            "rollout_logical_gpu_ids",
-            "fsdp_strategy",
-            "fsdp_reshard_after_forward",
-            "rollout_backend",
-            "vllm_tensor_parallel_size",
-            "placement",
-            "weight_sync_mode",
-            "weight_sync_interval_optimizer_steps",
-        },
+        distributed_fields,
     )
-    distributed = _distributed(distributed_table)
+    normalized_distributed_table = dict(distributed_table)
+    if performance_table is not None:
+        normalized_distributed_table["vllm_tensor_parallel_size"] = _positive_int(
+            performance_table["vllm_tensor_parallel_size"],
+            name="performance.vllm_tensor_parallel_size",
+        )
+    distributed = _distributed(normalized_distributed_table)
     expected_global_batch = (
         accumulation.prompt_micro_batch_size_per_rank
         * distributed.world_size
@@ -696,64 +730,148 @@ def bind_canonical_policy_launch(
             "accumulation global prompt batch is inconsistent with world size"
         )
 
+    capacity_fields = {
+        "max_prompt_length",
+        "actor_ppo_max_token_len_per_gpu",
+        "rollout_log_prob_max_token_len_per_gpu",
+        "reference_log_prob_max_token_len_per_gpu",
+        "vllm_gpu_memory_utilization",
+        "vllm_max_num_batched_tokens",
+        "vllm_max_model_len",
+        "vllm_max_num_seqs",
+    }
+    if not performance_v2:
+        capacity_fields.update({"vllm_enable_chunked_prefill", "vllm_enforce_eager"})
     capacity_table = _table(
         payload,
         "capacity",
-        {
-            "max_prompt_length",
-            "actor_ppo_max_token_len_per_gpu",
-            "rollout_log_prob_max_token_len_per_gpu",
-            "reference_log_prob_max_token_len_per_gpu",
-            "vllm_gpu_memory_utilization",
-            "vllm_max_num_batched_tokens",
-            "vllm_max_model_len",
-            "vllm_max_num_seqs",
-            "vllm_enable_chunked_prefill",
-            "vllm_enforce_eager",
-        },
+        capacity_fields,
     )
+    normalized_capacity_table = dict(capacity_table)
+    if performance_table is not None:
+        normalized_capacity_table["vllm_enable_chunked_prefill"] = _boolean(
+            performance_table["vllm_enable_chunked_prefill"],
+            name="performance.vllm_enable_chunked_prefill",
+        )
+        normalized_capacity_table["vllm_enforce_eager"] = not _boolean(
+            performance_table["vllm_enable_cuda_graph"],
+            name="performance.vllm_enable_cuda_graph",
+        )
     capacity = SmokeCapacityBinding(
         max_prompt_length=_positive_int(
-            capacity_table["max_prompt_length"],
+            normalized_capacity_table["max_prompt_length"],
             name="capacity.max_prompt_length",
         ),
         actor_ppo_max_token_len_per_gpu=_positive_int(
-            capacity_table["actor_ppo_max_token_len_per_gpu"],
+            normalized_capacity_table["actor_ppo_max_token_len_per_gpu"],
             name="capacity.actor_ppo_max_token_len_per_gpu",
         ),
         rollout_log_prob_max_token_len_per_gpu=_positive_int(
-            capacity_table["rollout_log_prob_max_token_len_per_gpu"],
+            normalized_capacity_table["rollout_log_prob_max_token_len_per_gpu"],
             name="capacity.rollout_log_prob_max_token_len_per_gpu",
         ),
         reference_log_prob_max_token_len_per_gpu=_positive_int(
-            capacity_table["reference_log_prob_max_token_len_per_gpu"],
+            normalized_capacity_table["reference_log_prob_max_token_len_per_gpu"],
             name="capacity.reference_log_prob_max_token_len_per_gpu",
         ),
         vllm_gpu_memory_utilization=_unit_interval(
-            capacity_table["vllm_gpu_memory_utilization"],
+            normalized_capacity_table["vllm_gpu_memory_utilization"],
             name="capacity.vllm_gpu_memory_utilization",
         ),
         vllm_max_num_batched_tokens=_positive_int(
-            capacity_table["vllm_max_num_batched_tokens"],
+            normalized_capacity_table["vllm_max_num_batched_tokens"],
             name="capacity.vllm_max_num_batched_tokens",
         ),
         vllm_max_model_len=_positive_int(
-            capacity_table["vllm_max_model_len"],
+            normalized_capacity_table["vllm_max_model_len"],
             name="capacity.vllm_max_model_len",
         ),
         vllm_max_num_seqs=_positive_int(
-            capacity_table["vllm_max_num_seqs"],
+            normalized_capacity_table["vllm_max_num_seqs"],
             name="capacity.vllm_max_num_seqs",
         ),
         vllm_enable_chunked_prefill=_boolean(
-            capacity_table["vllm_enable_chunked_prefill"],
+            normalized_capacity_table["vllm_enable_chunked_prefill"],
             name="capacity.vllm_enable_chunked_prefill",
         ),
         vllm_enforce_eager=_boolean(
-            capacity_table["vllm_enforce_eager"],
+            normalized_capacity_table["vllm_enforce_eager"],
             name="capacity.vllm_enforce_eager",
         ),
     )
+    if performance_table is None:
+        performance = SmokePerformanceBinding(
+            dynamic_token_batching=False,
+            use_remove_padding=False,
+            enable_gradient_checkpointing=False,
+            vllm_enable_prefix_caching=False,
+            vllm_enable_chunked_prefill=capacity.vllm_enable_chunked_prefill,
+            vllm_enable_cuda_graph=not capacity.vllm_enforce_eager,
+            vllm_cuda_graph_capture_sizes=(),
+            vllm_tensor_parallel_size=distributed.vllm_tensor_parallel_size,
+            rollout_logprob_bypass=True,
+            reference_replay_mode="full_diagnostic",
+            judge_dispatch_mode="inherit",
+            judge_max_concurrency_per_worker=1,
+        )
+    else:
+        capture_sizes = _cuda_graph_capture_sizes(
+            performance_table["vllm_cuda_graph_capture_sizes"]
+        )
+        cuda_graph_enabled = not capacity.vllm_enforce_eager
+        if cuda_graph_enabled and not capture_sizes:
+            raise ValueError(
+                "enabled CUDA graph requires explicit performance."
+                "vllm_cuda_graph_capture_sizes"
+            )
+        if capture_sizes and capture_sizes[-1] > capacity.vllm_max_num_batched_tokens:
+            raise ValueError(
+                "performance.vllm_cuda_graph_capture_sizes cannot exceed "
+                "capacity.vllm_max_num_batched_tokens"
+            )
+        performance = SmokePerformanceBinding(
+            dynamic_token_batching=_boolean(
+                performance_table["dynamic_token_batching"],
+                name="performance.dynamic_token_batching",
+            ),
+            use_remove_padding=_boolean(
+                performance_table["use_remove_padding"],
+                name="performance.use_remove_padding",
+            ),
+            enable_gradient_checkpointing=_boolean(
+                performance_table["enable_gradient_checkpointing"],
+                name="performance.enable_gradient_checkpointing",
+            ),
+            vllm_enable_prefix_caching=_boolean(
+                performance_table["vllm_enable_prefix_caching"],
+                name="performance.vllm_enable_prefix_caching",
+            ),
+            vllm_enable_chunked_prefill=capacity.vllm_enable_chunked_prefill,
+            vllm_enable_cuda_graph=cuda_graph_enabled,
+            vllm_cuda_graph_capture_sizes=capture_sizes,
+            vllm_tensor_parallel_size=distributed.vllm_tensor_parallel_size,
+            rollout_logprob_bypass=_boolean(
+                performance_table["rollout_logprob_bypass"],
+                name="performance.rollout_logprob_bypass",
+            ),
+            reference_replay_mode=_text(
+                performance_table["reference_replay_mode"],
+                name="performance.reference_replay_mode",
+            ),
+            judge_dispatch_mode=_text(
+                performance_table["judge_dispatch_mode"],
+                name="performance.judge_dispatch_mode",
+            ),
+            judge_max_concurrency_per_worker=_positive_int(
+                performance_table["judge_max_concurrency_per_worker"],
+                name="performance.judge_max_concurrency_per_worker",
+            ),
+        )
+        if performance.judge_dispatch_mode == "inherit":
+            raise ValueError(
+                "method-matrix v2 judge dispatch must be inline or "
+                "dedicated_thread_pool"
+            )
     minimum_context = capacity.max_prompt_length + sampling.max_response_length
     if capacity.vllm_max_model_len < minimum_context:
         raise ValueError(
@@ -970,11 +1088,29 @@ def bind_canonical_policy_launch(
         accumulation=accumulation,
         distributed=distributed,
         capacity=capacity,
+        performance=performance,
         framework=framework,
         training=training,
         output=output,
         policy=policy,
     )
+
+
+def _cuda_graph_capture_sizes(value: object) -> tuple[int, ...]:
+    if not isinstance(value, list) or any(
+        type(item) is not int or item <= 0 for item in value
+    ):
+        raise ValueError(
+            "performance.vllm_cuda_graph_capture_sizes must be an array of "
+            "positive integers"
+        )
+    sizes = tuple(value)
+    if tuple(sorted(set(sizes))) != sizes:
+        raise ValueError(
+            "performance.vllm_cuda_graph_capture_sizes must be strictly "
+            "increasing and unique"
+        )
+    return sizes
 
 
 __all__ = ["bind_canonical_policy_launch"]

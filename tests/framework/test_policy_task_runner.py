@@ -178,6 +178,56 @@ def test_task_runner_maps_the_real_sidecar_releasing_role_worker() -> None:
     }
 
 
+def test_task_runner_omits_reference_engine_when_kl_and_diagnostic_are_off() -> None:
+    class TrainingWorker:
+        def _setup_env_cuda_visible_devices(self):
+            return None
+
+        def train_mini_batch(self, data):
+            return data
+
+        def infer_batch(self, data):
+            return data
+
+    class ActorRolloutRefWorker:
+        actor_worker_cls = TrainingWorker
+        ref_worker_cls = TrainingWorker
+
+        def _setup_env_cuda_visible_devices(self):
+            return None
+
+    class Role:
+        ActorRollout = "actor"
+        ActorRolloutRef = "actor_ref"
+
+    class Ray:
+        @staticmethod
+        def remote(value):
+            return ("remote", value)
+
+    runner = SimpleNamespace(role_worker_mapping={}, mapping={})
+    config = SimpleNamespace(
+        actor_rollout_ref=SimpleNamespace(
+            rollout=SimpleNamespace(
+                custom={"performance": {"reference_replay_mode": "off"}}
+            )
+        )
+    )
+
+    wrapped, _ = add_policy_actor_rollout_worker(
+        runner,
+        config,
+        ray_module=Ray,
+        role_type=Role,
+        actor_worker_cls=ActorRolloutRefWorker,
+        ray_worker_group_cls=dict,
+        need_reference_policy_fn=lambda _config: False,
+    )
+
+    assert runner.role_worker_mapping[Role.ActorRollout] == ("remote", wrapped)
+    assert runner.mapping == {Role.ActorRollout: "global_pool"}
+
+
 @pytest.mark.parametrize(
     ("allocated_gpu_id", "visible_devices", "expected"),
     (
@@ -235,7 +285,10 @@ def test_policy_colocated_worker_wrapper_preserves_upstream_type() -> None:
     assert restored.__name__ == "PolicyPhysicalGPUWorker"
 
 
-def test_reference_diagnostic_routes_explicit_ref_engine_and_restores_flag() -> None:
+@pytest.mark.parametrize("ref_in_actor", [False, True])
+def test_reference_diagnostic_routes_explicit_ref_engine_and_restores_flag(
+    ref_in_actor: bool,
+) -> None:
     events: list[object] = []
 
     class UpstreamTrainer:
@@ -257,11 +310,42 @@ def test_reference_diagnostic_routes_explicit_ref_engine_and_restores_flag() -> 
 
     trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
     trainer = object.__new__(trainer_cls)
-    trainer.ref_in_actor = True
+    trainer.ref_in_actor = ref_in_actor
 
     assert trainer._compute_ref_log_prob("exact-bundle") == "frozen-reference-logprobs"
     assert events == [("reference", "exact-bundle", False)]
-    assert trainer.ref_in_actor is True
+    assert trainer.ref_in_actor is ref_in_actor
+
+
+def test_trainer_does_not_schedule_reference_when_run_mode_is_off() -> None:
+    class UpstreamTrainer:
+        def __init__(self, *, config):
+            self.config = config
+            self.use_reference_policy = False
+
+        def init_workers(self):
+            return None
+
+        def _get_gen_batch(self):
+            return None
+
+        def _update_actor(self, _batch):
+            return None
+
+        def _save_checkpoint(self):
+            return None
+
+    config = SimpleNamespace(
+        actor_rollout_ref=SimpleNamespace(
+            actor=SimpleNamespace(optim=SimpleNamespace(total_training_steps=50)),
+            rollout=SimpleNamespace(
+                custom={"performance": {"reference_replay_mode": "off"}}
+            ),
+        )
+    )
+    trainer = make_policy_pilot_ray_trainer_class(UpstreamTrainer)(config=config)
+
+    assert trainer.use_reference_policy is False
 
 
 def test_trainer_gate_preserves_the_run_bound_actor_scheduler_horizon() -> None:
@@ -354,18 +438,18 @@ def test_pending_checkpoint_commits_after_sync_while_rollout_is_asleep() -> None
     assert events[4][1]["checkpoint_seconds"] >= 0.0
 
 
-def test_full_model_checkpoint_resyncs_discarded_weights_instead_of_bare_wake() -> None:
+def test_full_model_checkpoint_uses_retained_weight_sleep_without_resync() -> None:
     events: list[object] = []
 
     class UpstreamManager:
-        requires_post_checkpoint_weight_resync = True
+        checkpoint_sleep_preserves_weights = True
 
         def update_weights(self, step):
             events.append(("sync", step))
             return {"synced": step}
 
-        def sleep_replicas(self):
-            events.append("sleep")
+        def sleep_replicas_for_checkpoint(self):
+            events.append("checkpoint-sleep")
 
         def wake_up_replicas(self):
             events.append("wake")
@@ -385,11 +469,11 @@ def test_full_model_checkpoint_resyncs_discarded_weights_instead_of_bare_wake() 
     assert manager.update_weights(3) == {"synced": 3}
     assert events[:4] == [
         ("sync", 3),
-        "sleep",
+        "checkpoint-sleep",
         ("checkpoint", 3),
-        ("sync", 3),
+        "wake",
     ]
-    assert "wake" not in events
+    assert events.count(("sync", 3)) == 1
     assert manager._replicas_sleeping is False
     assert events[4][0] == "metrics"
 
@@ -398,14 +482,14 @@ def test_checkpoint_failure_wakes_replicas_without_attempting_resync() -> None:
     events: list[object] = []
 
     class UpstreamManager:
-        requires_post_checkpoint_weight_resync = True
+        checkpoint_sleep_preserves_weights = True
 
         def update_weights(self, step):
             events.append(("sync", step))
             return {"synced": step}
 
-        def sleep_replicas(self):
-            events.append("sleep")
+        def sleep_replicas_for_checkpoint(self):
+            events.append("checkpoint-sleep")
 
         def wake_up_replicas(self):
             events.append("wake")
@@ -423,11 +507,138 @@ def test_checkpoint_failure_wakes_replicas_without_attempting_resync() -> None:
         manager.update_weights(3)
     assert events == [
         ("sync", 3),
-        "sleep",
+        "checkpoint-sleep",
         ("checkpoint", 3),
         "wake",
     ]
     assert manager._replicas_sleeping is False
+
+
+def test_checkpoint_sleep_failure_attempts_wake_and_preserves_sleep_error() -> None:
+    events: list[object] = []
+
+    class UpstreamManager:
+        checkpoint_sleep_preserves_weights = True
+
+        def update_weights(self, step):
+            events.append(("sync", step))
+            return {"synced": step}
+
+        def sleep_replicas_for_checkpoint(self):
+            events.append("checkpoint-sleep")
+            raise OSError("synthetic partial sleep failure")
+
+        def wake_up_replicas(self):
+            events.append("wake")
+
+    class Trainer:
+        _policy_checkpoint_pending = True
+
+        def _commit_policy_checkpoint_after_weight_sync(self, step):
+            raise AssertionError(step)  # pragma: no cover - sleep fails first
+
+    manager = CheckpointAfterWeightSyncManager(UpstreamManager(), Trainer())
+
+    with pytest.raises(OSError, match="synthetic partial sleep failure"):
+        manager.update_weights(3)
+    assert events == [("sync", 3), "checkpoint-sleep", "wake"]
+    assert manager._replicas_sleeping is False
+
+
+def test_checkpoint_and_wake_failure_preserves_checkpoint_error() -> None:
+    events: list[object] = []
+
+    class UpstreamManager:
+        checkpoint_sleep_preserves_weights = True
+
+        def update_weights(self, step):
+            events.append(("sync", step))
+            return {"synced": step}
+
+        def sleep_replicas_for_checkpoint(self):
+            events.append("checkpoint-sleep")
+
+        def wake_up_replicas(self):
+            events.append("wake")
+            raise RuntimeError("synthetic wake failure")
+
+    class Trainer:
+        _policy_checkpoint_pending = True
+
+        def _commit_policy_checkpoint_after_weight_sync(self, step):
+            events.append(("checkpoint", step))
+            raise OSError("synthetic checkpoint failure")
+
+    manager = CheckpointAfterWeightSyncManager(UpstreamManager(), Trainer())
+
+    with pytest.raises(OSError, match="synthetic checkpoint failure") as captured:
+        manager.update_weights(3)
+    assert events == [
+        ("sync", 3),
+        "checkpoint-sleep",
+        ("checkpoint", 3),
+        "wake",
+    ]
+    assert captured.value.__notes__ == [
+        "best-effort checkpoint wake also failed: RuntimeError: synthetic wake failure"
+    ]
+    assert manager._replicas_sleeping is True
+
+
+def test_successful_checkpoint_with_wake_failure_remains_conservatively_asleep() -> (
+    None
+):
+    events: list[object] = []
+
+    class UpstreamManager:
+        checkpoint_sleep_preserves_weights = True
+
+        def update_weights(self, step):
+            events.append(("sync", step))
+            return {"synced": step}
+
+        def sleep_replicas_for_checkpoint(self):
+            events.append("checkpoint-sleep")
+
+        def wake_up_replicas(self):
+            events.append("wake")
+            raise RuntimeError("synthetic wake failure")
+
+    class Trainer:
+        _policy_checkpoint_pending = True
+
+        def _commit_policy_checkpoint_after_weight_sync(self, step):
+            events.append(("checkpoint", step))
+            self._policy_checkpoint_pending = False
+
+    manager = CheckpointAfterWeightSyncManager(UpstreamManager(), Trainer())
+
+    with pytest.raises(RuntimeError, match="synthetic wake failure"):
+        manager.update_weights(3)
+    assert events == [
+        ("sync", 3),
+        "checkpoint-sleep",
+        ("checkpoint", 3),
+        "wake",
+    ]
+    assert events.count(("sync", 3)) == 1
+    assert manager._replicas_sleeping is True
+
+
+def test_checkpoint_rejects_manager_that_still_needs_a_second_sync() -> None:
+    class UpstreamManager:
+        requires_post_checkpoint_weight_resync = True
+
+        def update_weights(self, step):  # pragma: no cover - must fail first
+            raise AssertionError(step)
+
+    class Trainer:
+        _policy_checkpoint_pending = True
+
+    manager = CheckpointAfterWeightSyncManager(UpstreamManager(), Trainer())
+
+    with pytest.raises(RuntimeError, match="deprecated second weight sync"):
+        manager.update_weights(3)
 
 
 def test_policy_metrics_publish_step_and_cumulative_records_idempotently(

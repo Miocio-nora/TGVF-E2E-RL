@@ -3,12 +3,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
 from tgvf_rl.framework.verl.policy_runtime import _policy_termination_contract
 from tgvf_rl.framework.vllm import VLLMTerminationOutcome
+from tgvf_rl.judges import load_openai_compatible_judge
 from tgvf_rl.policy.config import (
     PilotSamplingConfig,
     PolicyMethodExperimentConfig,
@@ -22,10 +24,14 @@ from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (
 from tgvf_rl.policy.deepeyes_official_protocol import VISUAL_PROMPT_IDENTITY
 from tgvf_rl.policy.no_tool_rl_protocol import NO_TOOL_RL_PROMPT_IDENTITY
 from tgvf_rl.policy.run_config import (
+    POLICY_E2E_MIXED_ALTERNATE_ANSWER_VERIFIER,
+    POLICY_E2E_MIXED_ALTERNATE_JUDGE_MODE,
     POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256,
     POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA,
     POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     load_policy_e2e_smoke_run_config,
+    policy_e2e_mixed_alternate_answer_verifier_sha256,
 )
 from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
@@ -116,6 +122,17 @@ def method_config_factory(
         maximum_optimizer_steps: int = 2,
         native_deepstack_enabled: bool = True,
         weight_sync_interval_optimizer_steps: int = 1,
+        performance_v2: bool = False,
+        dynamic_token_batching: bool = True,
+        use_remove_padding: bool = True,
+        enable_gradient_checkpointing: bool = True,
+        vllm_enable_prefix_caching: bool = True,
+        vllm_enable_chunked_prefill: bool = True,
+        vllm_enable_cuda_graph: bool = True,
+        vllm_cuda_graph_capture_sizes: tuple[int, ...] = (1, 2, 4, 8),
+        judge_dispatch_mode: str = "dedicated_thread_pool",
+        judge_max_concurrency_per_worker: int = 8,
+        reference_replay_mode: str = "off",
     ) -> tuple[Path, str]:
         text = _teacher_quarter_config_text(tmp_path, external, teacher).replace(
             "policy-e2e-explicit-observation-run-config-v1",
@@ -229,6 +246,9 @@ seed_derivation_sha256 = "fe8d2da92471dcf97ff195f9c1e085fe422673e3b0a4b863ad28ca
             / "configs/policy/judges/qwen25_72b_rl_answer_judge_v1.json"
         ).resolve()
         judge_sha256 = hashlib.sha256(judge_path.read_bytes()).hexdigest()
+        judge_model_route = (
+            'judge_model_route = "qwen2.5_72b"\n' if performance_v2 else ""
+        )
         reward = f'''[reward]
 task_kind = "mixed"
 answer_verifier = "rule_first_qwen25_72b"
@@ -237,7 +257,7 @@ judge_mode = "qwen25_72b_semantic_fallback"
 judge_reason = "method config fixture"
 judge_config_path = {_q(judge_path)}
 judge_config_sha256 = "{judge_sha256}"
-profile = "stage3-shaped-v1"
+{judge_model_route}profile = "stage3-shaped-v1"
 answer_reward_scale = 1.25
 repeated_call_penalty = 0.0
 protocol_error_penalty = 0.75
@@ -248,6 +268,42 @@ visual_quality_judge_mode = "disabled"
 
 '''
         text = text[:reward_start] + reward + text[optimizer_start:]
+        if performance_v2:
+            text = text.replace(
+                POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA,
+                POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA,
+                1,
+            )
+            migrated_lines = []
+            moved_fields = {
+                "vllm_tensor_parallel_size",
+                "vllm_enable_chunked_prefill",
+                "vllm_enforce_eager",
+            }
+            for line in text.splitlines(keepends=True):
+                if line.split("=", 1)[0].strip() in moved_fields:
+                    continue
+                migrated_lines.append(line)
+            text = "".join(migrated_lines)
+            capture_sizes = ", ".join(
+                str(value) for value in vllm_cuda_graph_capture_sizes
+            )
+            performance = f'''[performance]
+dynamic_token_batching = {str(dynamic_token_batching).lower()}
+use_remove_padding = {str(use_remove_padding).lower()}
+enable_gradient_checkpointing = {str(enable_gradient_checkpointing).lower()}
+vllm_enable_prefix_caching = {str(vllm_enable_prefix_caching).lower()}
+vllm_enable_chunked_prefill = {str(vllm_enable_chunked_prefill).lower()}
+vllm_enable_cuda_graph = {str(vllm_enable_cuda_graph).lower()}
+vllm_cuda_graph_capture_sizes = [{capture_sizes}]
+vllm_tensor_parallel_size = 1
+rollout_logprob_bypass = true
+reference_replay_mode = "{reference_replay_mode}"
+judge_dispatch_mode = "{judge_dispatch_mode}"
+judge_max_concurrency_per_worker = {judge_max_concurrency_per_worker}
+
+'''
+            text = text.replace("[capacity]\n", performance + "[capacity]\n", 1)
         path = tmp_path / f"method-{profile.value}.toml"
         path.write_text(text, encoding="utf-8")
         return path, text
@@ -293,6 +349,251 @@ def test_unified_method_schema_binds_protocol_and_config_owned_values(
     assert config.reward.repeated_call_penalty == 0.0
     assert config.reward.protocol_error_penalty == 0.75
     assert config.reward.visual_quality_judge_mode == "disabled"
+
+
+def test_method_v2_binds_explicit_performance_without_two_tp_truths(
+    method_config_factory: Callable[..., tuple[Path, str]],
+) -> None:
+    path, _ = method_config_factory(
+        profile=PolicyMethodProfile.CROP,
+        tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        prompt_sha256=VISUAL_PROMPT_IDENTITY.bundle_sha256,
+        observation_id=NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1,
+        performance_v2=True,
+    )
+
+    config = load_policy_e2e_smoke_run_config(path)
+
+    assert config.schema_version == POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA
+    assert config.performance is not None
+    assert config.performance.dynamic_token_batching is True
+    assert config.performance.use_remove_padding is True
+    assert config.performance.enable_gradient_checkpointing is True
+    assert config.performance.vllm_enable_prefix_caching is True
+    assert config.performance.vllm_enable_chunked_prefill is True
+    assert config.performance.vllm_enable_cuda_graph is True
+    assert config.performance.vllm_cuda_graph_capture_sizes == (1, 2, 4, 8)
+    assert config.performance.vllm_tensor_parallel_size == 1
+    assert config.performance.rollout_logprob_bypass is True
+    assert config.performance.reference_replay_mode == "off"
+    assert config.performance.judge_dispatch_mode == "dedicated_thread_pool"
+    assert config.performance.judge_max_concurrency_per_worker == 8
+    assert config.distributed.vllm_tensor_parallel_size == 1
+    assert config.capacity.vllm_enable_chunked_prefill is True
+    assert config.capacity.vllm_enforce_eager is False
+    assert "vllm_tensor_parallel_size" not in config.as_record()["distributed"]
+    assert "vllm_enforce_eager" not in config.as_record()["capacity"]
+
+
+def test_method_v2_explicit_alternate_binds_effective_verifier_identity(
+    tmp_path: Path,
+    method_config_factory: Callable[..., tuple[Path, str]],
+) -> None:
+    path, text = method_config_factory(
+        profile=PolicyMethodProfile.CROP,
+        tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        prompt_sha256=VISUAL_PROMPT_IDENTITY.bundle_sha256,
+        observation_id=NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1,
+        performance_v2=True,
+    )
+    default = load_policy_e2e_smoke_run_config(path)
+    source_judge_path = (
+        Path(__file__).parents[2]
+        / "configs/policy/judges/qwen25_72b_rl_answer_judge_v1.json"
+    )
+    judge_payload = json.loads(source_judge_path.read_text(encoding="utf-8"))
+    judge_payload["identity"] = "test-small-alternate-judge-v1"
+    judge_payload["model"].update(
+        {
+            "repository": "tests/Small-Alternate-Judge",
+            "revision": "small-alternate-v1",
+            "local_path": "/tests/models/small-alternate-v1",
+            "served_name": "test-small-alternate-judge",
+        }
+    )
+    alternate_path = tmp_path / "alternate-judge.json"
+    alternate_path.write_text(
+        json.dumps(judge_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    alternate_file_sha256 = hashlib.sha256(alternate_path.read_bytes()).hexdigest()
+    alternate = load_openai_compatible_judge(
+        alternate_path,
+        expected_file_sha256=alternate_file_sha256,
+    )
+    effective_verifier_sha256 = policy_e2e_mixed_alternate_answer_verifier_sha256(
+        alternate.model_identity
+    )
+    replacements = {
+        'answer_verifier = "rule_first_qwen25_72b"': (
+            f'answer_verifier = "{POLICY_E2E_MIXED_ALTERNATE_ANSWER_VERIFIER}"'
+        ),
+        f'answer_verifier_sha256 = "{POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256}"': (
+            f'answer_verifier_sha256 = "{effective_verifier_sha256}"'
+        ),
+        'judge_mode = "qwen25_72b_semantic_fallback"': (
+            f'judge_mode = "{POLICY_E2E_MIXED_ALTERNATE_JUDGE_MODE}"'
+        ),
+        f"judge_config_path = {_q(default.reward.judge_config_path)}": (
+            f"judge_config_path = {_q(alternate_path)}"
+        ),
+        f'judge_config_sha256 = "{default.reward.judge_config_sha256}"': (
+            f'judge_config_sha256 = "{alternate_file_sha256}"'
+        ),
+        'judge_model_route = "qwen2.5_72b"\n': (
+            'judge_model_route = "explicit_alternate"\n'
+            'alternate_judge_model_name = "test-small-alternate-judge"\n'
+            "alternate_judge_model_identity_sha256 = "
+            f'"{alternate.model_identity.sha256}"\n'
+            "alternate_semantics_acknowledged = true\n"
+        ),
+    }
+    for old, new in replacements.items():
+        assert old in text
+        text = text.replace(old, new, 1)
+    path.write_text(text, encoding="utf-8")
+
+    config = load_policy_e2e_smoke_run_config(path)
+
+    assert config.reward.judge_model_route == "explicit_alternate"
+    assert config.reward.answer_verifier == POLICY_E2E_MIXED_ALTERNATE_ANSWER_VERIFIER
+    assert config.reward.answer_verifier_sha256 == effective_verifier_sha256
+    assert config.reward.answer_verifier_sha256 != (
+        POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256
+    )
+    assert config.reward.judge_mode == POLICY_E2E_MIXED_ALTERNATE_JUDGE_MODE
+    assert config.reward.alternate_judge_model_name == "test-small-alternate-judge"
+    assert config.reward.alternate_judge_model_identity == alternate.model_identity
+    assert config.reward.alternate_semantics_acknowledged is True
+
+    path.write_text(
+        text.replace(
+            effective_verifier_sha256,
+            POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256,
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="alternate model-bound contract"):
+        load_policy_e2e_smoke_run_config(path)
+
+    path.write_text(
+        text.replace(
+            "alternate_semantics_acknowledged = true",
+            "alternate_semantics_acknowledged = false",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="semantic acknowledgement"):
+        load_policy_e2e_smoke_run_config(path)
+
+    path.write_text(
+        text.replace(
+            'alternate_judge_model_name = "test-small-alternate-judge"\n',
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="requires model name, identity SHA256"):
+        load_policy_e2e_smoke_run_config(path)
+
+
+def test_method_v1_keeps_legacy_performance_out_of_source_identity(
+    method_config_factory: Callable[..., tuple[Path, str]],
+) -> None:
+    path, _ = method_config_factory(
+        profile=PolicyMethodProfile.CROP,
+        tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        prompt_sha256=VISUAL_PROMPT_IDENTITY.bundle_sha256,
+        observation_id=NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1,
+    )
+
+    config = load_policy_e2e_smoke_run_config(path)
+
+    assert config.schema_version == POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA
+    assert config.performance is not None
+    assert config.performance.dynamic_token_batching is False
+    assert config.performance.use_remove_padding is False
+    assert config.performance.enable_gradient_checkpointing is False
+    assert config.performance.vllm_enable_prefix_caching is False
+    assert config.performance.judge_dispatch_mode == "inherit"
+    assert config.performance.reference_replay_mode == "full_diagnostic"
+    assert "performance" not in config.as_record()
+
+
+def test_method_v2_accepts_cuda_graph_capture_size_above_sequence_cap(
+    method_config_factory: Callable[..., tuple[Path, str]],
+) -> None:
+    path, _ = method_config_factory(
+        profile=PolicyMethodProfile.CROP,
+        tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        prompt_sha256=VISUAL_PROMPT_IDENTITY.bundle_sha256,
+        observation_id=NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1,
+        performance_v2=True,
+        vllm_cuda_graph_capture_sizes=(1, 16),
+    )
+
+    config = load_policy_e2e_smoke_run_config(path)
+
+    assert config.capacity.vllm_max_num_seqs == 8
+    assert config.capacity.vllm_max_num_batched_tokens == 32_768
+    assert config.performance is not None
+    assert config.performance.vllm_cuda_graph_capture_sizes == (1, 16)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    (
+        (
+            {"vllm_cuda_graph_capture_sizes": ()},
+            "enabled CUDA graph requires explicit",
+        ),
+        (
+            {
+                "vllm_enable_cuda_graph": False,
+                "vllm_cuda_graph_capture_sizes": (1,),
+            },
+            "disabled CUDA graph requires empty",
+        ),
+        (
+            {"vllm_cuda_graph_capture_sizes": (1, 4, 4)},
+            "strictly increasing and unique",
+        ),
+        (
+            {"vllm_cuda_graph_capture_sizes": (1, 32_769)},
+            "cannot exceed capacity.vllm_max_num_batched_tokens",
+        ),
+        (
+            {
+                "judge_dispatch_mode": "inline",
+                "judge_max_concurrency_per_worker": 2,
+            },
+            "requires maximum concurrency 1",
+        ),
+        (
+            {"judge_max_concurrency_per_worker": 257},
+            r"must be in \[1, 256\]",
+        ),
+    ),
+)
+def test_method_v2_rejects_invalid_performance_contract(
+    method_config_factory: Callable[..., tuple[Path, str]],
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    path, _ = method_config_factory(
+        profile=PolicyMethodProfile.CROP,
+        tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        prompt_sha256=VISUAL_PROMPT_IDENTITY.bundle_sha256,
+        observation_id=NativeSuccessObservationProtocolId.DEEPEYES_CROP_MATCHED_V1,
+        performance_v2=True,
+        **changes,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_policy_e2e_smoke_run_config(path)
 
 
 def test_no_tool_runtime_uses_configured_eos_without_tool_call_stop(

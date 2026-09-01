@@ -18,10 +18,15 @@ from tgvf_rl.policy.config import PolicyMethodProfile
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
 from tgvf_rl.protocol import NativeToolCapabilityProfile
 
-from .launcher import UpstreamVerlLaunchPlan
+from .dynamic_token_loss_contract import (
+    DYNAMIC_GLOBAL_TOKEN_POLICY_LOSS_MODE,
+    METHOD_MATRIX_BYPASS_LOSS_MODULE,
+    METHOD_MATRIX_BYPASS_LOSS_REGISTRY_NAME,
+)
 from .full_qwen_checkpoint_manager import (
     FULL_QWEN_CHECKPOINT_ENGINE_MANAGER_FQN,
 )
+from .launcher import UpstreamVerlLaunchPlan
 from .native_deepeyes_runtime import (
     NATIVE_DEEPEYES_LOSS_AGG_MODE,
     NATIVE_DEEPEYES_POLICY_LOSS_MODE,
@@ -118,6 +123,15 @@ def build_policy_method_matrix_plan(
     engine_registrar = _engine_registrar(resolved)
     sampling = config.policy.sampling
     accumulation = config.accumulation
+    performance = config.performance
+    if performance is None:
+        raise ValueError("method matrix requires a performance binding")
+    dynamic_token_batching = performance.dynamic_token_batching
+    actor_loss_mode = (
+        DYNAMIC_GLOBAL_TOKEN_POLICY_LOSS_MODE
+        if dynamic_token_batching
+        else NATIVE_DEEPEYES_POLICY_LOSS_MODE
+    )
     prompt_micro = accumulation.prompt_micro_batch_size_per_rank
     rollout_prompt_micro = accumulation.rollout_prompt_micro_batch_size_per_engine
     actor_trajectory_micro = prompt_micro * sampling.trajectories_per_prompt
@@ -133,11 +147,13 @@ def build_policy_method_matrix_plan(
             "actor_rollout_ref.model.lora.freeze_vision_projection": False,
             "actor_rollout_ref.model.lora.freeze_language_model": False,
             "actor_rollout_ref.actor.freeze_vision_tower": False,
-            "actor_rollout_ref.actor.policy_loss.loss_mode": (
-                NATIVE_DEEPEYES_POLICY_LOSS_MODE
-            ),
+            "actor_rollout_ref.actor.policy_loss.loss_mode": actor_loss_mode,
             "actor_rollout_ref.actor.loss_agg_mode": (NATIVE_DEEPEYES_LOSS_AGG_MODE),
-            "actor_rollout_ref.actor.use_dynamic_bsz": False,
+            "actor_rollout_ref.actor.use_dynamic_bsz": dynamic_token_batching,
+            "actor_rollout_ref.rollout.log_prob_use_dynamic_bsz": (
+                dynamic_token_batching
+            ),
+            "actor_rollout_ref.ref.log_prob_use_dynamic_bsz": (dynamic_token_batching),
             "actor_rollout_ref.actor.ppo_epochs": 1,
             "actor_rollout_ref.actor.shuffle": False,
             "actor_rollout_ref.actor.entropy_coeff": 0.0,
@@ -153,14 +169,14 @@ def build_policy_method_matrix_plan(
                 accumulation.global_prompt_batch_size
             ),
             "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu": (
-                actor_trajectory_micro
+                None if dynamic_token_batching else actor_trajectory_micro
             ),
             "actor_rollout_ref.rollout.n": sampling.trajectories_per_prompt,
             "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu": (
-                rollout_trajectory_micro
+                None if dynamic_token_batching else rollout_trajectory_micro
             ),
             "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": (
-                actor_trajectory_micro
+                None if dynamic_token_batching else actor_trajectory_micro
             ),
         }
     )
@@ -209,6 +225,17 @@ def build_policy_method_matrix_plan(
         prompt_micro_batch_size_per_rank=prompt_micro,
         rollout_prompt_micro_batch_size_per_engine=rollout_prompt_micro,
         gradient_accumulation_steps=accumulation.gradient_accumulation_steps,
+        dynamic_token_batching=dynamic_token_batching,
+        actor_loss_mode=actor_loss_mode,
+        actor_ppo_max_token_len_per_gpu=(
+            config.capacity.actor_ppo_max_token_len_per_gpu
+        ),
+        rollout_log_prob_max_token_len_per_gpu=(
+            config.capacity.rollout_log_prob_max_token_len_per_gpu
+        ),
+        reference_log_prob_max_token_len_per_gpu=(
+            config.capacity.reference_log_prob_max_token_len_per_gpu
+        ),
         adapter_update_mode=adapter_update_mode,
     )
     external_components = dict(base_plan.external_components)
@@ -218,7 +245,9 @@ def build_policy_method_matrix_plan(
             "method_matrix_original_baseline": POLICY_ORIGINAL_EVAL_BASELINE,
             "actor_engine": model_type,
             "actor_external_lib": external_module,
-            "actor_loss": NATIVE_DEEPEYES_POLICY_LOSS_MODE,
+            "actor_loss": actor_loss_mode,
+            "actor_execution_loss": METHOD_MATRIX_BYPASS_LOSS_REGISTRY_NAME,
+            "actor_execution_loss_module": METHOD_MATRIX_BYPASS_LOSS_MODULE,
             "checkpoint_engine_manager": checkpoint_manager,
             "exact_replay_records": "rollout_materialized_exact_bundle",
             "exact_replay_registration": engine_registrar,
@@ -300,6 +329,11 @@ def _method_custom_record(
     prompt_micro_batch_size_per_rank: int,
     rollout_prompt_micro_batch_size_per_engine: int,
     gradient_accumulation_steps: int,
+    dynamic_token_batching: bool,
+    actor_loss_mode: str,
+    actor_ppo_max_token_len_per_gpu: int,
+    rollout_log_prob_max_token_len_per_gpu: int,
+    reference_log_prob_max_token_len_per_gpu: int,
     adapter_update_mode: str | None,
 ) -> dict[str, object]:
     if not isinstance(value, Mapping):
@@ -338,6 +372,10 @@ def _method_custom_record(
                 ),
                 "full_qwen_trainable": True,
                 "native_deepstack_enabled": native_deepstack_enabled,
+                "dynamic_token_batching": dynamic_token_batching,
+                "actor_loss_mode": actor_loss_mode,
+                "actor_execution_loss_mode": (METHOD_MATRIX_BYPASS_LOSS_REGISTRY_NAME),
+                "actor_execution_loss_module": METHOD_MATRIX_BYPASS_LOSS_MODULE,
             },
             "exact_replay": exact_replay,
             "weight_sync": {
@@ -354,20 +392,35 @@ def _method_custom_record(
                     rollout_prompt_micro_batch_size_per_engine
                 ),
                 "configured_gradient_accumulation_steps": (gradient_accumulation_steps),
+                "dynamic_token_batching": dynamic_token_batching,
+                "actor_loss_mode": actor_loss_mode,
+                "actor_ppo_max_token_len_per_gpu": (actor_ppo_max_token_len_per_gpu),
+                "rollout_log_prob_max_token_len_per_gpu": (
+                    rollout_log_prob_max_token_len_per_gpu
+                ),
+                "reference_log_prob_max_token_len_per_gpu": (
+                    reference_log_prob_max_token_len_per_gpu
+                ),
                 "upstream_ppo_mini_batch_size_prompts": global_prompt_batch_size,
                 "upstream_internal_mini_batch_size_trajectories": (
                     global_prompt_batch_size * rollouts_per_prompt
                 ),
                 "upstream_ppo_micro_batch_size_per_gpu_trajectories": (
-                    prompt_micro_batch_size_per_rank * rollouts_per_prompt
+                    None
+                    if dynamic_token_batching
+                    else prompt_micro_batch_size_per_rank * rollouts_per_prompt
                 ),
                 "upstream_inference_micro_batch_size_per_gpu_trajectories": (
-                    prompt_micro_batch_size_per_rank * rollouts_per_prompt
+                    None
+                    if dynamic_token_batching
+                    else prompt_micro_batch_size_per_rank * rollouts_per_prompt
                 ),
                 "derived_actor_forward_backward_microbatches": (
-                    gradient_accumulation_steps
+                    None if dynamic_token_batching else gradient_accumulation_steps
                 ),
-                "derived_gradient_accumulation_steps": (gradient_accumulation_steps),
+                "derived_gradient_accumulation_steps": (
+                    None if dynamic_token_batching else gradient_accumulation_steps
+                ),
                 "optimizer_steps_per_trainer_step": 1,
             },
         }

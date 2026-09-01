@@ -89,6 +89,8 @@ from .run_config_schema import (
     POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA,
     POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA,
+    POLICY_E2E_MIXED_ALTERNATE_ANSWER_VERIFIER,
+    POLICY_E2E_MIXED_ALTERNATE_JUDGE_MODE,
     POLICY_E2E_MIXED_ANSWER_VERIFIER,
     POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256,
     POLICY_E2E_MIXED_ANSWER_VERIFIER_V1_SHA256,
@@ -96,6 +98,7 @@ from .run_config_schema import (
     POLICY_E2E_MIXED_REWARD_TASK,
     POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA,
     POLICY_E2E_METHOD_RUN_CONFIG_SCHEMAS,
     POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
@@ -126,6 +129,7 @@ from .run_config_schema import (
     SmokeFrameworkBinding,
     SmokeOptimizerBinding,
     SmokeOutputBinding,
+    SmokePerformanceBinding,
     SmokePrecisionBinding,
     SmokeProtocolBinding,
     SmokeRepresentationBinding,
@@ -134,6 +138,7 @@ from .run_config_schema import (
     SmokeSchedulerBinding,
     SmokeSelectedMCQSample,
     SmokeTrainingBinding,
+    policy_e2e_mixed_alternate_answer_verifier_sha256,
     pixel512_parity_method_for_schema,
 )
 from .run_config_validation import (
@@ -288,6 +293,7 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA,
         POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA,
         *POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
     }:
         raise ValueError("policy E2E run config schema mismatch")
@@ -298,6 +304,8 @@ def load_policy_e2e_smoke_run_config(
         expected_top_level_fields = _TOP_LEVEL_FIELDS | {"deepeyes_control"}
     elif schema_version == POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA:
         expected_top_level_fields = _TOP_LEVEL_FIELDS | {"method"}
+    elif schema_version == POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA:
+        expected_top_level_fields = _TOP_LEVEL_FIELDS | {"method", "performance"}
     else:
         expected_top_level_fields = _TOP_LEVEL_FIELDS
     if set(payload) != expected_top_level_fields:
@@ -313,7 +321,10 @@ def load_policy_e2e_smoke_run_config(
             "historical resolution-named PRL26 schemas are read-only; use the "
             "method-matrix schema for new runs"
         )
-    if schema_version == POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA:
+    if schema_version in {
+        POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA,
+    }:
         method_table = _table(payload, "method", {"matrix_id", "profile"})
         try:
             method_profile = PolicyMethodProfile(method_table["profile"])
@@ -775,6 +786,7 @@ def load_policy_e2e_smoke_run_config(
     accumulation = canonical_launch.accumulation
     distributed = canonical_launch.distributed
     capacity = canonical_launch.capacity
+    performance = canonical_launch.performance
     framework = canonical_launch.framework
     training = canonical_launch.training
     output = canonical_launch.output
@@ -916,6 +928,7 @@ def load_policy_e2e_smoke_run_config(
         source_path=source_path,
         source_sha256=hashlib.sha256(raw).hexdigest(),
         canonical_json=canonical_json,
+        performance=performance,
         method=method_binding,
         deepeyes_control=deepeyes_control,
         formal_pilot=payload["formal_pilot"],
@@ -1077,6 +1090,8 @@ __all__ = [
     "POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA",
     "POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256",
     "POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_MIXED_ALTERNATE_ANSWER_VERIFIER",
+    "POLICY_E2E_MIXED_ALTERNATE_JUDGE_MODE",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER_V1_SHA256",
@@ -1084,6 +1099,7 @@ __all__ = [
     "POLICY_E2E_MIXED_REWARD_TASK",
     "POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA",
     "POLICY_E2E_METHOD_RUN_CONFIG_SCHEMAS",
     "POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS",
@@ -1112,6 +1128,7 @@ __all__ = [
     "SmokeFrameworkBinding",
     "SmokeOptimizerBinding",
     "SmokeOutputBinding",
+    "SmokePerformanceBinding",
     "SmokePrecisionBinding",
     "SmokeProtocolBinding",
     "SmokeRepresentationBinding",
@@ -1119,6 +1136,7 @@ __all__ = [
     "SmokeRolloutRNGBinding",
     "SmokeSchedulerBinding",
     "SmokeTrainingBinding",
+    "policy_e2e_mixed_alternate_answer_verifier_sha256",
     "formal_deepeyes47k_iteration_identity_sha256",
     "load_policy_e2e_smoke_run_config",
     "pixel512_parity_method_for_schema",

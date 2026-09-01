@@ -20,12 +20,13 @@ from tgvf_rl.contracts.tokens import SamplingIdentity
 class FusedExactReplayMicrobatchMaterializer:
     """Reuse one differentiable full LM head within one replay microbatch.
 
-    Exact replay evaluates each trajectory row separately and performs one
-    backward only after every row has contributed to the microbatch loss.  A
-    stateless DTensor ``full_tensor()`` per row therefore leaves one full
-    vocabulary-weight copy in every row's autograd graph.  This callable is
-    deliberately created once by the replay port factory and is not shared
-    across microbatches or optimizer steps.
+    Exact replay now batches the decoder forward, but selects response
+    log-probabilities for each independently reconstructed trajectory row and
+    performs one backward only after every row has contributed to the
+    microbatch loss. A stateless DTensor ``full_tensor()`` per row would
+    therefore leave one full vocabulary-weight copy in every row's autograd
+    graph. This callable is deliberately created once by the replay port
+    factory and is not shared across microbatches or optimizer steps.
     """
 
     def __init__(self) -> None:

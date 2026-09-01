@@ -1,8 +1,10 @@
-"""Lossless bridge from veRL's async server manager to the native sync loop.
+"""Lossless bridge from veRL's async server manager to the native state machine.
 
 The public contracts, invocation mapping, and framework-neutral loop remain in
-this facade.  Exact async-server sampling and termination recovery live in the
-one-way :mod:`native_agent_client` implementation leaf.
+this facade.  Policy turns are awaited natively; synchronous state-machine and
+tool steps use short resumable worker calls rather than parking one thread for
+the whole trajectory.  Exact async-server sampling and termination recovery
+live in the one-way :mod:`native_agent_client` implementation leaf.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 import hashlib
+import inspect
 import json
 import math
 import threading
@@ -21,6 +24,7 @@ from tgvf_rl.contracts.errors import (
     IdentityMismatchError,
     ReplayMismatchError,
 )
+from tgvf_rl.framework.async_worker import run_side_effecting_in_thread
 from tgvf_rl.framework.vllm import (
     FastTokenizerTokenByteSpanDecoder,
     VLLMOutputDecodingContract,
@@ -327,9 +331,10 @@ class BoundVerlNativeAgentLoopInvocationFactory:
             self.trajectory_components, "build_trajectory_components_async", None
         )
         if not callable(async_builder):
-            return self.build(
-                sampling_params=sampling_params,
-                sample_fields=sample_fields,
+            return await asyncio.to_thread(
+                self.build,
+                sampling_params=dict(sampling_params),
+                sample_fields=dict(sample_fields),
             )
         from tgvf_rl.contracts.identity import PolicyVersion
         from tgvf_rl.environment.agent_loop import RolloutRequest
@@ -553,16 +558,19 @@ class VerlFrameworkNeutralAgentLoop:
         **kwargs: object,
     ) -> object:
         event_loop = asyncio.get_running_loop()
+        copied_sampling_params = dict(sampling_params)
+        copied_sample_fields = dict(kwargs)
         async_builder = getattr(self.invocation_factory, "build_async", None)
         if callable(async_builder):
             invocation = await async_builder(
-                sampling_params=dict(sampling_params),
-                sample_fields=dict(kwargs),
+                sampling_params=copied_sampling_params,
+                sample_fields=copied_sample_fields,
             )
         else:
-            invocation = self.invocation_factory.build(
-                sampling_params=dict(sampling_params),
-                sample_fields=dict(kwargs),
+            invocation = await asyncio.to_thread(
+                self.invocation_factory.build,
+                sampling_params=copied_sampling_params,
+                sample_fields=copied_sample_fields,
             )
         if not isinstance(invocation, VerlNativeAgentLoopInvocation):
             raise TypeError(
@@ -592,19 +600,37 @@ class VerlFrameworkNeutralAgentLoop:
             ),
         )
 
-        def execute_sync() -> tuple[TrajectoryRecord, object]:
+        try:
+            native_loop = await asyncio.to_thread(
+                invocation.native_loop_factory,
+                sampler,
+            )
             from tgvf_rl.environment.agent_loop import FrameworkNeutralAgentLoop
 
-            native_loop = invocation.native_loop_factory(sampler)
             if not isinstance(native_loop, FrameworkNeutralAgentLoop):
                 raise TypeError(
                     "native_loop_factory must return FrameworkNeutralAgentLoop"
                 )
-            trajectory = native_loop.run(invocation.request)
-            return trajectory, invocation.output_builder(trajectory)
-
-        try:
-            trajectory, output = await asyncio.to_thread(execute_sync)
+            driver = native_loop.iter_sampling_requests(invocation.request)
+            advance = await _advance_native_loop_driver_async(driver)
+            while advance.trajectory is None:
+                pending = advance.sampling_request
+                if pending is None:  # pragma: no cover - advance invariant
+                    raise RuntimeError("native-loop driver lost its sampling request")
+                sampled = await sampler.sample_async(
+                    pending.prompt_token_ids,
+                    pending.sampling_parameters,
+                    turn_index=pending.turn_index,
+                )
+                advance = await _advance_native_loop_driver_async(
+                    driver,
+                    sampled,
+                )
+            trajectory = advance.trajectory
+            output = await _build_native_loop_output(
+                invocation.output_builder,
+                trajectory,
+            )
         finally:
             release = getattr(self.server_manager, "release_trajectory", None)
             if callable(release):
@@ -615,6 +641,84 @@ class VerlFrameworkNeutralAgentLoop:
             expected_num_turns=len(trajectory.assistant_turns),
         )
         return output
+
+
+_NO_SAMPLED_TURN = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeLoopDriverAdvance:
+    sampling_request: object | None
+    trajectory: "TrajectoryRecord | None"
+
+    def __post_init__(self) -> None:
+        if (self.sampling_request is None) == (self.trajectory is None):
+            raise RuntimeError(
+                "native-loop advance must contain one request or one trajectory"
+            )
+
+
+def _advance_native_loop_driver(
+    driver: object,
+    sampled: object = _NO_SAMPLED_TURN,
+) -> _NativeLoopDriverAdvance:
+    """Run one bounded synchronous state-machine segment in a worker."""
+
+    from tgvf_rl.environment.agent_loop import PolicySamplingRequest
+    from tgvf_rl.trajectories.schema import TrajectoryRecord
+
+    try:
+        if sampled is _NO_SAMPLED_TURN:
+            yielded = next(driver)  # type: ignore[arg-type]
+        else:
+            send = getattr(driver, "send", None)
+            if not callable(send):
+                raise TypeError("native-loop driver must implement send()")
+            yielded = send(sampled)
+    except StopIteration as completed:
+        trajectory = completed.value
+        if not isinstance(trajectory, TrajectoryRecord):
+            raise RuntimeError("native-loop driver returned no trajectory")
+        return _NativeLoopDriverAdvance(None, trajectory)
+    if not isinstance(yielded, PolicySamplingRequest):
+        raise TypeError("native-loop driver yielded an invalid sampling request")
+    return _NativeLoopDriverAdvance(yielded, None)
+
+
+async def _advance_native_loop_driver_async(
+    driver: object,
+    sampled: object = _NO_SAMPLED_TURN,
+) -> _NativeLoopDriverAdvance:
+    """Drain a side-effecting driver segment before propagating cancellation.
+
+    Cancelling ``asyncio.to_thread`` does not stop its worker.  A driver segment
+    can be inside tool execution or prompt-context registration, so releasing
+    the sticky server trajectory while that worker is still running would race
+    the exact runtime state it consumes.  Shield the worker and retain the
+    caller's cancellation until the segment reaches a stable sampling boundary.
+    """
+
+    return await run_side_effecting_in_thread(
+        _advance_native_loop_driver,
+        driver,
+        sampled,
+    )
+
+
+async def _build_native_loop_output(
+    output_builder: Callable[["TrajectoryRecord"], object],
+    trajectory: "TrajectoryRecord",
+) -> object:
+    """Prefer an async finalizer and retain sync-builder compatibility."""
+
+    build_async = getattr(output_builder, "build_async", None)
+    if callable(build_async):
+        output = build_async(trajectory)
+    else:
+        output = await asyncio.to_thread(output_builder, trajectory)
+    if inspect.isawaitable(output):
+        output = await output
+    return output
 
 
 def _validate_structural_agent_loop_output(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
@@ -16,6 +17,7 @@ from tgvf_rl.judges import (
     JUDGE_SAMPLE_FAILURE_ZERO,
     JudgeProvider,
     JudgeRequest,
+    JudgeResult,
     JudgeSampleFailureError,
 )
 
@@ -62,6 +64,7 @@ class RuleFirstAnswerVerifier:
     judge_sampling_identity: ArtifactIdentity
     judge_calibration_identity: ArtifactIdentity
     judge_sample_failure_mode: str = JUDGE_SAMPLE_FAILURE_ABORT
+    judge_route: str = "qwen2.5_72b_semantic_fallback"
 
     def __post_init__(self) -> None:
         if self.judge_sample_failure_mode not in {
@@ -69,8 +72,26 @@ class RuleFirstAnswerVerifier:
             JUDGE_SAMPLE_FAILURE_ZERO,
         }:
             raise ValueError("answer judge sample failure mode differs")
+        if not isinstance(self.judge_route, str) or not self.judge_route.strip():
+            raise ValueError("answer judge route must be non-empty text")
 
     def verify(self, context: RewardContext) -> AnswerVerificationResult:
+        ruled = self._verify_by_rule(context)
+        if ruled is not None:
+            return ruled
+        return self._judge_fallback(context)
+
+    async def verify_async(self, context: RewardContext) -> AnswerVerificationResult:
+        """Apply rules inline and await only the unresolved semantic fallback."""
+
+        ruled = self._verify_by_rule(context)
+        if ruled is not None:
+            return ruled
+        return await self._judge_fallback_async(context)
+
+    def _verify_by_rule(
+        self, context: RewardContext
+    ) -> AnswerVerificationResult | None:
         if context.expected_answer is None:
             raise ContractUnsetError("Pilot answer verification requires ground truth")
         if not context.has_valid_final_answer:
@@ -103,7 +124,7 @@ class RuleFirstAnswerVerifier:
 
         # Math expressions not decided by the deterministic verifier and open
         # VQA exact mismatches use the separately identified formal-Pilot judge.
-        return self._judge_fallback(context)
+        return None
 
     def _verify_multiple_choice(
         self, context: RewardContext
@@ -127,6 +148,28 @@ class RuleFirstAnswerVerifier:
         )
 
     def _judge_fallback(self, context: RewardContext) -> AnswerVerificationResult:
+        request = self._judge_request(context)
+        try:
+            result = self.judge.judge(request)
+        except JudgeSampleFailureError as error:
+            return self._completed_failure_result(error)
+        return self._judge_result(result)
+
+    async def _judge_fallback_async(
+        self, context: RewardContext
+    ) -> AnswerVerificationResult:
+        request = self._judge_request(context)
+        try:
+            judge_async = getattr(self.judge, "judge_async", None)
+            if callable(judge_async):
+                result = await judge_async(request)
+            else:
+                result = await asyncio.to_thread(self.judge.judge, request)
+        except JudgeSampleFailureError as error:
+            return self._completed_failure_result(error)
+        return self._judge_result(result)
+
+    def _judge_request(self, context: RewardContext) -> JudgeRequest:
         assert context.expected_answer is not None
         request_payload = {
             "schema": "policy-pilot-v1-answer-judge-request-v1",
@@ -145,34 +188,40 @@ class RuleFirstAnswerVerifier:
                 ensure_ascii=False,
             ).encode("utf-8")
         ).hexdigest()
-        try:
-            result = self.judge.judge(
-                JudgeRequest(
-                    request_id=request_id,
-                    task_kind=context.task_kind.value,
-                    question=context.question,
-                    candidate_answer=context.candidate_answer,
-                    reference_answer=context.expected_answer,
-                    prompt_identity=self.judge_prompt_identity,
-                )
-            )
-        except JudgeSampleFailureError as error:
-            if self.judge_sample_failure_mode != JUDGE_SAMPLE_FAILURE_ZERO:
-                raise
-            return AnswerVerificationResult(
-                False,
-                "qwen2.5_72b_semantic_fallback_"
-                + error.failure_kind
-                + "_zero",
-                "completed_judge_response_failure=" + error.failure_kind,
-                self.judge_model_identity,
-                judge_usage=error.usage,
-            )
+        return JudgeRequest(
+            request_id=request_id,
+            task_kind=context.task_kind.value,
+            question=context.question,
+            candidate_answer=context.candidate_answer,
+            reference_answer=context.expected_answer,
+            prompt_identity=self.judge_prompt_identity,
+        )
+
+    def _completed_failure_result(
+        self, error: JudgeSampleFailureError
+    ) -> AnswerVerificationResult:
+        if self.judge_sample_failure_mode != JUDGE_SAMPLE_FAILURE_ZERO:
+            raise error
+        return AnswerVerificationResult(
+            False,
+            self.judge_route + "_" + error.failure_kind + "_zero",
+            "completed_judge_response_failure=" + error.failure_kind,
+            self.judge_model_identity,
+            judge_usage=error.usage,
+        )
+
+    def _judge_result(self, result: object) -> AnswerVerificationResult:
+        if not isinstance(result, JudgeResult):
+            raise TypeError("answer judge returned an invalid result")
         expected_identities = (
             ("model", result.model_identity, self.judge_model_identity),
             ("service", result.service_identity, self.judge_service_identity),
             ("sampling", result.sampling_identity, self.judge_sampling_identity),
-            ("calibration", result.calibration_identity, self.judge_calibration_identity),
+            (
+                "calibration",
+                result.calibration_identity,
+                self.judge_calibration_identity,
+            ),
         )
         for name, actual, expected in expected_identities:
             if actual != expected:
@@ -185,7 +234,7 @@ class RuleFirstAnswerVerifier:
             )
         return AnswerVerificationResult(
             bool(result.score),
-            "qwen2.5_72b_semantic_fallback",
+            self.judge_route,
             result.rationale,
             result.model_identity,
             judge_usage=result.usage,

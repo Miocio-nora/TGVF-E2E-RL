@@ -8,7 +8,7 @@ paired Policy checkpoint lifecycle on the trainer driver.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 import hashlib
 import io
 import json
@@ -100,6 +100,9 @@ POLICY_PILOT_TASK_RUNNER_FQN = (
     "tgvf_rl.framework.verl.policy_task_runner.create_policy_pilot_task_runner_class"
 )
 POLICY_PILOT_TRAINER_LIFECYCLE_SCHEMA = "tgvf-policy-trainer-lifecycle-v1"
+# Historical configs predate the explicit performance receipt and retain the
+# original full-reference diagnostic. Method-matrix v2 selects its mode in the
+# run config; the throughput profile uses ``off`` when mathematical KL is off.
 POLICY_REFERENCE_DIAGNOSTIC_ENABLED = True
 POLICY_PILOT_METRICS_EVENT_SCHEMA = "policy-pilot-v1-metrics-event-v1"
 POLICY_TRACKING_METRIC_NAMES = frozenset(
@@ -879,7 +882,7 @@ class PairedActorWorkerGroup:
 
 
 class CheckpointAfterWeightSyncManager:
-    """Commit only after publication and restore weights discarded by sleep."""
+    """Commit after publication with exactly one actor-to-rollout sync."""
 
     def __init__(
         self,
@@ -913,41 +916,36 @@ class CheckpointAfterWeightSyncManager:
         self.sleep_replicas()
 
     def update_weights(self, global_steps: int | None = None) -> object:
+        checkpoint_pending = bool(
+            getattr(self.trainer, "_policy_checkpoint_pending", False)
+        )
+        checkpoint_sleep = (
+            self._checkpoint_sleep_callable() if checkpoint_pending else None
+        )
         sync_started = perf_counter()
         result = self.upstream.update_weights(global_steps)
         self._replicas_sleeping = False
         sync_seconds = perf_counter() - sync_started
         checkpoint_seconds = 0.0
-        if getattr(self.trainer, "_policy_checkpoint_pending", False):
+        if checkpoint_pending:
+            if checkpoint_sleep is None:  # pragma: no cover - guarded above
+                raise RuntimeError("Policy checkpoint sleep strategy was lost")
             checkpoint_started = perf_counter()
-            self.sleep_replicas()
+            # Enter a conservative state before fan-out: a failed sleep RPC can
+            # leave only a subset of replicas asleep.  Never report them awake
+            # until the matching wake call has returned successfully.
+            self._replicas_sleeping = True
             try:
+                checkpoint_sleep()
                 self.trainer._commit_policy_checkpoint_after_weight_sync(global_steps)
-            except BaseException:
-                # A failed checkpoint must still leave the rollout runtime
-                # callable before the trainer propagates the original error.
-                self.wake_up_replicas()
+            except BaseException as checkpoint_error:
+                # Sleep can fail after only part of the fan-out completed, and
+                # checkpoint I/O itself can fail after every replica slept.
+                # Attempt to restore all replicas in either case, but preserve
+                # the causal checkpoint exception if wake-up also fails.
+                self._best_effort_checkpoint_wake(checkpoint_error)
                 raise
-            if bool(
-                getattr(
-                    self.upstream,
-                    "requires_post_checkpoint_weight_resync",
-                    False,
-                )
-            ):
-                # Level-2 sleep discards full-model weights.  Re-run the
-                # method manager's normal same-step publication instead of a
-                # bare wake.  Call the upstream object directly so this
-                # wrapper does not recursively commit the checkpoint.
-                try:
-                    self.upstream.update_weights(global_steps)
-                finally:
-                    # Publication can make replicas callable before a later
-                    # ACK failure.  Failure recovery must conservatively
-                    # treat them as awake and quiesce them again.
-                    self._replicas_sleeping = False
-            else:
-                self.wake_up_replicas()
+            self.wake_up_replicas()
             checkpoint_seconds = perf_counter() - checkpoint_started
         complete = getattr(self.trainer, "_complete_policy_metric_publication", None)
         if callable(complete):
@@ -956,6 +954,44 @@ class CheckpointAfterWeightSyncManager:
                 checkpoint_seconds=checkpoint_seconds,
             )
         return result
+
+    def _best_effort_checkpoint_wake(self, primary_error: BaseException) -> None:
+        """Attempt wake-up without replacing the checkpoint's causal error."""
+
+        try:
+            self.wake_up_replicas()
+        except BaseException as wake_error:
+            primary_error.add_note(
+                "best-effort checkpoint wake also failed: "
+                f"{type(wake_error).__name__}: {wake_error}"
+            )
+
+    def _checkpoint_sleep_callable(self) -> Callable[[], object]:
+        """Select a sleep path that cannot strand full-model replicas."""
+
+        preserves_weights = bool(
+            getattr(self.upstream, "checkpoint_sleep_preserves_weights", False)
+        )
+        retained_sleep = getattr(self.upstream, "sleep_replicas_for_checkpoint", None)
+        if preserves_weights:
+            if not callable(retained_sleep):
+                raise TypeError(
+                    "checkpoint manager declares retained weights without a "
+                    "checkpoint sleep method"
+                )
+            return retained_sleep
+        if bool(
+            getattr(
+                self.upstream,
+                "requires_post_checkpoint_weight_resync",
+                False,
+            )
+        ):
+            raise RuntimeError(
+                "checkpoint manager requires a deprecated second weight sync; "
+                "provide retained-weight checkpoint sleep instead"
+            )
+        return self.sleep_replicas
 
     def __getattr__(self, name: str) -> object:
         return getattr(self.upstream, name)
@@ -1058,13 +1094,13 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 self.config,
                 actor_scheduler_horizon,
             )
-            # The Pilot keeps both mathematical KL coefficients at zero, so
-            # upstream's ``need_reference_policy`` is intentionally false.
-            # We nevertheless execute a frozen-base reference forward as a
-            # diagnostic on the exact rollout-recorded observation bundle.
-            # The ActorRolloutRef role installed below owns that explicit ref
-            # engine; this flag makes the v0 trainer schedule the forward.
-            self.use_reference_policy = POLICY_REFERENCE_DIAGNOSTIC_ENABLED
+            # Mathematical KL and the optional replay diagnostic are separate.
+            # Preserve an objective-owned reference policy when present, and
+            # otherwise schedule the explicit frozen-reference engine only when
+            # the run's performance identity asks for the diagnostic.
+            self.use_reference_policy = bool(
+                getattr(self, "use_reference_policy", False)
+            ) or (policy_reference_replay_mode(config) == "full_diagnostic")
 
         def init_workers(self):
             # Pinned veRL constructs its LLM server manager from a module
@@ -1287,23 +1323,19 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             return optimizer_step
 
         def _compute_ref_log_prob(self, batch):
-            if not self.ref_in_actor:
-                raise RuntimeError(
-                    "Policy reference diagnostic requires the colocated "
-                    "ActorRolloutRef worker"
-                )
-            # Upstream interprets ``ref_in_actor`` as "temporarily disable the
-            # actor LoRA" and calls the actor engine.  That is insufficient for
-            # our exact replay contract because engine role is identified by
-            # its forward_only state.  The same worker group also owns an
-            # explicit frozen ref engine, so route this synchronous driver call
-            # through upstream's dedicated-ref branch and immediately restore
-            # the invariant.
+            # The project always routes this diagnostic through the explicit
+            # frozen-reference engine owned by ActorRolloutRef.  A LoRA-shaped
+            # upstream config reports ``ref_in_actor=True``; temporarily lower
+            # that flag so veRL selects its dedicated-reference branch.  A
+            # full-model config (lora_rank=0) already reports False and must be
+            # accepted unchanged -- rejecting it would fail before the first
+            # reference forward in the unified method-matrix runtime.
+            restore_ref_in_actor = bool(self.ref_in_actor)
             self.ref_in_actor = False
             try:
                 return super()._compute_ref_log_prob(batch)
             finally:
-                self.ref_in_actor = True
+                self.ref_in_actor = restore_ref_in_actor
 
         def _update_actor(self, batch, *args, **kwargs):
             completed = False
@@ -1730,14 +1762,16 @@ def add_policy_actor_rollout_worker(
     # Otherwise alternate physical allocations such as GPUs 4--7 reach
     # ``torch.cuda.set_device(4..7)`` inside a four-device local CUDA view.
     wrapped = make_policy_colocated_worker_class(wrapped)
-    if need_reference_policy_fn(config):
-        raise ValueError(
-            "Policy reference diagnostic requires zero-weight KL configuration"
-        )
-    # Force the combined worker even though upstream's objective-driven helper
-    # returns false.  Its reference engine is frozen/base-only; the trainer
-    # override schedules it solely for the recorded KL diagnostic.
-    role = role_type.ActorRolloutRef
+    objective_reference = bool(need_reference_policy_fn(config))
+    diagnostic_reference = policy_reference_replay_mode(config) == "full_diagnostic"
+    # Exact replay uses an explicit frozen-reference engine, not the upstream
+    # LoRA-disable shortcut. Avoid constructing that engine entirely when both
+    # mathematical KL and the optional diagnostic are off.
+    role = (
+        role_type.ActorRolloutRef
+        if objective_reference or diagnostic_reference
+        else role_type.ActorRollout
+    )
     runner.role_worker_mapping[role] = ray_module.remote(wrapped)
     runner.mapping[role] = "global_pool"
     return wrapped, ray_worker_group_cls
@@ -1776,6 +1810,36 @@ def create_policy_pilot_task_runner_class() -> object:
     return ray.remote(PolicyPilotTaskRunner)
 
 
+def policy_reference_replay_mode(config: object) -> str:
+    """Resolve the run-owned optional reference diagnostic mode.
+
+    Older launch configs carry no performance receipt and retain their recorded
+    behavior. Unified v2 configs always transport the explicit mode.
+    """
+
+    actor_rollout_ref = getattr(config, "actor_rollout_ref", None)
+    rollout = getattr(actor_rollout_ref, "rollout", None)
+    custom = _mapping_value(rollout, "custom")
+    performance = _mapping_value(custom, "performance")
+    mode = _mapping_value(performance, "reference_replay_mode")
+    if mode is None:
+        return "full_diagnostic" if POLICY_REFERENCE_DIAGNOSTIC_ENABLED else "off"
+    if mode not in {"off", "full_diagnostic"}:
+        raise ValueError("unknown reference replay mode in veRL performance receipt")
+    return mode
+
+
+def _mapping_value(owner: object, name: str) -> object | None:
+    if owner is None:
+        return None
+    getter = getattr(owner, "get", None)
+    if callable(getter):
+        return getter(name, None)
+    if isinstance(owner, Mapping):
+        return owner.get(name)
+    return getattr(owner, name, None)
+
+
 def run_policy_pilot_v0_task(
     runner: object, config: object, *, trainer_cls: type[Any]
 ) -> None:
@@ -1789,6 +1853,7 @@ def run_policy_pilot_v0_task(
         create_rl_dataset,
         create_rl_sampler,
         need_critic,
+        need_reference_policy,
     )
     from verl.utils import hf_processor, hf_tokenizer
     from verl.utils.config import validate_config
@@ -1806,7 +1871,10 @@ def run_policy_pilot_v0_task(
     runner.add_ref_policy_worker(config, actor_rollout_cls)
     validate_config(
         config=config,
-        use_reference_policy=POLICY_REFERENCE_DIAGNOSTIC_ENABLED,
+        use_reference_policy=(
+            need_reference_policy(config)
+            or policy_reference_replay_mode(config) == "full_diagnostic"
+        ),
         use_critic=need_critic(config),
     )
     local_path = copy_to_local(
@@ -1866,5 +1934,6 @@ __all__ = [
     "make_policy_colocated_worker_class",
     "policy_worker_logical_cuda_ordinal",
     "policy_metrics_observation_from_data_proto",
+    "policy_reference_replay_mode",
     "run_policy_pilot_v0_task",
 ]

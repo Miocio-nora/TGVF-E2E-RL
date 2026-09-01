@@ -8,6 +8,7 @@ upstream ``update_weights`` call has completed.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
 import inspect
 from typing import Any
@@ -35,10 +36,10 @@ FULL_QWEN_CHECKPOINT_ENGINE_MANAGER_FQN = (
 class FullQwenBehaviorCheckpointEngineManager:
     """Publish the accepted full-Qwen behavior version for NoTool/Crop."""
 
-    # A checkpoint save performs a level-2 rollout sleep and discards the
-    # synchronized full model.  The outer lifecycle wrapper must publish the
-    # same step again rather than waking a weightless replica.
-    requires_post_checkpoint_weight_resync = True
+    # The project vLLM runtime exposes a checkpoint-only level-1 sleep.  It
+    # offloads, rather than discards, the synchronized full-model weights, so
+    # checkpoint wake-up does not require a second full publication.
+    checkpoint_sleep_preserves_weights = True
 
     def __init__(
         self,
@@ -51,6 +52,7 @@ class FullQwenBehaviorCheckpointEngineManager:
     ) -> None:
         factory = upstream_manager_factory or _load_upstream_checkpoint_manager_class()
         self._state = PolicyWeightSyncState.from_environment(environment)
+        self._replicas = tuple(replicas)
         self._upstream = factory(config=config, actor_wg=actor_wg, replicas=replicas)
         if not callable(getattr(self._upstream, "update_weights", None)):
             raise TypeError(
@@ -61,6 +63,20 @@ class FullQwenBehaviorCheckpointEngineManager:
     @property
     def last_behavior_snapshot(self) -> PolicyBehaviorSnapshot | None:
         return self._last_behavior_snapshot
+
+    @_auto_await
+    async def sleep_replicas_for_checkpoint(self) -> tuple[object, ...]:
+        """Offload published rollout weights without discarding their content."""
+
+        sleeps = []
+        for replica in self._replicas:
+            sleep = getattr(replica, "sleep_for_checkpoint", None)
+            if not callable(sleep):
+                raise TypeError(
+                    "rollout replica lacks retained-weight checkpoint sleep"
+                )
+            sleeps.append(sleep)
+        return tuple(await asyncio.gather(*(sleep() for sleep in sleeps)))
 
     @_auto_await
     async def update_weights(self, global_steps: int | None = None) -> object:

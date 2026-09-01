@@ -74,19 +74,22 @@ def compose_and_run_pinned_verl(overrides: Sequence[str]) -> None:
 
     config = compose_pinned_verl_config(overrides)
     from verl.trainer.main_ppo import run_ppo
-    from verl.trainer.ppo.utils import need_critic
+    from verl.trainer.ppo.utils import need_critic, need_reference_policy
     from verl.utils.config import validate_config
     from verl.utils.device import auto_set_device
 
     from .policy_task_runner import (
-        POLICY_REFERENCE_DIAGNOSTIC_ENABLED,
         create_policy_pilot_task_runner_class,
+        policy_reference_replay_mode,
     )
 
     auto_set_device(config)
     validate_config(
         config=config,
-        use_reference_policy=POLICY_REFERENCE_DIAGNOSTIC_ENABLED,
+        use_reference_policy=(
+            need_reference_policy(config)
+            or policy_reference_replay_mode(config) == "full_diagnostic"
+        ),
         use_critic=need_critic(config),
     )
     run_ppo(config, task_runner_class=create_policy_pilot_task_runner_class())

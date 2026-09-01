@@ -110,6 +110,24 @@ class _FakeResponsePort:
         )
 
 
+class _FakeBatchedResponsePort(_FakeResponsePort):
+    def __init__(self, model: _NoRawForwardModel, role: ComponentRole) -> None:
+        super().__init__(model, role)
+        self.batch_calls: list[tuple[str, ...]] = []
+
+    def replay_response_logprobs_batch(self, *, rows):
+        self.batch_calls.append(tuple(row.bundle.bundle_sha256 for row in rows))
+        return tuple(
+            self.replay_response_logprobs(
+                bundle=row.bundle,
+                prompt_token_ids=row.prompt_token_ids,
+                response=row.response,
+                sampling=row.sampling,
+            )
+            for row in rows
+        )
+
+
 class _FakeUpstreamFSDPEngineWithLMHead:
     def __init__(self, *, model_config, engine_config, module) -> None:
         self.model_config = model_config
@@ -180,7 +198,7 @@ def _exact_rows(tensor_dict) -> tuple[tuple[int, ...], tuple[int, ...]]:
     return prompt, response
 
 
-def _concrete_engine_config(bundle, *, reference: bool):
+def _concrete_engine_config(bundle, *, reference: bool, fused: bool = False):
     return SimpleNamespace(
         model_config=SimpleNamespace(
             model_type=TGVF_EXACT_REPLAY_MODEL_TYPE,
@@ -195,6 +213,7 @@ def _concrete_engine_config(bundle, *, reference: bool):
             target_modules=QWEN3_DECODER_LORA_TARGET_MODULE_PATTERN,
             exclude_modules=None,
             lora_adapter_path=None,
+            use_fused_kernels=fused,
         ),
         engine_config=SimpleNamespace(
             strategy="fsdp2",
@@ -392,13 +411,14 @@ def test_config_bound_factory_builds_existing_qwen_port_for_actor_and_ref() -> N
 
     actor_model = build_qwen3_decoder_lora_policy(_TinyQwen3()).model
     actor_port = factory(
-        engine=_concrete_engine_config(bundle, reference=False),
+        engine=_concrete_engine_config(bundle, reference=False, fused=True),
         model=actor_model,
         role=ComponentRole.CURRENT,
         bundle=bundle,
         model_training=True,
     )
     assert isinstance(actor_port, Qwen3RecordedPolicyForwardPort)
+    assert actor_port.materializes_fused_kernels is True
     assert actor_port.binding.model == bundle.replay_record.model
     assert actor_port.binding.policy_version == bundle.replay_record.behavior_policy
     assert (
@@ -416,6 +436,7 @@ def test_config_bound_factory_builds_existing_qwen_port_for_actor_and_ref() -> N
         model_training=False,
     )
     assert isinstance(reference_port, Qwen3RecordedPolicyForwardPort)
+    assert reference_port.materializes_fused_kernels is False
     assert reference_port.binding.model == actor_port.binding.model
     assert reference_port.binding.base_weights_sha256 == (
         actor_port.binding.base_weights_sha256
@@ -509,6 +530,52 @@ def test_same_registered_engine_restores_actor_and_ref_full_sequence_layout() ->
     assert ports[0].binding.role is ComponentRole.CURRENT
     assert ports[1].binding.role is ComponentRole.REFERENCE
     assert ports[0].calls == ports[1].calls
+    payload.release_sidecars()
+
+
+def test_engine_prefers_batched_port_and_preserves_row_gradients() -> None:
+    _FakeEngineRegistry.registrations.clear()
+    payload, _, micro_batch = _live_tensordict()
+    repeated = micro_batch.repeat(2)
+    ports: list[_FakeBatchedResponsePort] = []
+
+    def port_factory(*, model, role, **_):
+        port = _FakeBatchedResponsePort(model, role)
+        ports.append(port)
+        return port
+
+    engine_cls = register_exact_replay_fsdp2_engine(
+        port_factory=port_factory,
+        registry=_FakeEngineRegistry,
+        upstream_engine_cls=_FakeUpstreamFSDPEngineWithLMHead,
+        devices=("cuda",),
+    )
+    model = _NoRawForwardModel(0.5)
+    engine = engine_cls(
+        model_config=SimpleNamespace(model_type=TGVF_EXACT_REPLAY_MODEL_TYPE),
+        engine_config=SimpleNamespace(strategy="fsdp2", forward_only=False),
+        module=model,
+    )
+    engine.module = engine._build_module()
+
+    def loss_function(*, model_output, **_):
+        rows = model_output["log_probs"].unbind()
+        return -sum(row.sum() for row in rows), {"rows": len(rows)}
+
+    loss, output = engine.forward_step(repeated, loss_function, False)
+    loss.backward()
+
+    assert output["metrics"] == {"rows": 2}
+    assert len(ports) == 1
+    assert len(ports[0].batch_calls) == 1
+    assert len(ports[0].batch_calls[0]) == 2
+    assert len(ports[0].calls) == 2
+    assert engine.exact_replay_evidence.replay_execution == (
+        "decoder_batched_rowwise_visual"
+    )
+    assert engine.exact_replay_evidence.decoder_batch_size == 2
+    assert model.weight.grad is not None
+    assert model.weight.grad.abs().item() > 0
     payload.release_sidecars()
 
 

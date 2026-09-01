@@ -115,7 +115,11 @@ from tgvf_rl.rewards.schema import (
     pilot_reward_weight_profile_name,
 )
 from tgvf_rl.judges import (
+    BoundedJudgeDispatcher,
     DisabledJudgeProvider,
+    JudgeDispatchConfig,
+    JudgeDispatchMode,
+    JudgeModelRoute,
     TGVFVisualQualityFailureKind,
     TGVFVisualQualityJudgeProvider,
     TGVFVisualQualityJudgeRequest,
@@ -265,6 +269,59 @@ def _required_action_boundary_protocol_id(
     return selected
 
 
+def _judge_dispatch_config_from_run(config: object) -> JudgeDispatchConfig:
+    """Translate the typed performance binding into the judge execution seam."""
+
+    performance = getattr(config, "performance", None)
+    if performance is None:
+        # Legacy run schemas bind the historical inline/single-call execution
+        # explicitly through their typed default in canonical launch parsing.
+        return JudgeDispatchConfig()
+    raw_mode = getattr(performance, "judge_dispatch_mode", None)
+    if raw_mode == "inherit":
+        mode = JudgeDispatchMode.INLINE
+    else:
+        try:
+            mode = JudgeDispatchMode(raw_mode)
+        except (TypeError, ValueError) as error:
+            raise ValueError("performance judge dispatch mode is invalid") from error
+    maximum_concurrency = getattr(
+        performance,
+        "judge_max_concurrency_per_worker",
+        None,
+    )
+    reward = getattr(config, "reward", None)
+    raw_model_route = getattr(
+        reward,
+        "judge_model_route",
+        JudgeModelRoute.QWEN25_72B.value,
+    )
+    try:
+        model_route = JudgeModelRoute(raw_model_route)
+    except (TypeError, ValueError) as error:
+        raise ValueError("reward judge model route is invalid") from error
+    return JudgeDispatchConfig(
+        mode=mode,
+        maximum_concurrency=maximum_concurrency,
+        model_route=model_route,
+        alternate_model_name=getattr(
+            reward,
+            "alternate_judge_model_name",
+            None,
+        ),
+        alternate_model_identity=getattr(
+            reward,
+            "alternate_judge_model_identity",
+            None,
+        ),
+        alternate_semantics_acknowledged=getattr(
+            reward,
+            "alternate_semantics_acknowledged",
+            False,
+        ),
+    )
+
+
 class Qwen3PolicyE2ELiveRuntimeBuilder:
     """Build CPU AgentLoop state bound to the existing vLLM rollout client."""
 
@@ -279,11 +336,17 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
             object,
         ]
         | None = None,
+        judge_dispatch_config: JudgeDispatchConfig | None = None,
     ) -> None:
         if metrics_factory is not None and not callable(metrics_factory):
             raise TypeError("metrics_factory must be callable")
+        if judge_dispatch_config is not None and not isinstance(
+            judge_dispatch_config, JudgeDispatchConfig
+        ):
+            raise TypeError("judge_dispatch_config must be JudgeDispatchConfig or None")
         self.agent_loop_output_cls = agent_loop_output_cls
         self.metrics_factory = metrics_factory or _default_metrics_factory
+        self.judge_dispatch_config = judge_dispatch_config
 
     def build(
         self, context: PolicyE2ERuntimeBuildContext, /
@@ -420,6 +483,11 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
             sample_index=_load_bound_sample_index(config),
             observation_contract=observation_contract,
             action_boundary_protocol_id=action_boundary_protocol_id,
+            judge_dispatch_config=(
+                self.judge_dispatch_config
+                if self.judge_dispatch_config is not None
+                else _judge_dispatch_config_from_run(config)
+            ),
         )
         identity_consumer = _IdentityOnlyBehaviorSnapshotConsumer()
         return PolicyE2ERuntimeProduct(
@@ -430,7 +498,12 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
 
 
 class _Qwen3PolicyTrajectoryComponents:
-    """Materialize one exact source binding and trajectory-owned collaborators."""
+    """Materialize exact source bindings and trajectory-owned collaborators.
+
+    One instance is retained by one AgentLoop worker's process-runtime core.
+    Its answer-judge dispatcher is therefore shared across that worker's
+    trajectories, and its configured concurrency is a per-worker bound.
+    """
 
     def __init__(
         self,
@@ -452,6 +525,7 @@ class _Qwen3PolicyTrajectoryComponents:
         sample_index: Mapping[str, Mapping[str, object]],
         observation_contract: NativeSuccessObservationContract,
         action_boundary_protocol_id: NativeActionBoundaryProtocolId,
+        judge_dispatch_config: JudgeDispatchConfig,
     ) -> None:
         self.context = context
         self.config = context.config
@@ -477,12 +551,38 @@ class _Qwen3PolicyTrajectoryComponents:
         ):
             raise ValueError("trajectory components require strict action boundary v2")
         self.action_boundary_protocol_id = action_boundary_protocol_id
+        if not isinstance(judge_dispatch_config, JudgeDispatchConfig):
+            raise TypeError("trajectory components require JudgeDispatchConfig")
+        self.judge_dispatch_config = judge_dispatch_config
         if self.config.reward.profile == "pilot-v1":
-            self.reward_pipeline = _build_reward_pipeline(self.config)
+            self.reward_pipeline = _build_reward_pipeline(
+                self.config,
+                judge_dispatch_config=judge_dispatch_config,
+            )
             self.stage3_reward_runtime = None
+            answer_verifier = self.reward_pipeline.answer_verifier
         else:
             self.reward_pipeline = None
-            self.stage3_reward_runtime = _build_stage3_reward_runtime(self.config)
+            self.stage3_reward_runtime = _build_stage3_reward_runtime(
+                self.config,
+                judge_dispatch_config=judge_dispatch_config,
+            )
+            _spec, answer_verifier, _visual_provider = self.stage3_reward_runtime
+        judge = getattr(answer_verifier, "judge", None)
+        self.answer_judge_dispatcher = (
+            judge if isinstance(judge, BoundedJudgeDispatcher) else None
+        )
+
+    def close(self) -> None:
+        """Close process-local reward resources owned by this runtime."""
+
+        if self.answer_judge_dispatcher is not None:
+            self.answer_judge_dispatcher.close()
+
+    async def close_async(self) -> None:
+        """Awaitable form for owners with an async process teardown boundary."""
+
+        await asyncio.to_thread(self.close)
 
     async def build_trajectory_components_async(
         self,
@@ -1620,7 +1720,11 @@ def _final_token_materialization(
     return tuple(final), tuple(native_rows)
 
 
-def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
+def _build_reward_pipeline(
+    config: object,
+    *,
+    judge_dispatch_config: JudgeDispatchConfig | None = None,
+) -> PilotRewardPipeline:
     reward = config.reward
     if getattr(reward, "profile", "pilot-v1") != "pilot-v1":
         raise ValueError("legacy Pilot pipeline requires profile=pilot-v1")
@@ -1634,7 +1738,13 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
         == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
     )
     pilot_reward_weight_profile_name(reward_weights)
-    answer_identity, verifier = _build_rule_first_answer_verifier(config)
+    if judge_dispatch_config is None:
+        answer_identity, verifier = _build_rule_first_answer_verifier(config)
+    else:
+        answer_identity, verifier = _build_rule_first_answer_verifier(
+            config,
+            judge_dispatch_config=judge_dispatch_config,
+        )
     format_identity = _artifact_identity(
         "policy-reward", "native-format", "pilot-v1", {"run": config.identity_sha256}
     )
@@ -1694,6 +1804,8 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
 
 def _build_rule_first_answer_verifier(
     config: object,
+    *,
+    judge_dispatch_config: JudgeDispatchConfig | None = None,
 ) -> tuple[ArtifactIdentity, RuleFirstAnswerVerifier]:
     reward = config.reward
     answer_identity = ArtifactIdentity(
@@ -1713,6 +1825,7 @@ def _build_rule_first_answer_verifier(
         judge_sampling_identity = disabled
         judge_calibration_identity = disabled
         judge_sample_failure_mode = "raise_and_abort_reward_batch"
+        judge_route = "qwen2.5_72b_semantic_fallback"
     else:
         if reward.judge_config_sha256 is None:
             raise ValueError("enabled RL judge lacks its config identity")
@@ -1721,13 +1834,35 @@ def _build_rule_first_answer_verifier(
             expected_file_sha256=reward.judge_config_sha256,
         )
         bound_judge.provider.validate_credentials()
-        judge = bound_judge.provider
+        dispatch_config = (
+            _judge_dispatch_config_from_run(config)
+            if judge_dispatch_config is None
+            else judge_dispatch_config
+        )
+        dispatch_config.validate_bound_model(
+            model_name=bound_judge.provider.config.model_name,
+            model_identity=bound_judge.model_identity,
+        )
+        if dispatch_config.mode is JudgeDispatchMode.DEDICATED_THREAD_POOL:
+            judge = BoundedJudgeDispatcher(
+                bound_judge.provider,
+                config=dispatch_config,
+                bound_model_name=bound_judge.provider.config.model_name,
+                bound_model_identity=bound_judge.model_identity,
+            )
+        else:
+            # Historical schemas keep the original provider path.  The async
+            # verifier offloads it once through asyncio.to_thread; wrapping an
+            # inline semaphore here would silently serialize old runs and
+            # could occupy the event loop's default executor with waiters.
+            judge = bound_judge.provider
         judge_prompt_identity = bound_judge.prompt_identity
         judge_model_identity = bound_judge.model_identity
         judge_service_identity = bound_judge.service_identity
         judge_sampling_identity = bound_judge.sampling_identity
         judge_calibration_identity = bound_judge.calibration_identity
         judge_sample_failure_mode = bound_judge.sample_failure_mode
+        judge_route = dispatch_config.semantic_fallback_route
     verifier = RuleFirstAnswerVerifier(
         rule_identity=answer_identity,
         normalization=NormalizationSpec(True, True, True),
@@ -1738,12 +1873,15 @@ def _build_rule_first_answer_verifier(
         judge_sampling_identity=judge_sampling_identity,
         judge_calibration_identity=judge_calibration_identity,
         judge_sample_failure_mode=judge_sample_failure_mode,
+        judge_route=judge_route,
     )
     return answer_identity, verifier
 
 
 def _build_stage3_reward_runtime(
     config: object,
+    *,
+    judge_dispatch_config: JudgeDispatchConfig | None = None,
 ) -> tuple[
     Stage3ShapedRewardSpec,
     RuleFirstAnswerVerifier,
@@ -1802,7 +1940,13 @@ def _build_stage3_reward_runtime(
     answer_scale, repeated_penalty, protocol_penalty = (
         float(value) for value in coefficients
     )
-    answer_identity, answer_verifier = _build_rule_first_answer_verifier(config)
+    if judge_dispatch_config is None:
+        answer_identity, answer_verifier = _build_rule_first_answer_verifier(config)
+    else:
+        answer_identity, answer_verifier = _build_rule_first_answer_verifier(
+            config,
+            judge_dispatch_config=judge_dispatch_config,
+        )
     if quality_enabled:
         bound_visual = load_tgvf_visual_quality_judge(
             reward.visual_quality_judge_config_path,

@@ -10,8 +10,8 @@ checkpoint) Adapter snapshot.  This module records the identity of the
 The full-Qwen receipt is deliberately request scoped.  It is created only
 after ``CheckpointEngineManager.update_weights`` completes, so the receipt
 means "the upstream transport accepted this run/step/request".  The behavior
-version uses a stable run/optimizer-step sync identity so a legitimate
-same-step post-checkpoint resync does not create two policy versions.  Neither
+version uses a stable run/optimizer-step sync identity so an idempotent
+same-step publication retry does not create two policy versions.  Neither
 value is a second tensor transport or a claim that upstream exposed a Qwen
 content hash.
 """

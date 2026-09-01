@@ -8,6 +8,7 @@ import torch
 from torch import nn
 
 from tests.environment.test_crop_tgvf_runtime import _fixture as _atomic_fixture
+from tests.policy.test_trainable_crop_replay import _bundle_with_sequence, _sampling
 from tests.policy.test_exact_replay import _payload
 from tgvf_rl.contracts.tokens import (
     LogProbMeasurement,
@@ -28,12 +29,15 @@ from tgvf_rl.policy.trainable_tgvf_replay import (
     extract_live_qwen3_vision_features,
     trainable_parameter_zero_anchor,
 )
+from tgvf_rl.framework.verl.exact_replay_engine import ExactReplayResponseRequest
 from tgvf_rl.observations.store import (
     ObservationStore,
     TrajectoryReplayRecord,
     TrajectoryReplayTensorRefs,
 )
 from tgvf_rl.qwen.base import (
+    InjectedForwardRequest,
+    InjectedVisualBlock,
     ReplayConsumer,
     injected_request_from_recorded,
     resolve_replay_request,
@@ -172,6 +176,71 @@ class _AutocastBoundaryQwen(nn.Module):
         super().__init__()
         self.lm_head = nn.Linear(5, 128, bias=False)
         self.add_module(TRAINABLE_TGVF_ADAPTER_ATTRIBUTE, _trainable_adapter())
+
+
+class _TGVFReplayLanguageModel(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.embed_tokens = nn.Embedding(32, 5)
+        self.proj = nn.Linear(5, 5, bias=False)
+
+    def get_input_embeddings(self):
+        return self.embed_tokens
+
+    def forward(
+        self,
+        *,
+        inputs_embeds,
+        visual_pos_masks=None,
+        deepstack_visual_embeds=None,
+        **_kwargs,
+    ):
+        hidden = self.proj(inputs_embeds)
+        for branch in deepstack_visual_embeds or ():
+            hidden = hidden.clone()
+            hidden[visual_pos_masks] += branch
+        return SimpleNamespace(last_hidden_state=hidden, past_key_values=None)
+
+
+class _TGVFReplayQwen(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.config = SimpleNamespace(tgvf_native_deepstack_enabled=True)
+        self.model = nn.Module()
+        self.model.language_model = _TGVFReplayLanguageModel()
+        self.model.visual = nn.Linear(3, 3, bias=False)
+        self.lm_head = nn.Linear(5, 32, bias=False)
+        self.add_module(TRAINABLE_TGVF_ADAPTER_ATTRIBUTE, _trainable_adapter())
+
+
+def _live_tgvf_request(*, model, adapter, store, replay_handle):
+    recorded = resolve_replay_request(store, replay_handle, ReplayConsumer.POLICY)
+    source = torch.arange(24, dtype=torch.float32).reshape(8, 3) / 23
+    live_visual = model.model.visual(source)
+    output = adapter(
+        target_hidden_states=torch.ones(3, 5),
+        pre_merge_visual_tokens=live_visual,
+        deepstack_pre_merge_visual_tokens=tuple(
+            live_visual * (index + 1) for index in range(3)
+        ),
+    )
+    source_block = recorded.visual_blocks[0]
+    return InjectedForwardRequest(
+        input_ids=recorded.input_ids,
+        attention_mask=recorded.attention_mask,
+        position_ids=recorded.position_ids,
+        visual_blocks=(
+            InjectedVisualBlock(
+                kind="source_image",
+                positions=source_block.positions,
+                embeddings=output.main_d.unsqueeze(0),
+                deepstack=tuple(
+                    branch.unsqueeze(0) for branch in output.d_deepstack.branches
+                ),
+                deepstack_positions=source_block.deepstack_positions,
+            ),
+        ),
+    )
 
 
 def test_live_vision_capture_keeps_pixel_stem_and_merger_autograd() -> None:
@@ -539,6 +608,93 @@ def test_current_replay_accepts_fully_frozen_adapter() -> None:
     )
 
     assert port.adapter_trainable is False
+
+
+def test_current_tgvf_nonfused_decoder_batch_matches_variable_row_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch.manual_seed(131)
+    bundles = (_bundle_with_sequence(8), _bundle_with_sequence(10))
+    rows = []
+    for bundle, sequence in zip(bundles, (8, 10), strict=True):
+        response = OwnedTokenSequence(
+            token_ids=tuple(range(4, sequence + 1)),
+            ownership=(TokenOwnership.POLICY_SAMPLED,) * (sequence - 3),
+        )
+        rows.append(
+            ExactReplayResponseRequest(
+                bundle=bundle,
+                prompt_token_ids=(1, 2, 3),
+                response=response,
+                sampling=_sampling(bundle),
+            )
+        )
+
+    rowwise_model = _TGVFReplayQwen()
+    batched_model = copy.deepcopy(rowwise_model)
+    monkeypatch.setattr(
+        replay_module,
+        "build_trainable_tgvf_current_request",
+        _live_tgvf_request,
+    )
+    engine = SimpleNamespace(_autocast_dtype=torch.float32)
+    rowwise_port = TrainableTGVFCurrentReplayPort(
+        engine=engine,
+        model=rowwise_model,
+    )
+    batched_port = TrainableTGVFCurrentReplayPort(
+        engine=engine,
+        model=batched_model,
+    )
+
+    expected = tuple(
+        rowwise_port.replay_response_logprobs(
+            bundle=row.bundle,
+            prompt_token_ids=row.prompt_token_ids,
+            response=row.response,
+            sampling=row.sampling,
+        )
+        for row in rows
+    )
+    actual = batched_port.replay_response_logprobs_batch(rows=tuple(rows))
+    expected_loss = sum(result.logprobs.sum() for result in expected)
+    actual_loss = sum(result.logprobs.sum() for result in actual)
+    expected_loss.backward()
+    actual_loss.backward()
+
+    assert tuple(result.bundle_sha256 for result in actual) == tuple(
+        row.bundle.bundle_sha256 for row in rows
+    )
+    for rowwise, batched in zip(expected, actual, strict=True):
+        torch.testing.assert_close(batched.logprobs, rowwise.logprobs)
+        assert batched.response_token_ids == rowwise.response_token_ids
+
+    rowwise_parameters = dict(rowwise_model.named_parameters())
+    batched_parameters = dict(batched_model.named_parameters())
+    for name in (
+        "model.language_model.proj.weight",
+        "model.visual.weight",
+        "lm_head.weight",
+    ):
+        expected_grad = rowwise_parameters[name].grad
+        actual_grad = batched_parameters[name].grad
+        assert expected_grad is not None and actual_grad is not None
+        torch.testing.assert_close(actual_grad, expected_grad)
+    adapter_names = tuple(
+        name for name in rowwise_parameters if name.startswith("tgvf_adapter.")
+    )
+    assert adapter_names
+    assert any(
+        rowwise_parameters[name].grad is not None
+        and torch.count_nonzero(rowwise_parameters[name].grad).item() > 0
+        for name in adapter_names
+    )
+    for name in adapter_names:
+        expected_grad = rowwise_parameters[name].grad
+        actual_grad = batched_parameters[name].grad
+        assert (expected_grad is None) == (actual_grad is None)
+        if expected_grad is not None:
+            torch.testing.assert_close(actual_grad, expected_grad)
 
 
 def test_current_replay_autocast_starts_before_live_vision_request(

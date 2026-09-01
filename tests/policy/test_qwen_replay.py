@@ -16,6 +16,7 @@ from tgvf_rl.contracts.tokens import (
     SamplingIdentity,
     TokenOwnership,
 )
+from tgvf_rl.framework.verl.exact_replay_engine import ExactReplayResponseRequest
 from tgvf_rl.policy.exact_replay import (
     RecordedPolicyForwardBinding,
     ReplayParameterization,
@@ -62,7 +63,9 @@ class _TinyMLP(nn.Module):
         self.down_proj = nn.Linear(hidden_size, hidden_size, bias=False)
 
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
-        return self.down_proj(torch.sigmoid(self.gate_proj(hidden)) * self.up_proj(hidden))
+        return self.down_proj(
+            torch.sigmoid(self.gate_proj(hidden)) * self.up_proj(hidden)
+        )
 
 
 class _TinyDecoderLayer(nn.Module):
@@ -80,9 +83,7 @@ class _TinyLanguageModel(nn.Module):
     def __init__(self, hidden_size: int = 8) -> None:
         super().__init__()
         self.embed_tokens = nn.Embedding(32, hidden_size)
-        self.layers = nn.ModuleList(
-            _TinyDecoderLayer(hidden_size) for _ in range(36)
-        )
+        self.layers = nn.ModuleList(_TinyDecoderLayer(hidden_size) for _ in range(36))
 
     def get_input_embeddings(self) -> nn.Embedding:
         return self.embed_tokens
@@ -219,9 +220,7 @@ def test_qwen3_lora_scope_and_exact_current_reference_replay() -> None:
 
     assert len(built.target_modules) == 36 * 7
     assert len(built.scope_audit.trainable_parameter_names) == 36 * 7 * 2
-    assert all(
-        ".lora_" in name for name in built.scope_audit.trainable_parameter_names
-    )
+    assert all(".lora_" in name for name in built.scope_audit.trainable_parameter_names)
     assert not reference_audit.trainable_parameter_names
     assert dict(built.scope_audit.frozen_category_parameter_counts) == {
         "vision_encoder": 1,
@@ -234,8 +233,19 @@ def test_qwen3_lora_scope_and_exact_current_reference_replay() -> None:
     assert replay.reference.bundle_sha256 == bundle.bundle_sha256
     assert replay.current.logprobs.requires_grad
     assert not replay.reference.logprobs.requires_grad
-    assert replay.current.policy_sampled_mask.tolist() == [True, False, True, False, True]
-    assert torch.count_nonzero(replay.current.logprobs[~replay.current.policy_sampled_mask]) == 0
+    assert replay.current.policy_sampled_mask.tolist() == [
+        True,
+        False,
+        True,
+        False,
+        True,
+    ]
+    assert (
+        torch.count_nonzero(
+            replay.current.logprobs[~replay.current.policy_sampled_mask]
+        )
+        == 0
+    )
 
     replay.current.logprobs.sum().backward()
     current_parameters = dict(built.model.named_parameters())
@@ -246,6 +256,59 @@ def test_qwen3_lora_scope_and_exact_current_reference_replay() -> None:
     assert all(parameter.grad is None for parameter in reference.model.parameters())
 
 
+def test_reference_port_decoder_batch_matches_rowwise_selected_logprobs() -> None:
+    torch.manual_seed(23)
+    store, handle = _replay(branches=3, calls=0)
+    bundle = store.export_replay_bundle(handle)
+    model = _TinyQwen3()
+    freeze_qwen3_reference_model(model)
+    port = Qwen3RecordedPolicyForwardPort(
+        model=model,
+        binding=_binding(bundle, ComponentRole.REFERENCE),
+    )
+    response = OwnedTokenSequence(
+        token_ids=(4, 5, 6, 7, 8),
+        ownership=(
+            TokenOwnership.POLICY_SAMPLED,
+            TokenOwnership.TOOL_OBSERVATION,
+            TokenOwnership.POLICY_SAMPLED,
+            TokenOwnership.TEMPLATE,
+            TokenOwnership.POLICY_SAMPLED,
+        ),
+    )
+    sampling = _sampling(bundle)
+    expected = tuple(
+        port.replay_response_logprobs(
+            bundle=bundle,
+            prompt_token_ids=(1, 2, 3),
+            response=response,
+            sampling=sampling,
+        )
+        for _ in range(2)
+    )
+    actual = port.replay_response_logprobs_batch(
+        rows=tuple(
+            ExactReplayResponseRequest(
+                bundle=bundle,
+                prompt_token_ids=(1, 2, 3),
+                response=response,
+                sampling=sampling,
+            )
+            for _ in range(2)
+        )
+    )
+
+    for rowwise, batched in zip(expected, actual, strict=True):
+        assert batched.bundle_sha256 == rowwise.bundle_sha256
+        assert batched.response_token_ids == rowwise.response_token_ids
+        assert batched.response_ownership == rowwise.response_ownership
+        torch.testing.assert_close(
+            batched.policy_sampled_mask, rowwise.policy_sampled_mask
+        )
+        torch.testing.assert_close(batched.logprobs, rowwise.logprobs)
+        assert not batched.logprobs.requires_grad
+
+
 def test_qwen3_lora_preserves_bfloat16_snapshot_dtype() -> None:
     _require_peft()
     get_peft_model_state_dict = pytest.importorskip(
@@ -253,9 +316,7 @@ def test_qwen3_lora_preserves_bfloat16_snapshot_dtype() -> None:
         reason="LoRA state export requires optional PEFT",
     ).get_peft_model_state_dict
 
-    built = build_qwen3_decoder_lora_policy(
-        _TinyQwen3().to(dtype=torch.bfloat16)
-    )
+    built = build_qwen3_decoder_lora_policy(_TinyQwen3().to(dtype=torch.bfloat16))
     state = get_peft_model_state_dict(built.model, adapter_name="default")
 
     assert state
@@ -267,9 +328,7 @@ def test_qwen3_replay_rejects_wrong_role_tokens_and_mutated_bundle() -> None:
     store, handle = _replay(branches=3, calls=0)
     bundle = store.export_replay_bundle(handle)
     _, _, current, _ = _ports(bundle)
-    reference_request = resolve_replay_request(
-        store, handle, ReplayConsumer.REFERENCE
-    )
+    reference_request = resolve_replay_request(store, handle, ReplayConsumer.REFERENCE)
     with pytest.raises(ReplayMismatchError, match="another role"):
         current.forward_recorded(reference_request)
 

@@ -9,6 +9,10 @@
 - 当前状态：主代码与默认配置入口已完成 CPU 收口；最终整合候选为
   `2381 passed, 4 skipped` 且 Ruff 通过。2026-09-01 用户明确暂缓 GPU
   训练与评测，因此没有 GPU/Ray 通过结论。
+- 2026-09-01 的时间优化增量单独记录在
+  [VTool-R1 时间优化前七项：源码对齐与验证边界](VTOOL_R1_THROUGHPUT_ALIGNMENT_20260901.md)。
+  该增量当前仅表示 source/CPU implementation，不改写上述历史提交与测试
+  快照，也没有真实 Ray/GPU 吞吐结论。
 
 ## 结论
 
@@ -77,11 +81,11 @@ NoTool/Crop 在上游完整 Qwen `update_weights` 成功返回后发布 typed be
 
 这里必须保留一个边界：`accepted_full_qwen_sync_receipt_v1` 证明的是“某 run/step/request 的上游同步调用已经成功返回”，**不是 Qwen tensor content hash**。它足以闭合当前 transport acceptance 与行为版本，但不能被论文表述为逐 tensor 内容证明。
 
-### 4. checkpoint sleep 后执行同 step resync
+### 4. checkpoint step 只执行一次完整权重同步
 
-veRL level-2 rollout sleep 会丢弃已同步的完整模型权重。checkpoint wrapper 现在在保存成功后，对声明需要恢复权重的 manager 直接执行同一 optimizer step 的 `update_weights`，而不是只做 bare wake；同 step resync 保持稳定 PolicyVersion，同时记录新的 request/ACK。checkpoint 保存失败时会先唤醒 replicas 再重新抛出异常，避免留下睡眠 worker。
+普通训练 sleep 仍可使用 veRL 的 level-2 路径；但 checkpoint 现在走项目专用 retained-weight sleep：先完成本 step 唯一一次 actor-to-rollout publication，再 drain 请求并以 vLLM level 1 将已发布权重 offload 到 CPU、释放 KV cache，保存 checkpoint 后直接 wake 同一份权重。因此 NoTool/Crop 的 full-Qwen 以及带可训练视觉 Adapter 的方法，都不再为 checkpoint 重复一次同 step 完整同步与 Adapter fan-out。
 
-这修复了一个会让“checkpoint 后继续 rollout”使用无权重 replica 的 P0 问题。CPU 测试已覆盖同 step resync、禁止 bare wake 和失败恢复；真实 GPU sleep/wake 仍需 canary。
+manager 必须显式声明 `checkpoint_sleep_preserves_weights` 并实现 `sleep_replicas_for_checkpoint`；仍声明需要 post-checkpoint resync 的旧 manager 会在权重同步前 fail closed，不能悄悄退回二次同步。checkpoint 保存失败时仍先 wake replicas 再传播原异常。CPU 测试覆盖单 sync 顺序、retained sleep 扇出、level-1 调用、失败恢复和旧 capability 拒绝；真实 GPU 的 host RAM、checkpoint 峰值和 sleep/wake 仍需 canary。
 
 ### 5. legacy metrics resume 不再猜测新字段
 

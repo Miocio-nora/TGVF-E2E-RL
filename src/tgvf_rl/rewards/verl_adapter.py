@@ -185,6 +185,36 @@ class PilotVerlTrajectoryRewardScorer:
         request: object,
         trajectory: TrajectoryRecord,
     ) -> PilotVerlTrajectoryReward:
+        context = self._build_context(request=request, trajectory=trajectory)
+        result = self.pipeline.score(context)
+        return self._finish_score(
+            trajectory=trajectory,
+            context=context,
+            result=result,
+        )
+
+    async def score_async(
+        self,
+        *,
+        request: object,
+        trajectory: TrajectoryRecord,
+    ) -> PilotVerlTrajectoryReward:
+        """Await judge-backed scoring without blocking the agent event loop."""
+
+        context = self._build_context(request=request, trajectory=trajectory)
+        result = await self.pipeline.score_async(context)
+        return self._finish_score(
+            trajectory=trajectory,
+            context=context,
+            result=result,
+        )
+
+    def _build_context(
+        self,
+        *,
+        request: object,
+        trajectory: TrajectoryRecord,
+    ) -> RewardContext:
         if not isinstance(trajectory, TrajectoryRecord):
             raise TypeError("trajectory must be TrajectoryRecord")
         request_identity = getattr(request, "identity", None)
@@ -198,7 +228,15 @@ class PilotVerlTrajectoryRewardScorer:
             raise TypeError("context_provider must return RewardContext")
         if context.sample_id != trajectory.identity.sample_id:
             raise ValueError("reward context sample differs from trajectory")
-        result = self.pipeline.score(context)
+        return context
+
+    def _finish_score(
+        self,
+        *,
+        trajectory: TrajectoryRecord,
+        context: RewardContext,
+        result: RewardResult,
+    ) -> PilotVerlTrajectoryReward:
         if result.pipeline_identity != self.pipeline.spec.pipeline_identity:
             raise ValueError("reward pipeline identity changed while scoring")
         equation_route, applied_weights = self.pipeline.spec.equation_for_context(

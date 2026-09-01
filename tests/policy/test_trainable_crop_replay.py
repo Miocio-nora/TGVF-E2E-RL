@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
 
 import pytest
@@ -17,6 +18,7 @@ from tests.environment.test_crop_runtime import (
     _model,
     _parsed_call,
 )
+from tests.qwen.test_family_contract import TinyLanguageModel, _replay
 from tgvf_rl.contracts.errors import ReplayMismatchError
 from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.environment.crop_runtime import (
@@ -32,7 +34,21 @@ from tgvf_rl.observations.store import (
     tensor_checksum,
 )
 from tgvf_rl.policy.trainable_crop_replay import (
+    TrainableCropCurrentReplayPort,
     build_trainable_crop_current_request,
+)
+from tgvf_rl.framework.verl.exact_replay_engine import ExactReplayResponseRequest
+from tgvf_rl.contracts.tokens import (
+    LogProbMeasurement,
+    OwnedTokenSequence,
+    SamplingIdentity,
+    TokenOwnership,
+)
+from tgvf_rl.qwen.base import (
+    InjectedForwardRequest,
+    InjectedVisualBlock,
+    ReplayConsumer,
+    resolve_replay_request,
 )
 from tgvf_rl.qwen.crop_coordinates import (
     CanonicalSourcePixelCropCoordinateMapper,
@@ -76,6 +92,86 @@ class _ToyQwen(nn.Module):
         super().__init__()
         self.model = nn.Module()
         self.model.visual = _ToyVisual()
+
+
+class _CropReplayQwen(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.config = type("Config", (), {"tgvf_native_deepstack_enabled": True})()
+        self.model = nn.Module()
+        self.model.language_model = TinyLanguageModel()
+        self.model.visual = nn.Linear(8, 8, bias=False)
+        self.lm_head = nn.Linear(8, 32, bias=False)
+
+
+def _bundle_with_sequence(sequence: int):
+    store, handle = _replay(branches=3, calls=0)
+    replay = store.resolve_replay(handle)
+    trajectory_id = replay.trajectory_id
+    ids = store.put_tensor(
+        f"crop-batch.ids.{sequence}",
+        torch.arange(1, sequence + 1, dtype=torch.long).view(1, sequence),
+        trajectory_id=trajectory_id,
+    )
+    positions = store.put_tensor(
+        f"crop-batch.positions.{sequence}",
+        torch.arange(sequence, dtype=torch.long).view(1, sequence),
+        trajectory_id=trajectory_id,
+    )
+    mask = store.put_tensor(
+        f"crop-batch.mask.{sequence}",
+        torch.ones(1, sequence, dtype=torch.bool),
+        trajectory_id=trajectory_id,
+    )
+    tensors = replace(
+        replay.tensors,
+        input_ids=ids,
+        position_ids=positions,
+        attention_mask=mask,
+        policy_attention_mask=mask,
+        reference_attention_mask=mask,
+        teacher_attention_mask=mask,
+    )
+    varied = replace(replay, replay_id=f"crop-batch-{sequence}", tensors=tensors)
+    return store.export_replay_bundle(store.put_replay(varied))
+
+
+def _sampling(bundle) -> SamplingIdentity:
+    return SamplingIdentity(
+        policy_version=bundle.replay_record.behavior_policy,
+        backend="vllm",
+        backend_version="decoder-batch",
+        seed=17,
+        rng_state_sha256="0" * 64,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=-1,
+        min_p=0.0,
+        repetition_penalty=1.0,
+        logit_processors=(),
+        measurement=LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        asynchronous_staleness_steps=0,
+    )
+
+
+def _live_crop_request(*, model, store, replay_handle) -> InjectedForwardRequest:
+    recorded = resolve_replay_request(store, replay_handle, ReplayConsumer.POLICY)
+    blocks = tuple(
+        InjectedVisualBlock(
+            kind=block.kind,
+            positions=block.positions,
+            embeddings=model.model.visual(block.embeddings),
+            deepstack=tuple(model.model.visual(branch) for branch in block.deepstack),
+            deepstack_positions=block.deepstack_positions,
+        )
+        for block in recorded.visual_blocks
+    )
+    return InjectedForwardRequest(
+        input_ids=recorded.input_ids,
+        attention_mask=recorded.attention_mask,
+        position_ids=recorded.position_ids,
+        visual_blocks=blocks,
+    )
 
 
 def _crop_replay(*, legacy_crop_pixels: bool = False):
@@ -274,3 +370,70 @@ def test_direct_answer_crop_replay_runs_live_source_vision_once() -> None:
     )
     assert model.model.visual.seen_grids[0].tolist() == [[1, 2, 2]]
     assert record.sequence_length == request.input_ids.shape[1]
+
+
+def test_current_crop_nonfused_decoder_batch_matches_variable_row_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch.manual_seed(127)
+    bundles = (_bundle_with_sequence(8), _bundle_with_sequence(10))
+    rows = []
+    for bundle, sequence in zip(bundles, (8, 10), strict=True):
+        response = OwnedTokenSequence(
+            token_ids=tuple(range(4, sequence + 1)),
+            ownership=(TokenOwnership.POLICY_SAMPLED,) * (sequence - 3),
+        )
+        rows.append(
+            ExactReplayResponseRequest(
+                bundle=bundle,
+                prompt_token_ids=(1, 2, 3),
+                response=response,
+                sampling=_sampling(bundle),
+            )
+        )
+
+    rowwise_model = _CropReplayQwen()
+    batched_model = copy.deepcopy(rowwise_model)
+    monkeypatch.setattr(
+        "tgvf_rl.policy.trainable_crop_replay.build_trainable_crop_current_request",
+        _live_crop_request,
+    )
+    rowwise_port = TrainableCropCurrentReplayPort(
+        engine=type("Engine", (), {"_autocast_dtype": torch.float32})(),
+        model=rowwise_model,
+    )
+    batched_port = TrainableCropCurrentReplayPort(
+        engine=type("Engine", (), {"_autocast_dtype": torch.float32})(),
+        model=batched_model,
+    )
+
+    expected = tuple(
+        rowwise_port.replay_response_logprobs(
+            bundle=row.bundle,
+            prompt_token_ids=row.prompt_token_ids,
+            response=row.response,
+            sampling=row.sampling,
+        )
+        for row in rows
+    )
+    actual = batched_port.replay_response_logprobs_batch(rows=tuple(rows))
+    expected_loss = sum(result.logprobs.sum() for result in expected)
+    actual_loss = sum(result.logprobs.sum() for result in actual)
+    expected_loss.backward()
+    actual_loss.backward()
+
+    assert tuple(result.bundle_sha256 for result in actual) == tuple(
+        row.bundle.bundle_sha256 for row in rows
+    )
+    for rowwise, batched in zip(expected, actual, strict=True):
+        torch.testing.assert_close(batched.logprobs, rowwise.logprobs)
+        assert batched.response_token_ids == rowwise.response_token_ids
+    for name in (
+        "model.language_model.proj.weight",
+        "model.visual.weight",
+        "lm_head.weight",
+    ):
+        expected_grad = dict(rowwise_model.named_parameters())[name].grad
+        actual_grad = dict(batched_model.named_parameters())[name].grad
+        assert expected_grad is not None and actual_grad is not None
+        torch.testing.assert_close(actual_grad, expected_grad)

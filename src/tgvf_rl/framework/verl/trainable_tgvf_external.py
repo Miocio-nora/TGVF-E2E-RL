@@ -7,14 +7,21 @@ from __future__ import annotations
 from .deepeyes_actor_loss import (  # noqa: F401
     compute_deepeyes_official_micro_token_mean_loss,
 )
+from .dynamic_token_actor_loss import (  # noqa: F401
+    compute_dynamic_global_token_mean_loss,
+)
+from .method_bypass_actor_loss import register_method_matrix_bypass_loss
 from .trainable_tgvf_engine import register_trainable_tgvf_fsdp2_engine
 
 
 TRAINABLE_TGVF_EXTERNAL_MODULE = "tgvf_rl.framework.verl.trainable_tgvf_external"
+METHOD_MATRIX_BYPASS_LOSS = register_method_matrix_bypass_loss()
 TRAINABLE_TGVF_ENGINE_CLASS = register_trainable_tgvf_fsdp2_engine()
 
 
 __all__ = [
     "TRAINABLE_TGVF_ENGINE_CLASS",
     "TRAINABLE_TGVF_EXTERNAL_MODULE",
+    "METHOD_MATRIX_BYPASS_LOSS",
+    "compute_dynamic_global_token_mean_loss",
 ]

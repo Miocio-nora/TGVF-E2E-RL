@@ -175,6 +175,126 @@ class TrainableCropCurrentReplayPort:
             logprobs=response_logprobs,
         )
 
+    def replay_response_logprobs_batch(
+        self,
+        *,
+        rows: tuple[Any, ...],
+    ) -> tuple[TrainableCropRoleReplay, ...]:
+        """Keep live vision rowwise but execute all decoder rows together."""
+
+        if not rows:
+            raise ValueError("current Crop replay batch cannot be empty")
+        prepared: list[
+            tuple[
+                TrajectoryReplayBundle,
+                tuple[int, ...],
+                OwnedTokenSequence,
+                SamplingIdentity,
+                ObservationStore,
+                object,
+            ]
+        ] = []
+        for row in rows:
+            bundle = getattr(row, "bundle", None)
+            prompt = tuple(getattr(row, "prompt_token_ids", ()))
+            response = getattr(row, "response", None)
+            sampling = getattr(row, "sampling", None)
+            if not isinstance(bundle, TrajectoryReplayBundle):
+                raise TypeError("current Crop replay batch row lost its bundle")
+            if not isinstance(response, OwnedTokenSequence):
+                raise TypeError("current Crop replay batch row lost its response")
+            if not isinstance(sampling, SamplingIdentity):
+                raise TypeError(
+                    "current Crop replay batch row lost its sampling identity"
+                )
+            if sampling.policy_version != bundle.replay_record.behavior_policy:
+                raise IdentityMismatchError(
+                    "sampling version differs from replay behavior policy"
+                )
+            validate_replay_bundle(bundle)
+            store, replay_handle = ObservationStore.from_replay_bundle(bundle)
+            recorded = resolve_replay_request(
+                store, replay_handle, ReplayConsumer.POLICY
+            )
+            exact_ids = tuple(int(value) for value in recorded.input_ids[0].tolist())
+            if exact_ids != prompt + response.token_ids:
+                raise ReplayMismatchError(
+                    "current Crop replay prompt/response differs from rollout token IDs"
+                )
+            if not response.policy_indices:
+                raise ValueError(
+                    "current Crop replay requires policy-owned response tokens"
+                )
+            prepared.append((bundle, prompt, response, sampling, store, replay_handle))
+
+        with torch.enable_grad(), self._autocast_context():
+            requests = tuple(
+                build_trainable_crop_current_request(
+                    model=self.model,
+                    store=item[4],
+                    replay_handle=item[5],
+                )
+                for item in prepared
+            )
+            hidden_rows = self.family_adapter.forward_injected_hidden_batch(
+                self.model, requests
+            )
+            results: list[TrainableCropRoleReplay] = []
+            for item, request, hidden in zip(
+                prepared, requests, hidden_rows, strict=True
+            ):
+                bundle, prompt, response, sampling, _store, _handle = item
+                response_indices = response.policy_indices
+                device = hidden.hidden_states.device
+                sampled_positions = torch.tensor(
+                    [[len(prompt) + index for index in response_indices]],
+                    dtype=torch.long,
+                    device=device,
+                )
+                if self.selected_logprob_materializer is None:
+                    logits = resolve_lm_head(self.model)(hidden.hidden_states)
+                    selected = gather_behavior_measure_logprobs(
+                        logits,
+                        request.input_ids.to(device=device),
+                        sampled_positions,
+                        sampling,
+                    ).squeeze(0)
+                else:
+                    selected = self.selected_logprob_materializer(
+                        hidden_states=hidden.hidden_states,
+                        lm_head=resolve_lm_head(self.model),
+                        token_ids=request.input_ids,
+                        sampled_positions=sampled_positions,
+                        sampling=sampling,
+                    ).squeeze(0)
+                if not selected.requires_grad:
+                    raise RuntimeError("current Crop log-probabilities lost autograd")
+                scatter = torch.tensor(
+                    response_indices, dtype=torch.long, device=device
+                )
+                response_logprobs = torch.zeros(
+                    len(response.token_ids), dtype=selected.dtype, device=device
+                ).scatter(0, scatter, selected)
+                mask = torch.tensor(
+                    tuple(
+                        owner is TokenOwnership.POLICY_SAMPLED
+                        for owner in response.ownership
+                    ),
+                    dtype=torch.bool,
+                    device=device,
+                )
+                results.append(
+                    TrainableCropRoleReplay(
+                        role=ComponentRole.CURRENT,
+                        bundle_sha256=bundle.bundle_sha256,
+                        response_token_ids=response.token_ids,
+                        response_ownership=response.ownership,
+                        policy_sampled_mask=mask,
+                        logprobs=response_logprobs,
+                    )
+                )
+        return tuple(results)
+
     def _autocast_context(self):
         dtype = getattr(self.engine, "_autocast_dtype", torch.float32)
         if dtype == torch.float32:

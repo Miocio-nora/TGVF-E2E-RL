@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from typing import Mapping
@@ -91,6 +92,27 @@ class PilotRewardPipeline:
 
     def score(self, context: RewardContext) -> RewardResult:
         verification = self.answer_verifier.verify(context)
+        return self._score_verified(context, verification)
+
+    async def score_async(self, context: RewardContext) -> RewardResult:
+        """Await an async verifier while retaining the exact reward equation."""
+
+        verify_async = getattr(self.answer_verifier, "verify_async", None)
+        if callable(verify_async):
+            verification = await verify_async(context)
+        else:
+            verification = await asyncio.to_thread(self.answer_verifier.verify, context)
+        return self._score_verified(context, verification)
+
+    def _score_verified(
+        self,
+        context: RewardContext,
+        verification: object,
+    ) -> RewardResult:
+        from .schema import AnswerVerificationResult
+
+        if not isinstance(verification, AnswerVerificationResult):
+            raise TypeError("answer verifier must return AnswerVerificationResult")
         answer_score = float(verification.correct)
         format_valid = (
             context.protocol_valid

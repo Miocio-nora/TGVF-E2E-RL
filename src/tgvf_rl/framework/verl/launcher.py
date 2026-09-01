@@ -18,7 +18,10 @@ from types import MappingProxyType
 
 from tgvf_rl.policy.horizon_extension import PolicyHorizonExtension
 from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
-from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
+from tgvf_rl.policy.run_config import (
+    POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA,
+    PolicyE2ESmokeRunConfig,
+)
 from tgvf_rl.qwen.deepstack_control import (
     TGVF_NATIVE_DEEPSTACK_ENABLED_CONFIG_FIELD,
 )
@@ -42,9 +45,17 @@ from .adapter import LOSSLESS_AGENT_LOOP_MANAGER_FQN, VerlAdapterConfig
 from .compatibility import (
     FSDP2BridgeConfig,
     SPIKE_CANDIDATE_VERL_COMMIT,
+    VERL_PREFIX_CACHE_WEIGHT_UPDATE_INVALIDATION,
+    VLLM_012_PREFIX_CACHE_MM_HASH_IDENTITY,
     VerlRuntimeRequirements,
 )
+from .dynamic_token_loss_contract import (
+    DYNAMIC_GLOBAL_TOKEN_POLICY_LOSS_MODE,
+    METHOD_MATRIX_BYPASS_LOSS_MODULE,
+    METHOD_MATRIX_BYPASS_LOSS_REGISTRY_NAME,
+)
 from .exact_replay_engine import TGVF_EXACT_REPLAY_MODEL_TYPE
+from .native_deepeyes_runtime import NATIVE_DEEPEYES_POLICY_LOSS_MODE
 from .smoke_dataset import VerlSelectedSampleDatasetBinding
 from .deepeyes_dataset import VerlDeepEyes47KDatasetBinding
 from .policy_t1_dataset import VerlPolicyT1DatasetBinding
@@ -99,6 +110,9 @@ POLICY_CHECKPOINT_ENGINE_MANAGER_FQN = (
 )
 
 VERL_POLICY_SMOKE_LAUNCH_SCHEMA = "tgvf-verl-policy-smoke-launch-v1"
+VLLM_ROLLOUT_DATA_PARALLEL_SIZE = 1
+VLLM_ROLLOUT_PIPELINE_PARALLEL_SIZE = 1
+VLLM_ROLLOUT_DISAGGREGATION_ENABLED = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +250,7 @@ class UpstreamVerlLaunchPlan:
             raise ValueError(
                 "actor/reference and vLLM native DeepStack controls differ"
             )
+        _assert_performance_surface(self.overrides)
         for role in ("actor", "ref"):
             prefix = f"actor_rollout_ref.{role}.fsdp_config"
             if self.overrides.get(f"{prefix}.model_dtype") != "bf16":
@@ -455,6 +470,42 @@ def build_policy_e2e_smoke_verl_plan(
 
     distributed = config.distributed
     capacity = config.capacity
+    performance = config.performance
+    if performance is None:
+        raise ValueError("Policy launch requires an explicit performance binding")
+    performance_capacity = (
+        performance.vllm_enable_chunked_prefill,
+        performance.vllm_enable_cuda_graph,
+        performance.vllm_tensor_parallel_size,
+    )
+    bound_capacity = (
+        capacity.vllm_enable_chunked_prefill,
+        not capacity.vllm_enforce_eager,
+        distributed.vllm_tensor_parallel_size,
+    )
+    if performance_capacity != bound_capacity:
+        raise ValueError(
+            "performance binding differs from distributed/capacity launch values"
+        )
+    if (
+        performance.rollout_logprob_bypass
+        is not config.policy.grpo.rollout_correction_bypass_mode
+    ):
+        raise ValueError(
+            "performance rollout-logprob bypass differs from the policy objective"
+        )
+    cuda_graph_capture_sizes: list[int] | None = (
+        list(performance.vllm_cuda_graph_capture_sizes)
+        if config.schema_version == POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA
+        else None
+    )
+    vllm_rollout_replicas = _vllm_rollout_replica_count(
+        world_size=distributed.world_size,
+        tensor_parallel_size=performance.vllm_tensor_parallel_size,
+        data_parallel_size=VLLM_ROLLOUT_DATA_PARALLEL_SIZE,
+        pipeline_parallel_size=VLLM_ROLLOUT_PIPELINE_PARALLEL_SIZE,
+        disaggregation_enabled=VLLM_ROLLOUT_DISAGGREGATION_ENABLED,
+    )
     response_transport_length = capacity.response_transport_length
     if response_transport_length <= config.policy.sampling.max_response_length:
         raise ValueError(
@@ -668,14 +719,15 @@ def build_policy_e2e_smoke_verl_plan(
             # current/reference role from forward_only.
             "actor_rollout_ref.model.external_lib": EXACT_REPLAY_EXTERNAL_MODULE,
             "actor_rollout_ref.model.model_type": TGVF_EXACT_REPLAY_MODEL_TYPE,
-            # Keep the first executable cell on the already accepted
-            # Torch-SDPA path.  Upstream otherwise silently selects
-            # flash_attention_2, which is neither installed nor accepted for
-            # this smoke identity.  B200 memory also makes activation
-            # checkpointing and remove-padding monkey patches unnecessary.
+            # Keep the actor/reference attention identity explicit while the
+            # performance binding owns activation and padding optimizations.
             "actor_rollout_ref.model.override_config.attn_implementation": "sdpa",
-            "actor_rollout_ref.model.enable_gradient_checkpointing": False,
-            "actor_rollout_ref.model.use_remove_padding": False,
+            "actor_rollout_ref.model.enable_gradient_checkpointing": (
+                performance.enable_gradient_checkpointing
+            ),
+            "actor_rollout_ref.model.use_remove_padding": (
+                performance.use_remove_padding
+            ),
             "actor_rollout_ref.model.use_liger": False,
             "actor_rollout_ref.model.use_fused_kernels": False,
             "actor_rollout_ref.actor.ppo_mini_batch_size": (
@@ -683,7 +735,12 @@ def build_policy_e2e_smoke_verl_plan(
             ),
             "actor_rollout_ref.actor.ppo_micro_batch_size": None,
             "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu": (
-                actor_batch["upstream_ppo_micro_batch_size_per_gpu_trajectories"]
+                None
+                if performance.dynamic_token_batching
+                else actor_batch["upstream_ppo_micro_batch_size_per_gpu_trajectories"]
+            ),
+            "actor_rollout_ref.actor.use_dynamic_bsz": (
+                performance.dynamic_token_batching
             ),
             "actor_rollout_ref.actor.ppo_max_token_len_per_gpu": (
                 capacity.actor_ppo_max_token_len_per_gpu
@@ -735,15 +792,27 @@ def build_policy_e2e_smoke_verl_plan(
             ),
             "actor_rollout_ref.rollout.log_prob_micro_batch_size": None,
             "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu": (
-                accumulation.rollout_prompt_micro_batch_size_per_engine
+                None
+                if performance.dynamic_token_batching
+                else accumulation.rollout_prompt_micro_batch_size_per_engine
                 * sampling.trajectories_per_prompt
+            ),
+            "actor_rollout_ref.rollout.log_prob_use_dynamic_bsz": (
+                performance.dynamic_token_batching
             ),
             "actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu": (
                 capacity.rollout_log_prob_max_token_len_per_gpu
             ),
             "actor_rollout_ref.ref.log_prob_micro_batch_size": None,
             "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": (
-                actor_batch["upstream_inference_micro_batch_size_per_gpu_trajectories"]
+                None
+                if performance.dynamic_token_batching
+                else actor_batch[
+                    "upstream_inference_micro_batch_size_per_gpu_trajectories"
+                ]
+            ),
+            "actor_rollout_ref.ref.log_prob_use_dynamic_bsz": (
+                performance.dynamic_token_batching
             ),
             "actor_rollout_ref.ref.log_prob_max_token_len_per_gpu": (
                 capacity.reference_log_prob_max_token_len_per_gpu
@@ -752,7 +821,16 @@ def build_policy_e2e_smoke_verl_plan(
             "actor_rollout_ref.rollout.nnodes": 1,
             "actor_rollout_ref.rollout.n_gpus_per_node": distributed.world_size,
             "actor_rollout_ref.rollout.tensor_model_parallel_size": (
-                distributed.vllm_tensor_parallel_size
+                performance.vllm_tensor_parallel_size
+            ),
+            "actor_rollout_ref.rollout.data_parallel_size": (
+                VLLM_ROLLOUT_DATA_PARALLEL_SIZE
+            ),
+            "actor_rollout_ref.rollout.pipeline_model_parallel_size": (
+                VLLM_ROLLOUT_PIPELINE_PARALLEL_SIZE
+            ),
+            "actor_rollout_ref.rollout.disaggregation.enabled": (
+                VLLM_ROLLOUT_DISAGGREGATION_ENABLED
             ),
             "actor_rollout_ref.rollout.gpu_memory_utilization": (
                 capacity.vllm_gpu_memory_utilization
@@ -763,9 +841,23 @@ def build_policy_e2e_smoke_verl_plan(
             "actor_rollout_ref.rollout.max_model_len": (capacity.vllm_max_model_len),
             "actor_rollout_ref.rollout.max_num_seqs": capacity.vllm_max_num_seqs,
             "actor_rollout_ref.rollout.enable_chunked_prefill": (
-                capacity.vllm_enable_chunked_prefill
+                performance.vllm_enable_chunked_prefill
             ),
-            "actor_rollout_ref.rollout.enforce_eager": capacity.vllm_enforce_eager,
+            "actor_rollout_ref.rollout.enable_prefix_caching": (
+                performance.vllm_enable_prefix_caching
+            ),
+            "actor_rollout_ref.rollout.enforce_eager": (
+                not performance.vllm_enable_cuda_graph
+            ),
+            "actor_rollout_ref.rollout.cudagraph_capture_sizes": (
+                cuda_graph_capture_sizes
+            ),
+            "actor_rollout_ref.actor.policy_loss.rollout_correction.bypass_mode": (
+                performance.rollout_logprob_bypass
+            ),
+            "algorithm.rollout_correction.bypass_mode": (
+                performance.rollout_logprob_bypass
+            ),
             "actor_rollout_ref.rollout.seed": config.rollout_rng.master_seed,
             "actor_rollout_ref.rollout.ignore_eos": sampling.ignore_eos,
             "actor_rollout_ref.rollout.agent.default_agent_loop": (
@@ -852,6 +944,46 @@ def build_policy_e2e_smoke_verl_plan(
                     "vllm_max_model_len": capacity.vllm_max_model_len,
                     "vllm_max_num_seqs": capacity.vllm_max_num_seqs,
                 },
+                "performance": {
+                    "source_schema_version": config.schema_version,
+                    "dynamic_token_batching": (performance.dynamic_token_batching),
+                    "use_remove_padding": performance.use_remove_padding,
+                    "enable_gradient_checkpointing": (
+                        performance.enable_gradient_checkpointing
+                    ),
+                    "vllm_enable_prefix_caching": (
+                        performance.vllm_enable_prefix_caching
+                    ),
+                    "vllm_enable_chunked_prefill": (
+                        performance.vllm_enable_chunked_prefill
+                    ),
+                    "vllm_enable_cuda_graph": (performance.vllm_enable_cuda_graph),
+                    "vllm_cuda_graph_capture_sizes": cuda_graph_capture_sizes,
+                    "vllm_tensor_parallel_size": (
+                        performance.vllm_tensor_parallel_size
+                    ),
+                    "vllm_data_parallel_size": VLLM_ROLLOUT_DATA_PARALLEL_SIZE,
+                    "vllm_pipeline_parallel_size": (
+                        VLLM_ROLLOUT_PIPELINE_PARALLEL_SIZE
+                    ),
+                    "vllm_disaggregation_enabled": (
+                        VLLM_ROLLOUT_DISAGGREGATION_ENABLED
+                    ),
+                    "derived_vllm_rollout_replicas": vllm_rollout_replicas,
+                    "rollout_logprob_bypass": (performance.rollout_logprob_bypass),
+                    "reference_replay_mode": performance.reference_replay_mode,
+                    "judge_dispatch_mode": performance.judge_dispatch_mode,
+                    "judge_max_concurrency_per_worker": (
+                        performance.judge_max_concurrency_per_worker
+                    ),
+                    "judge_concurrency_scope": "agent_loop_worker_process_local",
+                    "prefix_cache_identity_basis": (
+                        VLLM_012_PREFIX_CACHE_MM_HASH_IDENTITY
+                    ),
+                    "prefix_cache_invalidation": (
+                        VERL_PREFIX_CACHE_WEIGHT_UPDATE_INVALIDATION
+                    ),
+                },
                 "exact_replay": {
                     "model_type": TGVF_EXACT_REPLAY_MODEL_TYPE,
                     "registration_module": EXACT_REPLAY_EXTERNAL_MODULE,
@@ -863,7 +995,7 @@ def build_policy_e2e_smoke_verl_plan(
                 },
                 "reward": _reward_custom_config(config),
                 "reference_diagnostic": {
-                    "enabled": True,
+                    "enabled": (performance.reference_replay_mode == "full_diagnostic"),
                     "coefficient": 0.0,
                     "worker_route": "colocated_frozen_base_exact_replay",
                     "observation_source": "rollout_materialized_exact_bundle",
@@ -1137,15 +1269,17 @@ def _checkpoint_frequency(steps: Sequence[int], *, maximum_step: int) -> int:
     positive = normalized[1:]
     if not positive:
         raise ValueError("checkpoint plan requires at least one positive step")
-    # veRL exposes only a periodic ``save_freq``.  Route every step through
-    # the project trainer hook; that hook applies this exact, possibly
-    # non-uniform schedule before any checkpoint mutation occurs.
-    return 1
+    # veRL exposes only a periodic ``save_freq``. Use the greatest common
+    # divisor of the requested positive steps so every requested checkpoint is
+    # visited while avoiding an otherwise pointless hook on every optimizer
+    # step. The project trainer hook still applies the exact (possibly
+    # non-uniform) schedule before any checkpoint mutation occurs.
+    return math.gcd(*positive)
 
 
 def _actor_batch_contract(
     config: PolicyE2ESmokeRunConfig,
-) -> dict[str, int]:
+) -> dict[str, object]:
     """Prove prompt-unit config maps to one pinned-veRL optimizer update.
 
     Pinned e003 v0 treats ``actor.ppo_mini_batch_size`` as prompts and multiplies
@@ -1164,6 +1298,36 @@ def _actor_batch_contract(
     n = config.policy.sampling.trajectories_per_prompt
     dp_size = config.distributed.world_size
     trajectory_mini = prompts * n
+    performance = config.performance
+    if performance is None:
+        raise ValueError("actor batch contract requires performance binding")
+    if performance.dynamic_token_batching:
+        return {
+            "global_prompt_batch_size": prompts,
+            "rollouts_per_prompt": n,
+            "fsdp_data_parallel_size": dp_size,
+            "prompt_micro_batch_size_per_rank": prompt_micro,
+            "configured_gradient_accumulation_steps": (
+                config.accumulation.gradient_accumulation_steps
+            ),
+            "dynamic_token_batching": True,
+            "actor_ppo_max_token_len_per_gpu": (
+                config.capacity.actor_ppo_max_token_len_per_gpu
+            ),
+            "rollout_log_prob_max_token_len_per_gpu": (
+                config.capacity.rollout_log_prob_max_token_len_per_gpu
+            ),
+            "reference_log_prob_max_token_len_per_gpu": (
+                config.capacity.reference_log_prob_max_token_len_per_gpu
+            ),
+            "upstream_ppo_mini_batch_size_prompts": prompts,
+            "upstream_internal_mini_batch_size_trajectories": trajectory_mini,
+            "upstream_ppo_micro_batch_size_per_gpu_trajectories": None,
+            "upstream_inference_micro_batch_size_per_gpu_trajectories": None,
+            "derived_actor_forward_backward_microbatches": None,
+            "derived_gradient_accumulation_steps": None,
+            "optimizer_steps_per_trainer_step": 1,
+        }
     actor_trajectory_micro_per_gpu = prompt_micro
     inference_trajectory_micro_per_gpu = prompt_micro * n
     denominator = dp_size * actor_trajectory_micro_per_gpu
@@ -1184,6 +1348,7 @@ def _actor_batch_contract(
         "fsdp_data_parallel_size": dp_size,
         "prompt_micro_batch_size_per_rank": prompt_micro,
         "configured_gradient_accumulation_steps": configured_accumulation,
+        "dynamic_token_batching": False,
         "upstream_ppo_mini_batch_size_prompts": prompts,
         "upstream_internal_mini_batch_size_trajectories": trajectory_mini,
         "upstream_ppo_micro_batch_size_per_gpu_trajectories": (
@@ -1198,6 +1363,40 @@ def _actor_batch_contract(
         "derived_gradient_accumulation_steps": configured_accumulation,
         "optimizer_steps_per_trainer_step": 1,
     }
+
+
+def _vllm_rollout_replica_count(
+    *,
+    world_size: int,
+    tensor_parallel_size: int,
+    data_parallel_size: int,
+    pipeline_parallel_size: int,
+    disaggregation_enabled: bool,
+) -> int:
+    if type(world_size) is not int or world_size <= 0:
+        raise ValueError("vLLM rollout replica derivation requires positive world size")
+    parallel_sizes = {
+        "tensor": tensor_parallel_size,
+        "data": data_parallel_size,
+        "pipeline": pipeline_parallel_size,
+    }
+    for name, value in parallel_sizes.items():
+        if type(value) is not int or value <= 0:
+            raise ValueError(
+                f"vLLM rollout replica derivation requires positive {name} "
+                "parallel size"
+            )
+    if type(disaggregation_enabled) is not bool:
+        raise TypeError("vLLM rollout disaggregation flag must be bool")
+    if disaggregation_enabled:
+        raise ValueError(
+            "vLLM rollout replica derivation does not accept disaggregation "
+            "without explicit prefill/decode topology"
+        )
+    rollout_world_size = math.prod(parallel_sizes.values())
+    if world_size % rollout_world_size:
+        raise ValueError("vLLM rollout parallel footprint must divide world size")
+    return world_size // rollout_world_size
 
 
 def _precision_name(value: str) -> str:
@@ -1328,6 +1527,109 @@ def _assert_checkpoint_and_method_matrix_surface(
         raise ValueError("method external registration differs")
     if overrides.get("actor_rollout_ref.model.model_type") != expected_model_type:
         raise ValueError("method actor engine differs")
+
+
+def _assert_performance_surface(overrides: Mapping[str, object]) -> None:
+    custom = overrides.get("actor_rollout_ref.rollout.custom")
+    if not isinstance(custom, Mapping):
+        raise ValueError("Policy launch lost its custom performance receipt")
+    performance = custom.get("performance")
+    if not isinstance(performance, Mapping):
+        raise ValueError("Policy launch lost its typed performance receipt")
+    dynamic = performance.get("dynamic_token_batching")
+    cuda_graph = performance.get("vllm_enable_cuda_graph")
+    if type(dynamic) is not bool or type(cuda_graph) is not bool:
+        raise ValueError("Policy performance switches must be explicit booleans")
+    expected = {
+        "actor_rollout_ref.actor.use_dynamic_bsz": dynamic,
+        "actor_rollout_ref.rollout.log_prob_use_dynamic_bsz": dynamic,
+        "actor_rollout_ref.ref.log_prob_use_dynamic_bsz": dynamic,
+        "actor_rollout_ref.model.use_remove_padding": performance.get(
+            "use_remove_padding"
+        ),
+        "actor_rollout_ref.model.enable_gradient_checkpointing": performance.get(
+            "enable_gradient_checkpointing"
+        ),
+        "actor_rollout_ref.rollout.enable_prefix_caching": performance.get(
+            "vllm_enable_prefix_caching"
+        ),
+        "actor_rollout_ref.rollout.enable_chunked_prefill": performance.get(
+            "vllm_enable_chunked_prefill"
+        ),
+        "actor_rollout_ref.rollout.enforce_eager": not cuda_graph,
+        "actor_rollout_ref.rollout.cudagraph_capture_sizes": performance.get(
+            "vllm_cuda_graph_capture_sizes"
+        ),
+        "actor_rollout_ref.rollout.tensor_model_parallel_size": performance.get(
+            "vllm_tensor_parallel_size"
+        ),
+        "actor_rollout_ref.rollout.data_parallel_size": performance.get(
+            "vllm_data_parallel_size"
+        ),
+        "actor_rollout_ref.rollout.pipeline_model_parallel_size": performance.get(
+            "vllm_pipeline_parallel_size"
+        ),
+        "actor_rollout_ref.rollout.disaggregation.enabled": performance.get(
+            "vllm_disaggregation_enabled"
+        ),
+        "actor_rollout_ref.actor.policy_loss.rollout_correction.bypass_mode": (
+            performance.get("rollout_logprob_bypass")
+        ),
+        "algorithm.rollout_correction.bypass_mode": performance.get(
+            "rollout_logprob_bypass"
+        ),
+    }
+    mismatches = {
+        path: (overrides.get(path), required)
+        for path, required in expected.items()
+        if overrides.get(path) != required
+    }
+    if mismatches:
+        raise ValueError(f"Policy performance override drift: {mismatches!r}")
+    world_size = overrides.get("trainer.n_gpus_per_node")
+    tensor_parallel_size = performance.get("vllm_tensor_parallel_size")
+    expected_rollout_replicas = _vllm_rollout_replica_count(
+        world_size=world_size,
+        tensor_parallel_size=tensor_parallel_size,
+        data_parallel_size=performance.get("vllm_data_parallel_size"),
+        pipeline_parallel_size=performance.get("vllm_pipeline_parallel_size"),
+        disaggregation_enabled=performance.get("vllm_disaggregation_enabled"),
+    )
+    if performance.get("derived_vllm_rollout_replicas") != expected_rollout_replicas:
+        raise ValueError("derived vLLM rollout replica receipt differs")
+    for path in (
+        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu",
+        "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu",
+        "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu",
+    ):
+        value = overrides.get(path)
+        if dynamic and value is not None:
+            raise ValueError("dynamic token batching requires fixed micros unset")
+        if not dynamic and (type(value) is not int or value <= 0):
+            raise ValueError("fixed token batching requires positive micro sizes")
+    if overrides.get("actor_rollout_ref.rollout.calculate_log_probs") is not True:
+        raise ValueError(
+            "rollout-logprob bypass still requires behavior-logprob collection"
+        )
+    method_matrix = custom.get("method_matrix")
+    if isinstance(method_matrix, Mapping):
+        expected_loss_mode = (
+            DYNAMIC_GLOBAL_TOKEN_POLICY_LOSS_MODE
+            if dynamic
+            else NATIVE_DEEPEYES_POLICY_LOSS_MODE
+        )
+        if (
+            method_matrix.get("actor_loss_mode") != expected_loss_mode
+            or method_matrix.get("actor_execution_loss_mode")
+            != METHOD_MATRIX_BYPASS_LOSS_REGISTRY_NAME
+            or method_matrix.get("actor_execution_loss_module")
+            != METHOD_MATRIX_BYPASS_LOSS_MODULE
+            or overrides.get("actor_rollout_ref.actor.policy_loss.loss_mode")
+            != expected_loss_mode
+        ):
+            raise ValueError(
+                "method actor loss identity differs from its batching reduction"
+            )
 
 
 __all__ = [

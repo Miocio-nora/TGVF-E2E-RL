@@ -8,6 +8,7 @@ No visual judge implementation lives here.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import math
 from typing import Callable, Protocol
@@ -388,6 +389,14 @@ class Stage3VerlTrajectoryRewardScorer:
         self.spec = spec
         self.answer_verifier = answer_verifier
         self.answer_judge_identity = judge_identity
+        judge_route = getattr(answer_verifier, "judge_route", None)
+        if judge_route is None and judge_identity is not None:
+            judge_route = getattr(answer_verifier, "route", None)
+        if judge_route is not None and (
+            not isinstance(judge_route, str) or not judge_route.strip()
+        ):
+            raise TypeError("answer verifier judge route must be non-empty text")
+        self.answer_judge_route = judge_route
         self.context_provider = context_provider
         self.tool_utility = tool_utility
         self.visual_quality_judge = visual_quality_judge
@@ -412,6 +421,64 @@ class Stage3VerlTrajectoryRewardScorer:
         request: object,
         trajectory: TrajectoryRecord,
     ) -> Stage3VerlTrajectoryReward:
+        context, label = self._prepare(
+            request=request,
+            trajectory=trajectory,
+        )
+        verification = self._verify_answer(context)
+        visual = self._judge_visual(
+            request=request,
+            trajectory=trajectory,
+            context=context,
+        )
+        reward = self._finish_score(
+            trajectory=trajectory,
+            context=context,
+            label=label,
+            verification=verification,
+            visual=visual,
+        )
+        if self.audit_sink is not None:
+            self.audit_sink(trajectory, reward)
+        return reward
+
+    async def score_async(
+        self,
+        *,
+        request: object,
+        trajectory: TrajectoryRecord,
+    ) -> Stage3VerlTrajectoryReward:
+        """Await independent answer/visual judges and preserve the same kernel."""
+
+        context, label = self._prepare(
+            request=request,
+            trajectory=trajectory,
+        )
+        verification, visual = await asyncio.gather(
+            self._verify_answer_async(context),
+            self._judge_visual_async(
+                request=request,
+                trajectory=trajectory,
+                context=context,
+            ),
+        )
+        reward = self._finish_score(
+            trajectory=trajectory,
+            context=context,
+            label=label,
+            verification=verification,
+            visual=visual,
+        )
+        if self.audit_sink is not None:
+            await asyncio.to_thread(self.audit_sink, trajectory, reward)
+        return reward
+
+    def _prepare(
+        self,
+        *,
+        request: object,
+        trajectory: TrajectoryRecord,
+    ) -> tuple[RewardContext, TGVFToolUtilityLabelBinding | None]:
         if not isinstance(trajectory, TrajectoryRecord):
             raise TypeError("trajectory must be TrajectoryRecord")
         if getattr(request, "identity", None) != trajectory.identity:
@@ -430,15 +497,34 @@ class Stage3VerlTrajectoryRewardScorer:
             if self.tool_utility is None
             else self.tool_utility.label_for_sample(context.sample_id)
         )
+        return context, label
+
+    def _verify_answer(self, context: RewardContext) -> AnswerVerificationResult:
         verification = self.answer_verifier.verify(context)
+        return self._validate_answer_verification(verification)
+
+    async def _verify_answer_async(
+        self, context: RewardContext
+    ) -> AnswerVerificationResult:
+        verify_async = getattr(self.answer_verifier, "verify_async", None)
+        if callable(verify_async):
+            verification = await verify_async(context)
+        else:
+            verification = await asyncio.to_thread(self.answer_verifier.verify, context)
+        return self._validate_answer_verification(verification)
+
+    def _validate_answer_verification(
+        self, verification: object
+    ) -> AnswerVerificationResult:
         if not isinstance(verification, AnswerVerificationResult):
             raise TypeError("answer_verifier returned the wrong result type")
         # RuleFirstAnswerVerifier intentionally reports the configured judge
         # model for semantic fallback and the rule identity otherwise.  Bind
         # the route to the exact identity, rather than merely accepting either
         # identity for every route.
-        used_semantic_fallback = verification.route.startswith(
-            "qwen2.5_72b_semantic_fallback"
+        used_semantic_fallback = (
+            self.answer_judge_identity is not None
+            and verification.verifier_identity == self.answer_judge_identity
         )
         expected_verifier_identity = (
             self.answer_judge_identity
@@ -452,43 +538,145 @@ class Stage3VerlTrajectoryRewardScorer:
             raise IdentityMismatchError(
                 "Stage3 answer verifier route and configured identity differ"
             )
+        if used_semantic_fallback:
+            if self.answer_judge_route is None or not (
+                verification.route == self.answer_judge_route
+                or verification.route.startswith(self.answer_judge_route + "_")
+            ):
+                raise IdentityMismatchError(
+                    "Stage3 semantic fallback route differs from its model binding"
+                )
+        elif self.answer_judge_route is not None and (
+            verification.route == self.answer_judge_route
+            or verification.route.startswith(self.answer_judge_route + "_")
+        ):
+            raise IdentityMismatchError(
+                "Stage3 rule result claimed the configured judge route"
+            )
+        return verification
 
-        focus_score: QualityJudgeScore | None = None
-        grounding_score: QualityJudgeScore | None = None
-        quality_judge_failure: str | None = None
-        visual_judge_usage: JudgeUsage | None = None
-        if (
+    def _judge_visual(
+        self,
+        *,
+        request: object,
+        trajectory: TrajectoryRecord,
+        context: RewardContext,
+    ) -> tuple[
+        QualityJudgeScore | None,
+        QualityJudgeScore | None,
+        str | None,
+        JudgeUsage | None,
+    ]:
+        if not (
             self.spec.visual_quality_enabled
             and context.successful_tgvf_observation_count >= 1
         ):
-            assert self.visual_quality_judge is not None
-            try:
-                judgement = self.visual_quality_judge.judge(
+            return None, None, None, None
+        assert self.visual_quality_judge is not None
+        try:
+            judgement = self.visual_quality_judge.judge(
+                request=request,
+                trajectory=trajectory,
+                context=context,
+            )
+        except Stage3VisualJudgeSampleFailure as error:
+            return None, None, error.code, error.usage
+        return self._validated_visual_judgement(
+            judgement,
+            trajectory=trajectory,
+            context=context,
+        )
+
+    async def _judge_visual_async(
+        self,
+        *,
+        request: object,
+        trajectory: TrajectoryRecord,
+        context: RewardContext,
+    ) -> tuple[
+        QualityJudgeScore | None,
+        QualityJudgeScore | None,
+        str | None,
+        JudgeUsage | None,
+    ]:
+        if not (
+            self.spec.visual_quality_enabled
+            and context.successful_tgvf_observation_count >= 1
+        ):
+            return None, None, None, None
+        assert self.visual_quality_judge is not None
+        try:
+            judge_async = getattr(self.visual_quality_judge, "judge_async", None)
+            if callable(judge_async):
+                judgement = await judge_async(
                     request=request,
                     trajectory=trajectory,
                     context=context,
                 )
-            except Stage3VisualJudgeSampleFailure as error:
-                quality_judge_failure = error.code
-                visual_judge_usage = error.usage
             else:
-                if not isinstance(judgement, Stage3VisualQualityJudgement):
-                    raise TypeError(
-                        "visual_quality_judge returned the wrong result type"
-                    )
-                if (
-                    judgement.trajectory_id != trajectory.identity.canonical_id
-                    or judgement.sample_id != context.sample_id
-                    or judgement.successful_observation_count
-                    != context.successful_tgvf_observation_count
-                    or judgement.judge_identity != self.spec.visual_judge_identity
-                ):
-                    raise IdentityMismatchError(
-                        "visual-quality judgement identity differs"
-                    )
-                focus_score = judgement.focus_score
-                grounding_score = judgement.grounding_score
-                visual_judge_usage = judgement.usage
+                judgement = await asyncio.to_thread(
+                    self.visual_quality_judge.judge,
+                    request=request,
+                    trajectory=trajectory,
+                    context=context,
+                )
+        except Stage3VisualJudgeSampleFailure as error:
+            return None, None, error.code, error.usage
+        return self._validated_visual_judgement(
+            judgement,
+            trajectory=trajectory,
+            context=context,
+        )
+
+    def _validated_visual_judgement(
+        self,
+        judgement: object,
+        *,
+        trajectory: TrajectoryRecord,
+        context: RewardContext,
+    ) -> tuple[
+        QualityJudgeScore,
+        QualityJudgeScore,
+        None,
+        JudgeUsage | None,
+    ]:
+        if not isinstance(judgement, Stage3VisualQualityJudgement):
+            raise TypeError("visual_quality_judge returned the wrong result type")
+        if (
+            judgement.trajectory_id != trajectory.identity.canonical_id
+            or judgement.sample_id != context.sample_id
+            or judgement.successful_observation_count
+            != context.successful_tgvf_observation_count
+            or judgement.judge_identity != self.spec.visual_judge_identity
+        ):
+            raise IdentityMismatchError("visual-quality judgement identity differs")
+        return (
+            judgement.focus_score,
+            judgement.grounding_score,
+            None,
+            judgement.usage,
+        )
+
+    def _finish_score(
+        self,
+        *,
+        trajectory: TrajectoryRecord,
+        context: RewardContext,
+        label: TGVFToolUtilityLabelBinding | None,
+        verification: AnswerVerificationResult,
+        visual: tuple[
+            QualityJudgeScore | None,
+            QualityJudgeScore | None,
+            str | None,
+            JudgeUsage | None,
+        ],
+    ) -> Stage3VerlTrajectoryReward:
+        (
+            focus_score,
+            grounding_score,
+            quality_judge_failure,
+            visual_judge_usage,
+        ) = visual
 
         protocol_errors = tuple(
             dict.fromkeys(
@@ -528,8 +716,6 @@ class Stage3VerlTrajectoryRewardScorer:
             result=result,
             visual_judge_usage=visual_judge_usage,
         )
-        if self.audit_sink is not None:
-            self.audit_sink(trajectory, reward)
         return reward
 
 

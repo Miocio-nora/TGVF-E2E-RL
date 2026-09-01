@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -112,6 +113,27 @@ class VerlRewardedAgentLoopOutputBuilder:
 
     def __call__(self, trajectory: TrajectoryRecord) -> object:
         scored = self.scorer.score(request=self.request, trajectory=trajectory)
+        return self._build_from_scored(trajectory, scored)
+
+    async def build_async(self, trajectory: TrajectoryRecord) -> object:
+        """Await reward scoring and keep exact replay finalization off-loop."""
+
+        score_async = getattr(self.scorer, "score_async", None)
+        if callable(score_async):
+            scored = await score_async(request=self.request, trajectory=trajectory)
+        else:
+            scored = await asyncio.to_thread(
+                self.scorer.score,
+                request=self.request,
+                trajectory=trajectory,
+            )
+        return await asyncio.to_thread(self._build_from_scored, trajectory, scored)
+
+    def _build_from_scored(
+        self,
+        trajectory: TrajectoryRecord,
+        scored: PilotVerlTrajectoryReward | Stage3VerlTrajectoryReward,
+    ) -> object:
         record = self.finalizer.finalize(
             request=self.request,
             trajectory=trajectory,

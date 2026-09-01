@@ -7,6 +7,14 @@ from .base import (
     JudgeResult,
     JudgeUsage,
 )
+from .dispatch import (
+    JUDGE_DISPATCH_MAXIMUM_CONCURRENCY,
+    JUDGE_DISPATCH_SCHEMA_VERSION,
+    BoundedJudgeDispatcher,
+    JudgeDispatchConfig,
+    JudgeDispatchMode,
+    JudgeModelRoute,
+)
 from .openai_compatible import (
     BoundOpenAICompatibleJudge,
     JUDGE_SAMPLE_FAILURE_ABORT,
@@ -38,6 +46,12 @@ __all__ = [
     "JudgeRequest",
     "JudgeResult",
     "JudgeUsage",
+    "JUDGE_DISPATCH_MAXIMUM_CONCURRENCY",
+    "JUDGE_DISPATCH_SCHEMA_VERSION",
+    "BoundedJudgeDispatcher",
+    "JudgeDispatchConfig",
+    "JudgeDispatchMode",
+    "JudgeModelRoute",
     "BoundOpenAICompatibleJudge",
     "JUDGE_SAMPLE_FAILURE_ABORT",
     "JUDGE_SAMPLE_FAILURE_ZERO",

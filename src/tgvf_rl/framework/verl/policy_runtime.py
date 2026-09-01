@@ -16,8 +16,9 @@ than running a text-only or stale-policy substitute.
 
 from __future__ import annotations
 
+import atexit
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import hmac
 import os
@@ -325,6 +326,18 @@ class _ProcessRuntimeCore:
         ExactLoRASnapshotPolicyVersionPort | ExactPolicyBehaviorSnapshotVersionPort
     )
     construction_fingerprint: tuple[int, ...]
+    runtime_close: Callable[[], None] | None
+    _closed: bool = field(init=False, default=False, repr=False)
+
+    def close(self) -> None:
+        """Release the process-owned live resources exactly once."""
+
+        with _PROCESS_RUNTIME_LOCK:
+            if self._closed:
+                return
+            self._closed = True
+        if self.runtime_close is not None:
+            self.runtime_close()
 
 
 _PROCESS_RUNTIME_LOCK = RLock()
@@ -448,53 +461,62 @@ class PolicyE2ERuntimeInvocationFactory:
                     raise TypeError(
                         "live runtime builder must return PolicyE2ERuntimeProduct"
                     )
-                if method_behavior:
-                    if product.behavior_snapshot_consumer is None:
-                        raise TypeError(
-                            "method runtime requires a behavior snapshot consumer"
+                runtime_close = _runtime_close_hook(product)
+                try:
+                    if method_behavior:
+                        if product.behavior_snapshot_consumer is None:
+                            raise TypeError(
+                                "method runtime requires a behavior snapshot consumer"
+                            )
+                        policy_version = ExactPolicyBehaviorSnapshotVersionPort(
+                            state=state,
+                            consumer=product.behavior_snapshot_consumer,
+                            initial_snapshot=initial_snapshot,
+                            snapshot_loader=behavior_snapshot_loader,
                         )
-                    policy_version = ExactPolicyBehaviorSnapshotVersionPort(
-                        state=state,
-                        consumer=product.behavior_snapshot_consumer,
-                        initial_snapshot=initial_snapshot,
-                        snapshot_loader=behavior_snapshot_loader,
-                    )
-                else:
-                    if product.snapshot_consumer is None:
-                        raise TypeError(
-                            "legacy runtime requires a LoRA snapshot consumer"
+                    else:
+                        if product.snapshot_consumer is None:
+                            raise TypeError(
+                                "legacy runtime requires a LoRA snapshot consumer"
+                            )
+                        policy_version = ExactLoRASnapshotPolicyVersionPort(
+                            state=state,
+                            consumer=product.snapshot_consumer,
+                            initial_snapshot=initial_snapshot,
+                            snapshot_loader=snapshot_loader,
                         )
-                    policy_version = ExactLoRASnapshotPolicyVersionPort(
-                        state=state,
-                        consumer=product.snapshot_consumer,
-                        initial_snapshot=initial_snapshot,
-                        snapshot_loader=snapshot_loader,
+                    bound = BoundVerlNativeAgentLoopInvocationFactory(
+                        run_id=config.run_id,
+                        model=config.model,
+                        sampling_contract=config.policy.sampling,
+                        policy_version=policy_version,
+                        trajectory_components=product.trajectory_components,
+                        decoding=_policy_decoding_contract(),
+                        termination=_policy_termination_contract(config),
+                        rollout_master_seed=config.rollout_rng.master_seed,
+                        max_model_len=config.capacity.vllm_max_model_len,
+                        rollouts_per_prompt=(
+                            config.policy.sampling.trajectories_per_prompt
+                        ),
                     )
-                bound = BoundVerlNativeAgentLoopInvocationFactory(
-                    run_id=config.run_id,
-                    model=config.model,
-                    sampling_contract=config.policy.sampling,
-                    policy_version=policy_version,
-                    trajectory_components=product.trajectory_components,
-                    decoding=_policy_decoding_contract(),
-                    termination=_policy_termination_contract(config),
-                    rollout_master_seed=config.rollout_rng.master_seed,
-                    max_model_len=config.capacity.vllm_max_model_len,
-                    rollouts_per_prompt=config.policy.sampling.trajectories_per_prompt,
-                )
-                identity = PolicyE2ERuntimeIdentity(
-                    POLICY_E2E_RUNTIME_SCHEMA,
-                    config.run_id,
-                    config.identity_sha256,
-                    placement,
-                    builder_identity,
-                )
-                core = _ProcessRuntimeCore(
-                    identity=identity,
-                    bound_factory=bound,
-                    policy_version=policy_version,
-                    construction_fingerprint=fingerprint,
-                )
+                    identity = PolicyE2ERuntimeIdentity(
+                        POLICY_E2E_RUNTIME_SCHEMA,
+                        config.run_id,
+                        config.identity_sha256,
+                        placement,
+                        builder_identity,
+                    )
+                    core = _ProcessRuntimeCore(
+                        identity=identity,
+                        bound_factory=bound,
+                        policy_version=policy_version,
+                        construction_fingerprint=fingerprint,
+                        runtime_close=runtime_close,
+                    )
+                except Exception:
+                    if runtime_close is not None:
+                        runtime_close()
+                    raise
                 _PROCESS_RUNTIMES[key] = core
             else:
                 if core.identity.builder_identity != builder_identity:
@@ -763,9 +785,38 @@ def _reset_policy_e2e_runtime_singletons_for_tests() -> None:
     """Test-only reset; live code must never reset rollout group state."""
 
     global _REGISTERED_LIVE_BUILDER
+    _close_policy_e2e_process_runtimes()
     with _PROCESS_RUNTIME_LOCK:
-        _PROCESS_RUNTIMES.clear()
         _REGISTERED_LIVE_BUILDER = None
+
+
+def _runtime_close_hook(product: PolicyE2ERuntimeProduct) -> Callable[[], None] | None:
+    """Return the synchronous owner hook used at process-runtime teardown."""
+
+    close = getattr(product.trajectory_components, "close", None)
+    return close if callable(close) else None
+
+
+def _close_policy_e2e_process_runtimes() -> None:
+    """Drain every process-local runtime and release each owner exactly once."""
+
+    with _PROCESS_RUNTIME_LOCK:
+        cores = tuple(_PROCESS_RUNTIMES.values())
+        _PROCESS_RUNTIMES.clear()
+    errors: list[Exception] = []
+    for core in cores:
+        try:
+            core.close()
+        except Exception as error:  # pragma: no cover - defensive exit path
+            errors.append(error)
+    if errors:
+        raise ExceptionGroup("Policy process-runtime shutdown failed", errors)
+
+
+# The Hydra factory is process-scoped and upstream does not expose an actor
+# teardown callback for it.  Register one process-owned drain, rather than
+# closing shared reward resources after individual trajectories.
+atexit.register(_close_policy_e2e_process_runtimes)
 
 
 __all__ = [

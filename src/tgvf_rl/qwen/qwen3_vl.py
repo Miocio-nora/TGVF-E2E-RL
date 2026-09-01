@@ -20,6 +20,7 @@ from .base import (
     InjectedForwardRequest,
     QwenVLMFamilyAdapter,
     RecordedReplayResult,
+    RecordedReplayHiddenResult,
     ReplayConsumer,
     assert_model_vocabulary_compatible,
     injected_request_from_recorded,
@@ -123,6 +124,165 @@ class Qwen3VLAdapter(QwenVLMFamilyAdapter):
             hidden_states=hidden,
             past_key_values=getattr(outputs, "past_key_values", None),
             visual_position_mask=visual_mask,
+        )
+
+    def forward_injected_hidden(
+        self,
+        model: Any,
+        request: InjectedForwardRequest,
+    ) -> RecordedReplayHiddenResult:
+        """Run one injected request through the decoder without its LM head."""
+
+        rows = self.forward_injected_hidden_batch(model, (request,))
+        return rows[0]
+
+    def forward_injected_hidden_batch(
+        self,
+        model: Any,
+        requests: tuple[InjectedForwardRequest, ...],
+    ) -> tuple[RecordedReplayHiddenResult, ...]:
+        """Batch only decoder forwards for independently constructed rows.
+
+        Vision/TGVF/Crop construction intentionally remains outside this
+        method.  Every request is validated and injected independently before
+        right-padding, so no row can borrow another row's visual positions or
+        DeepStack values.  The single decoder call is therefore an execution
+        optimization over the same per-row inputs, not a replay reconstruction.
+        """
+
+        if not requests:
+            raise ValueError("Qwen3 decoder replay batch cannot be empty")
+        if any(not isinstance(request, InjectedForwardRequest) for request in requests):
+            raise TypeError("Qwen3 decoder replay batch requires injected requests")
+        if any(request.use_cache for request in requests):
+            raise ValueError("batched exact replay is no_cache only")
+        if any(request.attention_mask.ndim != 2 for request in requests):
+            raise ValueError(
+                "batched exact replay currently requires 2D attention masks"
+            )
+        if any(
+            len(block.deepstack) != self.capabilities.deepstack_branch_count
+            for request in requests
+            for block in request.visual_blocks
+        ):
+            raise ValueError(
+                f"Qwen3 replay requires {self.capabilities.deepstack_branch_count} exact DeepStack branches for every visual block"
+            )
+
+        injected: list[
+            tuple[torch.Tensor, torch.Tensor, list[torch.Tensor] | None]
+        ] = []
+        deepstack_enabled = native_deepstack_enabled_from_model(model)
+        for request in requests:
+            inputs_embeds, visual_mask = materialize_inputs_embeds(model, request)
+            if inputs_embeds.shape[0] != 1:
+                raise ValueError("each exact replay row must have batch size one")
+            deepstack = (
+                materialize_deepstack(
+                    request,
+                    visual_mask,
+                    target_dtype=inputs_embeds.dtype,
+                )
+                if deepstack_enabled
+                else None
+            )
+            injected.append((inputs_embeds, visual_mask, deepstack))
+
+        devices = {row[0].device for row in injected}
+        dtypes = {row[0].dtype for row in injected}
+        hidden_sizes = {int(row[0].shape[-1]) for row in injected}
+        if len(devices) != 1 or len(dtypes) != 1 or len(hidden_sizes) != 1:
+            raise ValueError(
+                "batched decoder replay rows differ in placement or hidden size"
+            )
+        device = injected[0][0].device
+        hidden_size = int(injected[0][0].shape[-1])
+        lengths = tuple(int(row[0].shape[1]) for row in injected)
+        maximum = max(lengths)
+
+        def pad_sequence(tensor: torch.Tensor, *, value: float = 0.0) -> torch.Tensor:
+            if tensor.shape[1] == maximum:
+                return tensor
+            padding = torch.full(
+                (1, maximum - tensor.shape[1], *tensor.shape[2:]),
+                value,
+                dtype=tensor.dtype,
+                device=tensor.device,
+            )
+            return torch.cat((tensor, padding), dim=1)
+
+        inputs_embeds = torch.cat(
+            tuple(pad_sequence(row[0]) for row in injected), dim=0
+        )
+        visual_mask = torch.cat(tuple(pad_sequence(row[1]) for row in injected), dim=0)
+        attention_mask = torch.cat(
+            tuple(
+                pad_sequence(request.attention_mask.to(device), value=0)
+                for request in requests
+            ),
+            dim=0,
+        )
+        position_rank = requests[0].position_ids.ndim
+        if any(request.position_ids.ndim != position_rank for request in requests):
+            raise ValueError("batched replay position-id ranks differ")
+        position_rows: list[torch.Tensor] = []
+        for request in requests:
+            positions = request.position_ids.to(device)
+            padding_length = maximum - positions.shape[-1]
+            if padding_length:
+                positions = torch.cat(
+                    (
+                        positions,
+                        torch.zeros(
+                            (*positions.shape[:-1], padding_length),
+                            dtype=positions.dtype,
+                            device=positions.device,
+                        ),
+                    ),
+                    dim=-1,
+                )
+            position_rows.append(positions)
+        position_batch_dimension = 0 if position_rank == 2 else 1
+        position_ids = torch.cat(tuple(position_rows), dim=position_batch_dimension)
+
+        deepstack_batch: list[torch.Tensor] | None = None
+        if deepstack_enabled:
+            branch_counts = {
+                len(row[2]) if row[2] is not None else -1 for row in injected
+            }
+            if branch_counts != {self.capabilities.deepstack_branch_count}:
+                raise ValueError("batched replay DeepStack branch counts differ")
+            deepstack_batch = [
+                torch.cat(
+                    tuple(row[2][branch] for row in injected if row[2] is not None),
+                    dim=0,
+                )
+                for branch in range(self.capabilities.deepstack_branch_count)
+            ]
+
+        language_model = resolve_language_model(model)
+        outputs = language_model(
+            input_ids=None,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            visual_pos_masks=visual_mask,
+            deepstack_visual_embeds=deepstack_batch,
+            use_cache=False,
+        )
+        hidden = (
+            outputs.last_hidden_state
+            if hasattr(outputs, "last_hidden_state")
+            else outputs[0]
+        )
+        if hidden.shape != (len(requests), maximum, hidden_size):
+            raise ValueError("Qwen3 batched decoder returned an unexpected shape")
+        return tuple(
+            RecordedReplayHiddenResult(
+                hidden_states=hidden[index : index + 1, :length],
+                visual_position_mask=visual_mask[index : index + 1, :length],
+            )
+            for index, length in enumerate(lengths)
         )
 
     def prefill_injected_cache(

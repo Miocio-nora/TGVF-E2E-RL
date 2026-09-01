@@ -107,6 +107,16 @@ class ExactReplayResponseResult(Protocol):
     logprobs: torch.Tensor
 
 
+@dataclass(frozen=True, slots=True)
+class ExactReplayResponseRequest:
+    """One integrity-checked row passed to an optional batched replay port."""
+
+    bundle: TrajectoryReplayBundle
+    prompt_token_ids: tuple[int, ...]
+    response: OwnedTokenSequence
+    sampling: SamplingIdentity
+
+
 class ExactReplayResponsePort(Protocol):
     """Minimum model-bound port consumed by the FSDP2 bridge."""
 
@@ -120,6 +130,16 @@ class ExactReplayResponsePort(Protocol):
         response: OwnedTokenSequence,
         sampling: SamplingIdentity,
     ) -> ExactReplayResponseResult: ...
+
+
+class BatchedExactReplayResponsePort(ExactReplayResponsePort, Protocol):
+    """Optional decoder-batched extension of the rowwise replay boundary."""
+
+    def replay_response_logprobs_batch(
+        self,
+        *,
+        rows: tuple[ExactReplayResponseRequest, ...],
+    ) -> tuple[ExactReplayResponseResult, ...]: ...
 
 
 class ExactReplayPortFactory(Protocol):
@@ -169,7 +189,17 @@ class Qwen3ConfigBoundReplayPortFactory:
         # its model have been built.
         from tgvf_rl.policy.qwen_replay import Qwen3RecordedPolicyForwardPort
 
-        return Qwen3RecordedPolicyForwardPort(model=model, binding=binding)
+        materializer = None
+        if bool(getattr(engine.model_config, "use_fused_kernels", False)):
+            from .fused_exact_replay import FusedExactReplayMicrobatchMaterializer
+
+            materializer = FusedExactReplayMicrobatchMaterializer()
+
+        return Qwen3RecordedPolicyForwardPort(
+            model=model,
+            binding=binding,
+            selected_logprob_materializer=materializer,
+        )
 
 
 _CONFIG_BOUND_QWEN3_PORT_FACTORY = Qwen3ConfigBoundReplayPortFactory()
@@ -184,6 +214,8 @@ class ExactReplayForwardEvidence:
     bundle_sha256s: tuple[str, ...]
     response_lengths: tuple[int, ...]
     full_sequence_lengths: tuple[int, ...]
+    replay_execution: str
+    decoder_batch_size: int
 
 
 def restore_response_logprobs_to_full_sequence(
@@ -253,31 +285,53 @@ def exact_replay_forward_step(
 
     prompt_rows = _batched_sidecar(micro_batch, EXACT_PROMPT_IDS_FIELD)
     response_rows = _batched_sidecar(micro_batch, EXACT_RESPONSE_IDS_FIELD)
-    full_rows: list[torch.Tensor] = []
-    response_values: list[torch.Tensor] = []
+    replay_rows: list[ExactReplayResponseRequest] = []
     for row_index, bundle in enumerate(integrity.replay_bundles):
         _require_single_sequence_replay_bundle(bundle)
         prompt_ids = _token_tuple(prompt_rows[row_index], "exact prompt")
         response_ids = _token_tuple(response_rows[row_index], "exact response")
         ownership = integrity.response_token_ownership[row_index][: len(response_ids)]
         response = OwnedTokenSequence(response_ids, ownership)
-        result = port.replay_response_logprobs(
-            bundle=bundle,
-            prompt_token_ids=prompt_ids,
-            response=response,
-            sampling=sampling,
+        replay_rows.append(
+            ExactReplayResponseRequest(
+                bundle=bundle,
+                prompt_token_ids=prompt_ids,
+                response=response,
+                sampling=sampling,
+            )
         )
+
+    batch_method = getattr(port, "replay_response_logprobs_batch", None)
+    decoder_batched = callable(batch_method) and len(replay_rows) > 1
+    if decoder_batched:
+        results = batch_method(rows=tuple(replay_rows))
+        if not isinstance(results, tuple) or len(results) != len(replay_rows):
+            raise TypeError("batched exact replay must return one result per row")
+    else:
+        results = tuple(
+            port.replay_response_logprobs(
+                bundle=row.bundle,
+                prompt_token_ids=row.prompt_token_ids,
+                response=row.response,
+                sampling=row.sampling,
+            )
+            for row in replay_rows
+        )
+
+    full_rows: list[torch.Tensor] = []
+    response_values: list[torch.Tensor] = []
+    for row, result in zip(replay_rows, results, strict=True):
         values = _validate_response_result(
             result,
             role=role,
-            bundle=bundle,
-            response=response,
+            bundle=row.bundle,
+            response=row.response,
         )
         response_values.append(values)
         full_rows.append(
             restore_response_logprobs_to_full_sequence(
                 values,
-                prompt_length=len(prompt_ids),
+                prompt_length=len(row.prompt_token_ids),
             )
         )
 
@@ -335,6 +389,10 @@ def exact_replay_forward_step(
         ),
         response_lengths=tuple(len(values) for values in response_rows),
         full_sequence_lengths=tuple(int(row.numel()) for row in full_rows),
+        replay_execution=(
+            "decoder_batched_rowwise_visual" if decoder_batched else "rowwise"
+        ),
+        decoder_batch_size=len(replay_rows) if decoder_batched else 1,
     )
     return loss, {
         "model_output": detached_output,
@@ -907,8 +965,10 @@ def _move_microbatch(micro_batch: Any, device: torch.device) -> Any:
 
 
 __all__ = [
+    "BatchedExactReplayResponsePort",
     "ExactReplayForwardEvidence",
     "ExactReplayPortFactory",
+    "ExactReplayResponseRequest",
     "ExactReplayResponsePort",
     "ExactReplayResponseResult",
     "Qwen3ConfigBoundReplayPortFactory",

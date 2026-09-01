@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.data import PolicyT1MixedRuntimeBinding
 from tgvf_rl.protocol import NativeToolCapabilityProfile
 
@@ -16,11 +17,14 @@ from .run_config_schema import (
     POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER,
     POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER_SHA256,
     POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_JUDGE_MODE,
+    POLICY_E2E_MIXED_ALTERNATE_ANSWER_VERIFIER,
+    POLICY_E2E_MIXED_ALTERNATE_JUDGE_MODE,
     POLICY_E2E_MIXED_ANSWER_VERIFIER,
     POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256,
     POLICY_E2E_MIXED_ANSWER_VERIFIER_V1_SHA256,
     POLICY_E2E_MIXED_JUDGE_MODE,
     POLICY_E2E_MIXED_REWARD_TASK,
+    POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA,
     POLICY_E2E_SMOKE_ANSWER_VERIFIER,
     POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256,
     POLICY_E2E_SMOKE_ANSWER_VERIFIER_V2_SHA256,
@@ -28,6 +32,7 @@ from .run_config_schema import (
     POLICY_E2E_SMOKE_REWARD_TASK,
     PolicyMethodMatrixBinding,
     SmokeRewardBinding,
+    policy_e2e_mixed_alternate_answer_verifier_sha256,
 )
 from .run_config_validation import (
     _boolean,
@@ -48,6 +53,20 @@ from .run_config_validation import (
 _LEGACY_STAGE3_ANSWER_REWARD_SCALE = 2.0
 _LEGACY_STAGE3_REPEATED_CALL_PENALTY = 0.05
 _LEGACY_STAGE3_PROTOCOL_ERROR_PENALTY = 1.0
+_QWEN25_72B_SERVED_NAMES = frozenset(
+    {
+        "qwen2.5-72b-instruct",
+        "qwen/qwen-2.5-72b-instruct",
+        "qwen/qwen2.5-72b-instruct",
+    }
+)
+_ALTERNATE_JUDGE_FIELDS = frozenset(
+    {
+        "alternate_judge_model_name",
+        "alternate_judge_model_identity_sha256",
+        "alternate_semantics_acknowledged",
+    }
+)
 
 
 def bind_policy_reward(
@@ -72,6 +91,9 @@ def bind_policy_reward(
     """Validate and bind reward inputs without enabling external calls."""
 
     method_run = method_binding is not None
+    explicit_judge_route_contract = payload.get("schema_version") == (
+        POLICY_E2E_METHOD_MATRIX_RUN_CONFIG_V2_SCHEMA
+    )
 
     reward_fields = {
         "task_kind",
@@ -82,6 +104,11 @@ def bind_policy_reward(
     }
     if mixed_run:
         reward_fields.update({"judge_config_path", "judge_config_sha256"})
+    if explicit_judge_route_contract:
+        reward_fields.add("judge_model_route")
+        raw_reward = payload.get("reward")
+        if isinstance(raw_reward, Mapping):
+            reward_fields.update(_ALTERNATE_JUDGE_FIELDS & set(raw_reward))
     if stage3_shaped_run:
         reward_fields.add("profile")
         if method_run:
@@ -116,10 +143,23 @@ def bind_policy_reward(
         "reward",
         reward_fields,
     )
+    judge_model_route = (
+        _text(reward_table["judge_model_route"], name="reward.judge_model_route")
+        if explicit_judge_route_contract
+        else "qwen2.5_72b"
+    )
+    if judge_model_route not in {"qwen2.5_72b", "explicit_alternate"}:
+        raise ValueError(
+            "reward.judge_model_route must be qwen2.5_72b or explicit_alternate"
+        )
+    present_alternate_fields = _ALTERNATE_JUDGE_FIELDS & set(reward_table)
     expected_task = (
         POLICY_E2E_MIXED_REWARD_TASK if mixed_run else POLICY_E2E_SMOKE_REWARD_TASK
     )
-    if visual_always_judge:
+    if judge_model_route == "explicit_alternate":
+        expected_verifier = POLICY_E2E_MIXED_ALTERNATE_ANSWER_VERIFIER
+        expected_judge_mode = POLICY_E2E_MIXED_ALTERNATE_JUDGE_MODE
+    elif visual_always_judge:
         expected_verifier = POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER
         expected_judge_mode = POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_JUDGE_MODE
     else:
@@ -142,33 +182,7 @@ def bind_policy_reward(
         reward_table["answer_verifier_sha256"],
         name="reward.answer_verifier_sha256",
     )
-    if visual_always_judge:
-        current_answer_verifier_sha256 = (
-            POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER_SHA256
-        )
-    else:
-        current_answer_verifier_sha256 = (
-            POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256
-            if mixed_run
-            else POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256
-        )
-    historical_answer_verifier_sha256 = (
-        POLICY_E2E_MIXED_ANSWER_VERIFIER_V1_SHA256
-        if mixed_run
-        else POLICY_E2E_SMOKE_ANSWER_VERIFIER_V2_SHA256
-    )
-    accepted_answer_verifier_sha256s = {current_answer_verifier_sha256}
-    if allow_historical_reward_contract and not deepeyes_control_present:
-        accepted_answer_verifier_sha256s.add(historical_answer_verifier_sha256)
-    if answer_verifier_sha256 not in accepted_answer_verifier_sha256s:
-        raise ValueError(
-            "reward.answer_verifier_sha256 differs from the current contract"
-            + (
-                " and the named historical evaluation contract"
-                if allow_historical_reward_contract
-                else ""
-            )
-        )
+    bound_judge: object | None = None
     if mixed_run:
         judge_config_path = _existing_file(
             reward_table["judge_config_path"], name="reward.judge_config_path"
@@ -197,6 +211,101 @@ def bind_policy_reward(
     else:
         judge_config_path = None
         judge_config_sha256 = None
+    alternate_judge_model_name: str | None = None
+    alternate_judge_model_identity: ArtifactIdentity | None = None
+    alternate_semantics_acknowledged = False
+    if judge_model_route == "qwen2.5_72b":
+        if present_alternate_fields:
+            raise ValueError(
+                "default Qwen2.5-72B route cannot carry alternate judge fields"
+            )
+        if bound_judge is not None:
+            bound_name = bound_judge.provider.config.model_name
+            if (
+                not isinstance(bound_name, str)
+                or bound_name.strip().casefold() not in _QWEN25_72B_SERVED_NAMES
+            ):
+                raise ValueError("default reward judge binding must remain Qwen2.5-72B")
+    else:
+        if present_alternate_fields != _ALTERNATE_JUDGE_FIELDS:
+            raise ValueError(
+                "explicit alternate judge requires model name, identity SHA256, "
+                "and semantic acknowledgement"
+            )
+        if not mixed_run or deepeyes_control_present or bound_judge is None:
+            raise ValueError(
+                "explicit alternate judge requires a directly loaded mixed-run judge"
+            )
+        alternate_judge_model_name = _text(
+            reward_table["alternate_judge_model_name"],
+            name="reward.alternate_judge_model_name",
+        )
+        declared_alternate_sha256 = _sha256(
+            reward_table["alternate_judge_model_identity_sha256"],
+            name="reward.alternate_judge_model_identity_sha256",
+        )
+        alternate_semantics_acknowledged = _boolean(
+            reward_table["alternate_semantics_acknowledged"],
+            name="reward.alternate_semantics_acknowledged",
+        )
+        if not alternate_semantics_acknowledged:
+            raise ValueError(
+                "explicit alternate judge requires semantic acknowledgement"
+            )
+        bound_name = bound_judge.provider.config.model_name
+        bound_identity = bound_judge.model_identity
+        if bound_name != alternate_judge_model_name:
+            raise ValueError("explicit alternate judge model name differs")
+        if not isinstance(bound_identity, ArtifactIdentity):
+            raise TypeError("loaded alternate judge model identity has the wrong type")
+        if bound_identity.sha256 != declared_alternate_sha256:
+            raise ValueError("explicit alternate judge model identity differs")
+        alternate_judge_model_identity = bound_identity
+    if judge_model_route == "explicit_alternate":
+        assert alternate_judge_model_identity is not None
+        current_answer_verifier_sha256 = (
+            policy_e2e_mixed_alternate_answer_verifier_sha256(
+                alternate_judge_model_identity
+            )
+        )
+        accepted_answer_verifier_sha256s = {current_answer_verifier_sha256}
+    else:
+        if visual_always_judge:
+            current_answer_verifier_sha256 = (
+                POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER_SHA256
+            )
+        else:
+            current_answer_verifier_sha256 = (
+                POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256
+                if mixed_run
+                else POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256
+            )
+        historical_answer_verifier_sha256 = (
+            POLICY_E2E_MIXED_ANSWER_VERIFIER_V1_SHA256
+            if mixed_run
+            else POLICY_E2E_SMOKE_ANSWER_VERIFIER_V2_SHA256
+        )
+        accepted_answer_verifier_sha256s = {current_answer_verifier_sha256}
+        if allow_historical_reward_contract and not deepeyes_control_present:
+            accepted_answer_verifier_sha256s.add(historical_answer_verifier_sha256)
+    if answer_verifier_sha256 not in accepted_answer_verifier_sha256s:
+        mismatch = (
+            "reward.answer_verifier_sha256 differs from the selected "
+            "alternate model-bound contract"
+            if judge_model_route == "explicit_alternate"
+            else "reward.answer_verifier_sha256 differs from the current contract"
+        )
+        raise ValueError(
+            mismatch
+            + (
+                " and the named historical evaluation contract"
+                if (
+                    allow_historical_reward_contract
+                    and judge_model_route == "qwen2.5_72b"
+                )
+                else ""
+            )
+        )
     if stage3_shaped_run:
         _require_exact(
             reward_table["profile"],
@@ -347,6 +456,10 @@ def bind_policy_reward(
         visual_quality_judge_config_sha256=visual_quality_config_sha256,
         visual_quality_judge_identity=visual_quality_judge_identity,
         visual_quality_judge_mode=visual_quality_judge_mode,
+        judge_model_route=judge_model_route,
+        alternate_judge_model_name=alternate_judge_model_name,
+        alternate_judge_model_identity=alternate_judge_model_identity,
+        alternate_semantics_acknowledged=alternate_semantics_acknowledged,
     )
     return reward
 

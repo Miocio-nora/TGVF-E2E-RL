@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import torch
@@ -17,7 +18,11 @@ from torch import nn
 
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.identity import ComponentRole
-from tgvf_rl.contracts.tokens import OwnedTokenSequence, SamplingIdentity, TokenOwnership
+from tgvf_rl.contracts.tokens import (
+    OwnedTokenSequence,
+    SamplingIdentity,
+    TokenOwnership,
+)
 from tgvf_rl.observations.store import (
     ObservationStore,
     TrajectoryReplayBundle,
@@ -29,6 +34,7 @@ from tgvf_rl.qwen.base import (
     gather_behavior_measure_logprobs,
     injected_request_from_recorded,
     resolve_language_model,
+    resolve_lm_head,
     resolve_replay_request,
     validate_replay_request,
 )
@@ -178,7 +184,10 @@ class Qwen3RoleReplay:
         if self.logprobs.device != self.policy_sampled_mask.device:
             raise ValueError("role logprobs and ownership mask must share a device")
         expected_mask = torch.tensor(
-            tuple(owner is TokenOwnership.POLICY_SAMPLED for owner in self.response_ownership),
+            tuple(
+                owner is TokenOwnership.POLICY_SAMPLED
+                for owner in self.response_ownership
+            ),
             dtype=torch.bool,
             device=self.policy_sampled_mask.device,
         )
@@ -189,9 +198,13 @@ class Qwen3RoleReplay:
         if not bool(torch.isfinite(self.logprobs.detach()).all().item()):
             raise ValueError("role replay logprobs must be finite")
         if bool(torch.count_nonzero(self.logprobs[~self.policy_sampled_mask]).item()):
-            raise ReplayMismatchError("non-policy response tokens carry replay logprobs")
+            raise ReplayMismatchError(
+                "non-policy response tokens carry replay logprobs"
+            )
         if self.role is ComponentRole.CURRENT and not self.logprobs.requires_grad:
-            raise ValueError("current Qwen3 response logprobs lost their autograd graph")
+            raise ValueError(
+                "current Qwen3 response logprobs lost their autograd graph"
+            )
         if self.role is ComponentRole.REFERENCE and self.logprobs.requires_grad:
             raise ValueError("frozen Qwen3 reference logprobs carry gradients")
 
@@ -239,6 +252,7 @@ class Qwen3RecordedPolicyForwardPort:
         binding: RecordedPolicyForwardBinding,
         lora_config: DecoderLoRAConfig | None = None,
         family_adapter: Qwen3VLAdapter | None = None,
+        selected_logprob_materializer: Any | None = None,
     ) -> None:
         if not isinstance(model, nn.Module):
             raise TypeError("Qwen3 replay model must be a torch module")
@@ -254,6 +268,10 @@ class Qwen3RecordedPolicyForwardPort:
         adapter = family_adapter or Qwen3VLAdapter()
         if not isinstance(adapter, Qwen3VLAdapter):
             raise TypeError("family_adapter must be Qwen3VLAdapter")
+        if selected_logprob_materializer is not None and not callable(
+            selected_logprob_materializer
+        ):
+            raise TypeError("selected_logprob_materializer must be callable")
 
         if binding.role is ComponentRole.CURRENT:
             scope_audit = audit_policy_model_scope(model, config=selected)
@@ -264,9 +282,15 @@ class Qwen3RecordedPolicyForwardPort:
         self.lora_config = selected
         self.family_adapter = adapter
         self.scope_audit = scope_audit
+        self.selected_logprob_materializer = selected_logprob_materializer
+        self.materializes_fused_kernels = selected_logprob_materializer is not None
         self._forward_model = _unwrap_peft_model(model)
         self._expected_trainable_names = tuple(
-            sorted(name for name, parameter in model.named_parameters() if parameter.requires_grad)
+            sorted(
+                name
+                for name, parameter in model.named_parameters()
+                if parameter.requires_grad
+            )
         )
         self.capture_state_proof()
 
@@ -358,13 +382,31 @@ class Qwen3RecordedPolicyForwardPort:
     ) -> Qwen3RoleReplay:
         """Select only exact policy-owned response positions from one role forward."""
 
+        if self.selected_logprob_materializer is not None:
+            return self.replay_response_logprobs_batch(
+                rows=(
+                    SimpleNamespace(
+                        bundle=bundle,
+                        prompt_token_ids=prompt_token_ids,
+                        response=response,
+                        sampling=sampling,
+                    ),
+                )
+            )[0]
+
         if not isinstance(response, OwnedTokenSequence):
             raise TypeError("response must be an OwnedTokenSequence")
         prompt = tuple(prompt_token_ids)
-        if not prompt or any(type(token_id) is not int or token_id < 0 for token_id in prompt):
-            raise ValueError("exact prompt token IDs must be non-empty and non-negative")
+        if not prompt or any(
+            type(token_id) is not int or token_id < 0 for token_id in prompt
+        ):
+            raise ValueError(
+                "exact prompt token IDs must be non-empty and non-negative"
+            )
         if TokenOwnership.PADDING in response.ownership:
-            raise ValueError("the exact unpadded response cannot contain padding ownership")
+            raise ValueError(
+                "the exact unpadded response cannot contain padding ownership"
+            )
         if not isinstance(sampling, SamplingIdentity):
             raise TypeError("sampling must be SamplingIdentity")
         if sampling.policy_version != bundle.replay_record.behavior_policy:
@@ -398,12 +440,16 @@ class Qwen3RecordedPolicyForwardPort:
             sampled_positions,
             sampling,
         ).squeeze(0)
-        scatter_indices = torch.tensor(response_indices, dtype=torch.int64, device=device)
+        scatter_indices = torch.tensor(
+            response_indices, dtype=torch.int64, device=device
+        )
         response_logprobs = torch.zeros(
             len(response.token_ids), dtype=selected.dtype, device=device
         ).scatter(0, scatter_indices, selected)
         mask = torch.tensor(
-            tuple(owner is TokenOwnership.POLICY_SAMPLED for owner in response.ownership),
+            tuple(
+                owner is TokenOwnership.POLICY_SAMPLED for owner in response.ownership
+            ),
             dtype=torch.bool,
             device=device,
         )
@@ -416,6 +462,134 @@ class Qwen3RecordedPolicyForwardPort:
             logprobs=response_logprobs,
             state_proof=self.capture_state_proof(),
         )
+
+    def replay_response_logprobs_batch(
+        self,
+        *,
+        rows: tuple[Any, ...],
+    ) -> tuple[Qwen3RoleReplay, ...]:
+        """Replay independently verified rows in one Qwen decoder forward."""
+
+        if not rows:
+            raise ValueError("Qwen3 replay batch cannot be empty")
+        prepared: list[
+            tuple[
+                TrajectoryReplayBundle,
+                tuple[int, ...],
+                OwnedTokenSequence,
+                SamplingIdentity,
+                Any,
+                tuple[int, ...],
+            ]
+        ] = []
+        for row in rows:
+            bundle = getattr(row, "bundle", None)
+            prompt = tuple(getattr(row, "prompt_token_ids", ()))
+            response = getattr(row, "response", None)
+            sampling = getattr(row, "sampling", None)
+            if not isinstance(bundle, TrajectoryReplayBundle):
+                raise TypeError("Qwen3 replay batch row lost its bundle")
+            if not isinstance(response, OwnedTokenSequence):
+                raise TypeError("Qwen3 replay batch row lost its response")
+            if not prompt or any(
+                type(token_id) is not int or token_id < 0 for token_id in prompt
+            ):
+                raise ValueError(
+                    "exact prompt token IDs must be non-empty and non-negative"
+                )
+            if TokenOwnership.PADDING in response.ownership:
+                raise ValueError(
+                    "the exact unpadded response cannot contain padding ownership"
+                )
+            if not isinstance(sampling, SamplingIdentity):
+                raise TypeError("sampling must be SamplingIdentity")
+            if sampling.policy_version != bundle.replay_record.behavior_policy:
+                raise IdentityMismatchError(
+                    "sampling policy version differs from replay behavior policy"
+                )
+            self._validate_bundle_identity(bundle)
+            validate_replay_bundle(bundle)
+            store, handle = ObservationStore.from_replay_bundle(bundle)
+            request = resolve_replay_request(store, handle, self._consumer)
+            validate_replay_request(request)
+            exact_ids = tuple(
+                int(token_id) for token_id in request.input_ids[0].tolist()
+            )
+            if exact_ids != prompt + response.token_ids:
+                raise ReplayMismatchError(
+                    "prompt/response token IDs differ from the recorded final sequence"
+                )
+            response_indices = response.policy_indices
+            if not response_indices:
+                raise ValueError(
+                    "Qwen3 role replay requires a policy-owned response token"
+                )
+            prepared.append(
+                (bundle, prompt, response, sampling, request, response_indices)
+            )
+
+        before = self.capture_state_proof()
+        with self._gradient_context(), self._autocast_context():
+            hidden_rows = self.family_adapter.forward_injected_hidden_batch(
+                self._forward_model,
+                tuple(injected_request_from_recorded(item[4]) for item in prepared),
+            )
+            results: list[Qwen3RoleReplay] = []
+            for item, hidden_result in zip(prepared, hidden_rows, strict=True):
+                bundle, prompt, response, sampling, request, response_indices = item
+                device = hidden_result.hidden_states.device
+                sampled_positions = torch.tensor(
+                    [[len(prompt) + index for index in response_indices]],
+                    dtype=torch.int64,
+                    device=device,
+                )
+                if self.selected_logprob_materializer is None:
+                    logits = resolve_lm_head(self._forward_model)(
+                        hidden_result.hidden_states
+                    )
+                    selected = gather_behavior_measure_logprobs(
+                        logits,
+                        request.input_ids.to(device=device),
+                        sampled_positions,
+                        sampling,
+                    ).squeeze(0)
+                else:
+                    selected = self.selected_logprob_materializer(
+                        hidden_states=hidden_result.hidden_states,
+                        lm_head=resolve_lm_head(self._forward_model),
+                        token_ids=request.input_ids,
+                        sampled_positions=sampled_positions,
+                        sampling=sampling,
+                    ).squeeze(0)
+                scatter_indices = torch.tensor(
+                    response_indices, dtype=torch.int64, device=device
+                )
+                response_logprobs = torch.zeros(
+                    len(response.token_ids), dtype=selected.dtype, device=device
+                ).scatter(0, scatter_indices, selected)
+                mask = torch.tensor(
+                    tuple(
+                        owner is TokenOwnership.POLICY_SAMPLED
+                        for owner in response.ownership
+                    ),
+                    dtype=torch.bool,
+                    device=device,
+                )
+                results.append(
+                    Qwen3RoleReplay(
+                        role=self.binding.role,
+                        bundle_sha256=bundle.bundle_sha256,
+                        response_token_ids=response.token_ids,
+                        response_ownership=response.ownership,
+                        policy_sampled_mask=mask,
+                        logprobs=response_logprobs,
+                        state_proof=before,
+                    )
+                )
+        self._validate_state_after_forward(before)
+        for bundle, *_ in prepared:
+            validate_replay_bundle(bundle)
+        return tuple(results)
 
     @property
     def _consumer(self) -> ReplayConsumer:
@@ -430,7 +604,9 @@ class Qwen3RecordedPolicyForwardPort:
             raise TypeError("Qwen3 replay requires TrajectoryReplayBundle")
         replay = bundle.replay_record
         if replay.model != self.binding.model:
-            raise IdentityMismatchError("Qwen3 replay bundle changed the model identity")
+            raise IdentityMismatchError(
+                "Qwen3 replay bundle changed the model identity"
+            )
         if not replay.deterministic_forward or replay.adapter_dropout != 0.0:
             raise ReplayMismatchError(
                 "Qwen3 replay bundle is not deterministic with adapter dropout zero"
@@ -475,7 +651,10 @@ class Qwen3RecordedPolicyForwardPort:
             )
         if not bool(torch.isfinite(output.logits.detach()).all().item()):
             raise ValueError(f"{self.binding.role.value} Qwen3 logits must be finite")
-        if self.binding.role is ComponentRole.CURRENT and not output.logits.requires_grad:
+        if (
+            self.binding.role is ComponentRole.CURRENT
+            and not output.logits.requires_grad
+        ):
             raise ValueError("current Qwen3 logits lost their autograd graph")
         if self.binding.role is ComponentRole.REFERENCE and output.logits.requires_grad:
             raise ValueError("frozen Qwen3 reference logits carry gradients")

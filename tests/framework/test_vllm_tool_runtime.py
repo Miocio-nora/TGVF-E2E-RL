@@ -438,3 +438,43 @@ def test_vllm_server_shutdown_stops_http_engine_and_bound_sockets() -> None:
     assert engine.output_handler is None
     assert engine.engine_core is None
     assert server._master_sock is None
+
+
+def test_vllm_checkpoint_sleep_uses_level_one_and_fans_out() -> None:
+    pytest.importorskip(
+        "verl",
+        reason="vLLM server lifecycle adapter requires optional pinned veRL",
+    )
+    events: list[object] = []
+
+    class Engine:
+        async def wait_for_requests_to_drain(self) -> None:
+            events.append("drain")
+
+        async def sleep(self, *, level: int) -> None:
+            events.append(("sleep", level))
+
+    class RemoteMethod:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def remote(self) -> None:
+            events.append(self.name)
+
+    async def exercise() -> None:
+        _manager_cls, _client_cls, replica_cls, server_cls = _runtime_classes()
+        server = object.__new__(server_cls)
+        server.node_rank = 0
+        server.config = SimpleNamespace(free_cache_engine=True)
+        server.engine = Engine()
+        await server.tgvf_sleep_for_checkpoint()
+
+        replica = object.__new__(replica_cls)
+        replica.servers = (
+            SimpleNamespace(tgvf_sleep_for_checkpoint=RemoteMethod("server-0")),
+            SimpleNamespace(tgvf_sleep_for_checkpoint=RemoteMethod("server-1")),
+        )
+        await replica.sleep_for_checkpoint()
+
+    asyncio.run(exercise())
+    assert events == ["drain", ("sleep", 1), "server-0", "server-1"]

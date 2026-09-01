@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from dataclasses import dataclass
 import json
 from typing import Mapping, Protocol
@@ -112,6 +113,33 @@ class PolicySamplerPort(Protocol):
         *,
         turn_index: int,
     ) -> SampledPolicyTurn: ...
+
+
+@dataclass(frozen=True, slots=True)
+class PolicySamplingRequest:
+    """One resumable policy-sampling boundary in a native trajectory.
+
+    The framework-neutral state machine yields this immutable request before
+    every assistant turn.  Synchronous callers drive it with
+    :class:`PolicySamplerPort`; async framework bridges can await their native
+    policy client without parking one worker thread for the whole trajectory.
+    """
+
+    prompt_token_ids: tuple[int, ...]
+    sampling_parameters: Mapping[str, object]
+    turn_index: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "prompt_token_ids", tuple(self.prompt_token_ids))
+        if not self.prompt_token_ids or any(
+            type(token_id) is not int or token_id < 0
+            for token_id in self.prompt_token_ids
+        ):
+            raise ValueError(
+                "policy sampling prompt token IDs must be non-empty and non-negative"
+            )
+        if type(self.turn_index) is not int or self.turn_index < 0:
+            raise ValueError("policy sampling turn index must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,9 +271,7 @@ class FrameworkNeutralAgentLoop:
             raise TypeError("allow_no_tools must be a bool")
         if allow_no_tools and not direct_only:
             raise ValueError("an empty tool surface requires direct_only mode")
-        if not isinstance(
-            action_boundary_protocol_id, NativeActionBoundaryProtocolId
-        ):
+        if not isinstance(action_boundary_protocol_id, NativeActionBoundaryProtocolId):
             raise TypeError(
                 "action_boundary_protocol_id must be NativeActionBoundaryProtocolId"
             )
@@ -264,6 +290,36 @@ class FrameworkNeutralAgentLoop:
         self.machine = MultiCallStateMachine(max_tool_calls, cap_error_behavior)
 
     def run(self, request: RolloutRequest) -> TrajectoryRecord:
+        """Drive the resumable trajectory with the synchronous sampler port."""
+
+        driver = self.iter_sampling_requests(request)
+        try:
+            pending = next(driver)
+        except StopIteration as completed:  # pragma: no cover - positive budget guard
+            return _completed_trajectory(completed)
+        while True:
+            sampled = self.sampler.sample(
+                pending.prompt_token_ids,
+                pending.sampling_parameters,
+                turn_index=pending.turn_index,
+            )
+            try:
+                pending = driver.send(sampled)
+            except StopIteration as completed:
+                return _completed_trajectory(completed)
+
+    def iter_sampling_requests(
+        self,
+        request: RolloutRequest,
+    ) -> Generator[PolicySamplingRequest, SampledPolicyTurn, TrajectoryRecord]:
+        """Yield exact turn requests while retaining one canonical state machine.
+
+        The generator performs all parsing, state transitions, tool execution,
+        observation rendering, token ownership, and trajectory construction.
+        Only policy sampling is supplied by its caller, so sync and async
+        runtimes cannot silently diverge on those protocol semantics.
+        """
+
         prompt = tuple(request.initial_prompt_token_ids)
         state = self.machine.initial_state()
         turns: list[AssistantTurnRecord] = []
@@ -294,9 +350,13 @@ class FrameworkNeutralAgentLoop:
                 sampling_parameters = request.sampling_contract.as_vllm_parameters(
                     max_tokens=remaining
                 )
-            sampled = self.sampler.sample(
-                prompt, sampling_parameters, turn_index=len(turns)
+            sampled = yield PolicySamplingRequest(
+                prompt_token_ids=prompt,
+                sampling_parameters=sampling_parameters,
+                turn_index=len(turns),
             )
+            if not isinstance(sampled, SampledPolicyTurn):
+                raise TypeError("agent-loop sampling driver requires SampledPolicyTurn")
             if sampled.assistant_dialect is not self.assistant_dialect:
                 raise ValueError("sampler assistant dialect differs from agent loop")
             if sampled.sampling.policy_version != request.behavior_policy:
@@ -364,10 +424,7 @@ class FrameworkNeutralAgentLoop:
                 )
                 if _terminated_by_length(sampled):
                     stop = TrajectoryStop.MAX_TOKENS
-                elif (
-                    not final_format_valid
-                    or final_answer is None
-                ):
+                elif not final_format_valid or final_answer is None:
                     stop = TrajectoryStop.INVALID_FORMAT
                 else:
                     transition = self.machine.apply(state, AgentEvent.final_answer())
@@ -694,6 +751,13 @@ class FrameworkNeutralAgentLoop:
         )
 
 
+def _completed_trajectory(completed: StopIteration) -> TrajectoryRecord:
+    trajectory = completed.value
+    if not isinstance(trajectory, TrajectoryRecord):  # pragma: no cover - driver guard
+        raise RuntimeError("agent-loop sampling driver returned no trajectory")
+    return trajectory
+
+
 _ACTION_BOUNDARY_PARSE_ERROR_CODES = {
     "malformed_tool_call_tags": ParseErrorCode.INCOMPLETE_TOOL_CALL,
     "multiple_tool_calls": ParseErrorCode.MULTIPLE_TOOL_CALLS,
@@ -719,10 +783,7 @@ def _boundary_parse_error(
         ) from error
     return ToolCallParseError(
         parse_error_code,
-        (
-            f"{boundary.protocol_id.value} rejected assistant action: "
-            f"{violation_code}"
-        ),
+        (f"{boundary.protocol_id.value} rejected assistant action: {violation_code}"),
     )
 
 
